@@ -1,0 +1,18 @@
+{
+  "extensions": ["!extensions/workflow-tui.ts"],
+  "skills": [
+    "~/.pi/agent/skills/change-workflow",
+    "~/.pi/agent/skills/domain-modeling",
+    "~/.pi/agent/skills/grill-me",
+    "~/.pi/agent/skills/grill-with-doc",
+    "~/.pi/agent/skills/grilling",
+    "~/.pi/agent/skills/tdd",
+
+    "!change-workflow",
+    "!domain-modeling",
+    "!grill-me",
+    "!grill-with-doc",
+    "!grilling",
+    "!tdd"
+  ]
+}
