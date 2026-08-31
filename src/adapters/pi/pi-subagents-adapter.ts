@@ -10,6 +10,7 @@ import {
 import {
   parseStepResultV1,
   type AgentExecutionRequestV1,
+  type JsonValue,
   type StepResultV1,
 } from "../../contracts/execution/agent-execution.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
@@ -91,11 +92,48 @@ function isThinkingLevel(value: string): value is SubagentDelegationThinking {
   return (THINKING_LEVELS as readonly string[]).includes(value);
 }
 
-function resolveModel(request: AgentExecutionRequestV1): string | undefined {
-  for (const candidate of [request.model.actual, request.model.requested]) {
-    if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
+function isJsonObject(value: JsonValue): value is { readonly [key: string]: JsonValue } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function modelId(value: JsonValue, label: string, allowNull = false): string | undefined {
+  if (value === null) {
+    if (allowNull) return undefined;
+    throw new Error(`${label} must be a model ID or { provider, model }`);
   }
-  return undefined;
+  if (typeof value === "string") {
+    const model = value.trim();
+    if (model.length > 0) return model;
+  } else if (isJsonObject(value)) {
+    const provider = value.provider;
+    const model = value.model;
+    if (
+      typeof provider === "string" &&
+      provider.trim().length > 0 &&
+      typeof model === "string" &&
+      model.trim().length > 0
+    ) {
+      return `${provider.trim()}/${model.trim()}`;
+    }
+  }
+  throw new Error(`${label} must be a model ID or { provider, model }`);
+}
+
+function resolveModel(request: AgentExecutionRequestV1): string | undefined {
+  const requested = modelId(request.model.requested, "Requested model", true);
+  const fallbacks = request.model.allowedFallback.map((candidate, index) =>
+    modelId(candidate, `Allowed fallback model [${index}]`),
+  );
+  const actual =
+    request.model.actual === null ? undefined : modelId(request.model.actual, "Actual model");
+  const configured = new Set(
+    [requested, ...fallbacks].filter((value): value is string => value !== undefined),
+  );
+
+  if (actual !== undefined && !configured.has(actual)) {
+    throw new Error("Actual model must be the requested model or a configured fallback");
+  }
+  return actual ?? requested;
 }
 
 function resolveSkills(request: AgentExecutionRequestV1): string[] {

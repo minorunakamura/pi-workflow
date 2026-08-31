@@ -809,10 +809,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Capability → concrete Tool is least-privilege.
-- [ ] Requested/actual model are recorded.
-- [ ] Only configured fallback is allowed.
-- [ ] Resolution cannot widen permission/authority.
+- [x] Capability → concrete Tool is least-privilege.
+- [x] Requested/actual model are recorded.
+- [x] Only configured fallback is allowed.
+- [x] Resolution cannot widen permission/authority.
 
 **Test Levels:** `INT`
 

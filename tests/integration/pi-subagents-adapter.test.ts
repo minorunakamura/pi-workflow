@@ -115,6 +115,42 @@ describe("PiSubagentsAdapter integration", () => {
     expect(StepResultV1Schema.parse(actual)).toEqual(expected);
   });
 
+  it("normalizes structured model references and rejects unconfigured actual models", async () => {
+    const events = createEventBus();
+    const input = {
+      ...request(),
+      model: {
+        requested: { provider: "test-provider", model: "test-model" },
+        actual: { provider: "test-provider", model: "fallback-model" },
+        thinkingLevel: "low",
+        allowedFallback: [{ provider: "test-provider", model: "fallback-model" }],
+      },
+    } satisfies AgentExecutionRequestV1;
+    const requests: SubagentDelegationRequest[] = [];
+
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      requests.push(delegation);
+      events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+        requestId: delegation.requestId,
+        ownerRunId: delegation.ownerRunId,
+        nodeId: delegation.nodeId,
+        status: "completed",
+        result: { kind: "structured", value: result(input) },
+      } satisfies SubagentDelegationResponse);
+    });
+
+    await new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input);
+    expect(requests[0]?.model).toBe("test-provider/fallback-model");
+
+    await expect(
+      new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run({
+        ...input,
+        model: { ...input.model, actual: "unconfigured/model" },
+      }),
+    ).rejects.toThrow("requested model or a configured fallback");
+  });
+
   it("does not commit Workflow State and rejects failed leaf responses", async () => {
     const events = createEventBus();
     const input = request();
