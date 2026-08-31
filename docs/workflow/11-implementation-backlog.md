@@ -203,9 +203,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Request/result schema validates identity, arrays, outcomes, and mode.
-- [ ] Agent result candidates cannot submit authoritative State IDs.
-- [ ] Invalid shape is rejected deterministically.
+- [x] Request/result schema validates identity, arrays, outcomes, and mode.
+- [x] Agent result candidates cannot submit authoritative State IDs.
+- [x] Invalid shape is rejected deterministically.
 
 **Test Levels:** `CONTRACT`
 
