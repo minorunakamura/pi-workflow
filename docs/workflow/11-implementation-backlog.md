@@ -458,10 +458,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Eight completion domains are evaluated.
-- [ ] AC/Constraint violation cannot be accepted away.
-- [ ] Current Plan/implementation/repository/VR/RR/control blockers are represented.
-- [ ] Evaluator is side-effect free.
+- [x] Eight completion domains are evaluated.
+- [x] AC/Constraint violation cannot be accepted away.
+- [x] Current Plan/implementation/repository/VR/RR/control blockers are represented.
+- [x] Evaluator is side-effect free.
 
 **Test Levels:** `UNIT`
 
