@@ -620,9 +620,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Load/recover/reconcile/trigger/completion/schedule/dispatch/finalize/commit/event order is preserved.
-- [ ] One major state transition is processed per iteration.
-- [ ] Agent result is untrusted until validation/postconditions pass.
+- [x] Load/recover/reconcile/trigger/completion/schedule/dispatch/finalize/commit/event order is preserved.
+- [x] One major state transition is processed per iteration.
+- [x] Agent result is untrusted until validation/postconditions pass.
 
 **Test Levels:** `UNIT`, `INT`
 
