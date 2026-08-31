@@ -768,9 +768,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Stable precedence/order is implemented.
-- [ ] Only resolved selected context/Skills are included.
-- [ ] Full prompt is not persisted in Standard telemetry.
+- [x] Stable precedence/order is implemented.
+- [x] Only resolved selected context/Skills are included.
+- [x] Full prompt is not persisted in Standard telemetry.
 
 **Test Levels:** `UNIT`, `INT`
 
