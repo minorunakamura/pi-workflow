@@ -417,9 +417,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Plan/CS/VR/RR currentness is rule-first and deterministic.
-- [ ] Semantic ambiguity produces `unknown`, not a fabricated answer.
-- [ ] Stale VR/RR cannot satisfy completion.
+- [x] Plan/CS/VR/RR currentness is rule-first and deterministic.
+- [x] Semantic ambiguity produces `unknown`, not a fabricated answer.
+- [x] Stale VR/RR cannot satisfy completion.
 
 **Test Levels:** `UNIT`
 
