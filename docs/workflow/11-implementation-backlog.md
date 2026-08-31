@@ -226,10 +226,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Six state-file schemas and manifest schema exist.
-- [ ] `finalized` is separate from status.
-- [ ] `current_plan` cannot use `superseded` applicability.
-- [ ] Stable arrays/nullable fields follow the specified shape.
+- [x] Six state-file schemas and manifest schema exist.
+- [x] `finalized` is separate from status.
+- [x] `current_plan` cannot use `superseded` applicability.
+- [x] Stable arrays/nullable fields follow the specified shape.
 
 **Test Levels:** `CONTRACT`
 
