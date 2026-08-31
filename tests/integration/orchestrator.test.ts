@@ -112,7 +112,7 @@ function fixtureFor(state: WorkflowState): Record<string, string> {
   };
 }
 
-function request(): AgentExecutionRequestV1 {
+function request(expectedArtifactTypes: readonly string[] = []): AgentExecutionRequestV1 {
   return {
     identity: {
       runId: RUN_ID,
@@ -130,7 +130,7 @@ function request(): AgentExecutionRequestV1 {
     tools: { resolved: [], policy: {} },
     model: { requested: "test", actual: "test", thinkingLevel: "low", allowedFallback: [] },
     context: { pack: {}, manifest: {}, artifactRefs: [] },
-    outputs: { expectedArtifactTypes: [], outputContract: {} },
+    outputs: { expectedArtifactTypes, outputContract: {} },
   };
 }
 
@@ -242,6 +242,65 @@ describe("Orchestrator persistence integration", () => {
         { type: "step.completed", state_revision: 2 },
         { type: "run.completed", state_revision: 3 },
       ]);
+    });
+  });
+
+  it("runs ordered result validation and rejects a completed Step without required Artifacts", async () => {
+    const initial = workflowState();
+
+    await withTempRepository(fixtureFor(initial), async (repositoryRoot) => {
+      const eventWriter = new JsonlEventWriter(repositoryRoot);
+      const baseStateStore = new FileStateStore(repositoryRoot, { eventWriter });
+      const runReader = new FileRunReader(repositoryRoot);
+      const step = createStep({
+        id: STEP_ID,
+        type: "implementation",
+        objective: "implement",
+        agent: "worker",
+        status: "ready",
+      });
+      const phases: string[] = [];
+      let finalizeCalls = 0;
+      let commitCalls = 0;
+      const stateStore = {
+        load: (runId: RunId) => baseStateStore.load(runId),
+        commit: async (input: Parameters<typeof baseStateStore.commit>[0]) => {
+          commitCalls += 1;
+          return baseStateStore.commit(input);
+        },
+      };
+
+      await expect(
+        new Orchestrator({
+          runReader,
+          stateStore,
+          agentRuntime: { run: async () => result() },
+          buildRequest: async () => request(["implementation"]),
+          completion: async () => ({ eligible: false, blockers: ["STEP_INCOMPLETE"] }),
+          schedule: async () => ({ kind: "dispatch", step }),
+          validateRole: async () => {
+            phases.push("role");
+          },
+          validateReferences: async () => {
+            phases.push("references");
+          },
+          validatePermissions: async () => {
+            phases.push("permissions");
+          },
+          postconditions: async (input) => {
+            phases.push("postconditions");
+            return input.state;
+          },
+          finalize: async (input) => {
+            finalizeCalls += 1;
+            return input.state;
+          },
+        }).run(RUN_ID),
+      ).rejects.toThrow(/REQUIRED_ARTIFACT_MISSING/);
+
+      expect(phases).toEqual(["role", "references", "permissions", "postconditions"]);
+      expect(finalizeCalls).toBe(0);
+      expect(commitCalls).toBe(0);
     });
   });
 });

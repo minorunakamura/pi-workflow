@@ -678,9 +678,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Schema/identity/role/ref/permission/postcondition validation order is implemented.
-- [ ] Candidate IDs are normalized centrally.
-- [ ] Required Artifact failure prevents successful Step acceptance.
+- [x] Schema/identity/role/ref/permission/postcondition validation order is implemented.
+- [x] Candidate IDs are normalized centrally.
+- [x] Required Artifact failure prevents successful Step acceptance.
 
 **Test Levels:** `CONTRACT`, `INT`
 

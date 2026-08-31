@@ -1,12 +1,18 @@
 import {
-  StepResultV1Schema,
   type AgentExecutionRequestV1,
   type StepResultV1,
 } from "../contracts/execution/agent-execution.js";
 import type { DomainEventDraft } from "../contracts/events/event.js";
-import type { RunId } from "../domain/primitives/ids.js";
+import { createIdAllocator, type IdAllocator, type RunId } from "../domain/primitives/ids.js";
+import {
+  normalizeStepResult,
+  type ResultArtifactValidation,
+  type ResultNormalizationResult,
+  type ResultValidationPhase,
+} from "./normalization/result-normalizer.js";
 import type { CompletionEvaluation } from "../evaluation/completion-evaluator.js";
 import type { AgentRuntime } from "../ports/agent-runtime.js";
+import type { ArtifactReader } from "../ports/artifact-store.js";
 import type { RunReader, WorkflowState } from "../ports/run-reader.js";
 import type { StateStore } from "../ports/state-store.js";
 import type {
@@ -40,6 +46,17 @@ export type OrchestratorResultValidator = (input: {
   step: SchedulerStep;
 }) => MaybePromise<StepResultV1>;
 
+export type OrchestratorResultValidationPhase = ResultValidationPhase;
+
+export type OrchestratorArtifactValidator = (input: {
+  state: WorkflowState;
+  request: AgentExecutionRequestV1;
+  result: StepResultV1;
+  step: SchedulerStep;
+  artifacts: ResultArtifactValidation;
+  normalization: ResultNormalizationResult;
+}) => MaybePromise<void>;
+
 export type OrchestratorPostconditionPhase = (input: {
   state: WorkflowState;
   request: AgentExecutionRequestV1;
@@ -52,6 +69,7 @@ export type OrchestratorFinalizePhase = (input: {
   completion: CompletionEvaluation;
   result: StepResultV1 | null;
   step: SchedulerStep | null;
+  normalized?: ResultNormalizationResult | null;
 }) => MaybePromise<WorkflowState>;
 
 export type OrchestratorEventFactory = (input: {
@@ -60,6 +78,7 @@ export type OrchestratorEventFactory = (input: {
   completion: CompletionEvaluation;
   result: StepResultV1 | null;
   step: SchedulerStep | null;
+  normalized?: ResultNormalizationResult | null;
   iteration: number;
 }) => MaybePromise<readonly DomainEventDraft[]>;
 
@@ -76,6 +95,13 @@ export type OrchestratorDependencies = Readonly<{
   reconcile?: OrchestratorStatePhase;
   trigger?: OrchestratorStatePhase;
   validateResult?: OrchestratorResultValidator;
+  validateRole?: OrchestratorResultValidationPhase;
+  validateReferences?: OrchestratorResultValidationPhase;
+  validatePermissions?: OrchestratorResultValidationPhase;
+  validateArtifacts?: OrchestratorArtifactValidator;
+  artifactReader?: ArtifactReader;
+  maxArtifactBytes?: number;
+  idAllocator?: IdAllocator;
   events?: OrchestratorEventFactory;
   maxIterations?: number;
 }>;
@@ -116,6 +142,7 @@ export class Orchestrator {
   private readonly postconditions: OrchestratorPostconditionPhase;
   private readonly finalize: OrchestratorFinalizePhase;
   private readonly events: OrchestratorEventFactory;
+  private readonly idAllocator: IdAllocator;
   private readonly maxIterations: number;
 
   constructor(private readonly dependencies: OrchestratorDependencies) {
@@ -131,6 +158,7 @@ export class Orchestrator {
     this.postconditions = dependencies.postconditions ?? noPostconditions;
     this.finalize = dependencies.finalize ?? noFinalization;
     this.events = dependencies.events ?? noEvents;
+    this.idAllocator = dependencies.idAllocator ?? createIdAllocator();
     this.maxIterations = maxIterations;
   }
 
@@ -153,6 +181,7 @@ export class Orchestrator {
           completion,
           result: null,
           step: null,
+          normalized: null,
         });
         const terminal = {
           ...finalized,
@@ -164,6 +193,7 @@ export class Orchestrator {
           completion,
           result: null,
           step: null,
+          normalized: null,
           iteration,
         });
         return { kind: "completed", state: committed, iterations: iteration };
@@ -184,26 +214,44 @@ export class Orchestrator {
       this.assertRequestIdentity(request, runId, step);
 
       const untrustedResult = await this.dependencies.agentRuntime.run(request);
-      let result = StepResultV1Schema.parse(untrustedResult);
-      if (this.dependencies.validateResult !== undefined) {
-        result = await this.dependencies.validateResult({ result, request, state, step });
-        result = StepResultV1Schema.parse(result);
+      const normalized = await normalizeStepResult(
+        { result: untrustedResult, request, state, step },
+        {
+          resultValidator: this.dependencies.validateResult,
+          validateRole: this.dependencies.validateRole,
+          validateReferences: this.dependencies.validateReferences,
+          validatePermissions: this.dependencies.validatePermissions,
+          postconditions: this.postconditions,
+          allocator: this.idAllocator,
+          artifactReader: this.dependencies.artifactReader,
+          maxArtifactBytes: this.dependencies.maxArtifactBytes,
+        },
+      );
+      state = normalized.state;
+      if (this.dependencies.validateArtifacts !== undefined) {
+        await this.dependencies.validateArtifacts({
+          state,
+          request,
+          result: normalized.result,
+          step,
+          artifacts: normalized.artifacts,
+          normalization: normalized,
+        });
       }
-      this.assertResultIdentity(result, request, runId, step);
-
-      state = await this.postconditions({ state, request, result, step });
       state = await this.finalize({
         state,
         completion,
-        result,
+        result: normalized.result,
         step,
+        normalized,
       });
       await this.commit({
         before: loaded,
         candidate: state,
         completion,
-        result,
+        result: normalized.result,
         step,
+        normalized,
         iteration,
       });
     }
@@ -217,6 +265,7 @@ export class Orchestrator {
     completion: CompletionEvaluation;
     result: StepResultV1 | null;
     step: SchedulerStep | null;
+    normalized: ResultNormalizationResult | null;
     iteration: number;
   }): Promise<WorkflowState> {
     const next = withNextRevision(input.before, input.candidate);
@@ -226,6 +275,7 @@ export class Orchestrator {
       completion: input.completion,
       result: input.result,
       step: input.step,
+      normalized: input.normalized,
       iteration: input.iteration,
     });
     return this.dependencies.stateStore.commit({
@@ -242,21 +292,6 @@ export class Orchestrator {
   ): void {
     if (request.identity.runId !== runId || request.identity.stepId !== step.id) {
       throw new Error("Agent execution request identity does not match dispatched Step");
-    }
-  }
-
-  private assertResultIdentity(
-    result: StepResultV1,
-    request: AgentExecutionRequestV1,
-    runId: RunId,
-    step: SchedulerStep,
-  ): void {
-    if (
-      result.identity.runId !== runId ||
-      result.identity.stepId !== step.id ||
-      result.identity.executionId !== request.identity.executionId
-    ) {
-      throw new Error("Agent result identity does not match dispatched Execution");
     }
   }
 }
