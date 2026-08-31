@@ -8,6 +8,7 @@ import {
   RequirementRevisionConflictError,
   StateRevisionConflictError,
 } from "../../src/adapters/persistence/write/file-state-store.js";
+import { RunLockedError } from "../../src/adapters/persistence/write/file-run-lock.js";
 import { FileRunReader } from "../../src/adapters/persistence/read/file-run-reader.js";
 import type { DomainEventDraft } from "../../src/contracts/events/event.js";
 import type { RunId } from "../../src/domain/primitives/ids.js";
@@ -310,6 +311,44 @@ describe("FileStateStore", () => {
         run: { state_revision: 2 },
         snapshot: { requirement: { goal: "goal-2" } },
       });
+    });
+  });
+
+  it("does not allow concurrent writers to commit the same revision", async () => {
+    const current = workflowState(1);
+    const next = workflowState(2, 2);
+    let allowFirstRename!: () => void;
+    let firstRenameStarted!: () => void;
+    const firstRenameReady = new Promise<void>((resolve) => {
+      firstRenameStarted = resolve;
+    });
+    const firstRenameAllowed = new Promise<void>((resolve) => {
+      allowFirstRename = resolve;
+    });
+
+    await withTempRepository(fixtureFor(current), async (repositoryRoot) => {
+      const firstStore = new FileStateStore(repositoryRoot, {
+        rename: async (source, destination) => {
+          if (destination.endsWith(join("state", "snapshots", "2"))) {
+            firstRenameStarted();
+            await firstRenameAllowed;
+          }
+          await nodeRename(source, destination);
+        },
+      });
+      const secondStore = new FileStateStore(repositoryRoot);
+      const firstCommit = firstStore.commit({ expectedRevision: 1, next });
+
+      await firstRenameReady;
+      await expect(secondStore.commit({ expectedRevision: 1, next })).rejects.toBeInstanceOf(
+        RunLockedError,
+      );
+
+      allowFirstRename();
+      await expect(firstCommit).resolves.toEqual(next);
+      await expect(secondStore.commit({ expectedRevision: 1, next })).rejects.toBeInstanceOf(
+        StateRevisionConflictError,
+      );
     });
   });
 });

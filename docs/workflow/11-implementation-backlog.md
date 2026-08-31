@@ -578,9 +578,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] One Run has one logical writer owner.
-- [ ] Concurrent commit with wrong revision is rejected.
-- [ ] Stale-lock handling never blindly steals a live lock.
+- [x] One Run has one logical writer owner.
+- [x] Concurrent commit with wrong revision is rejected.
+- [x] Stale-lock handling never blindly steals a live lock.
 
 **Test Levels:** `INT`, `CRASH`
 

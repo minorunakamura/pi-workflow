@@ -18,6 +18,7 @@ import {
 import type { RunId } from "../../../domain/primitives/ids.js";
 import { redactSecrets } from "../../../telemetry/redaction.js";
 import { FileRunReader, validateWorkflowStateConsistency } from "../read/file-run-reader.js";
+import { FileRunLock } from "./file-run-lock.js";
 import { JsonlEventWriter } from "./jsonl-event-writer.js";
 import {
   readRunYaml,
@@ -27,6 +28,7 @@ import {
   validateStateSnapshot,
 } from "../read/state-snapshot-files.js";
 import type { EventWriter } from "../../../ports/event-log.js";
+import type { RunLock } from "../../../ports/run-lock.js";
 import type { RunReader, StateSnapshot, WorkflowState } from "../../../ports/run-reader.js";
 import type { StateStore, StateStoreCommitInput } from "../../../ports/state-store.js";
 
@@ -47,6 +49,7 @@ export type FileStateStoreOptions = Readonly<{
   mkdir?: MakeDirectory;
   mkdtemp?: MakeTempDirectory;
   rm?: RemovePath;
+  runLock?: RunLock;
 }>;
 
 const defaultReadTextFile: ReadTextFile = (path) => nodeReadFile(path, "utf8");
@@ -168,6 +171,7 @@ export class FileStateStore implements StateStore {
   private readonly makeDirectory: MakeDirectory;
   private readonly makeTempDirectory: MakeTempDirectory;
   private readonly removePath: RemovePath;
+  private readonly runLock: RunLock;
 
   constructor(repositoryRoot: string, options: FileStateStoreOptions = {}) {
     this.repositoryRoot = resolve(repositoryRoot);
@@ -181,6 +185,7 @@ export class FileStateStore implements StateStore {
     this.eventWriter =
       options.eventWriter ??
       new JsonlEventWriter(this.repositoryRoot, { readFile: this.readTextFile });
+    this.runLock = options.runLock ?? new FileRunLock(this.repositoryRoot);
     this.reader =
       options.reader ??
       new FileRunReader(this.repositoryRoot, {
@@ -193,6 +198,15 @@ export class FileStateStore implements StateStore {
   }
 
   async commit(input: StateStoreCommitInput): Promise<WorkflowState> {
+    const lock = await this.runLock.acquire(input.next.run.run_id);
+    try {
+      return await this.commitWithLock(input);
+    } finally {
+      await lock.release();
+    }
+  }
+
+  private async commitWithLock(input: StateStoreCommitInput): Promise<WorkflowState> {
     const { expectedRevision, next } = input;
     const current = await this.reader.load(next.run.run_id);
 
