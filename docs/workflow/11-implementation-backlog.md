@@ -596,9 +596,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Reader can route old known schemas through sequential in-memory migration.
-- [ ] Historical snapshots are not rewritten on read.
-- [ ] Unknown future schema is rejected.
+- [x] Reader can route old known schemas through sequential in-memory migration.
+- [x] Historical snapshots are not rewritten on read.
+- [x] Unknown future schema is rejected.
 
 **Test Levels:** `CONTRACT`
 

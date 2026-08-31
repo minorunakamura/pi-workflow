@@ -4,13 +4,20 @@ import { ContractValidationError } from "../../../contracts/execution/agent-exec
 import type { RunId } from "../../../domain/primitives/ids.js";
 import type { RunYamlV1 } from "../../../contracts/state/workflow-state.js";
 import type { RunReader, StateSnapshot, WorkflowState } from "../../../ports/run-reader.js";
-import { readRunYaml, readSnapshotDirectory, type ReadTextFile } from "./state-snapshot-files.js";
+import {
+  DEFAULT_STATE_SCHEMA_MIGRATIONS,
+  readRunYaml,
+  readSnapshotDirectory,
+  type ReadTextFile,
+  type StateSchemaMigrations,
+} from "./state-snapshot-files.js";
 
 export type { ReadTextFile } from "./state-snapshot-files.js";
 
 export type FileRunReaderOptions = Readonly<{
   maxAttempts?: number;
   readFile?: ReadTextFile;
+  migrations?: StateSchemaMigrations;
 }>;
 
 const RUN_ID_PATTERN = /^run-\d+$/;
@@ -33,6 +40,7 @@ export class FileRunReader implements RunReader {
   private readonly repositoryRoot: string;
   private readonly maxAttempts: number;
   private readonly readTextFile: ReadTextFile;
+  private readonly migrations: StateSchemaMigrations;
 
   constructor(repositoryRoot: string, options: FileRunReaderOptions = {}) {
     const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -43,6 +51,7 @@ export class FileRunReader implements RunReader {
     this.repositoryRoot = resolve(repositoryRoot);
     this.maxAttempts = maxAttempts;
     this.readTextFile = options.readFile ?? defaultReadTextFile;
+    this.migrations = options.migrations ?? DEFAULT_STATE_SCHEMA_MIGRATIONS;
   }
 
   async load(runId: RunId): Promise<WorkflowState> {
@@ -82,13 +91,14 @@ export class FileRunReader implements RunReader {
   }
 
   private async readRun(runDirectory: string): Promise<RunYamlV1> {
-    return readRunYaml(join(runDirectory, "run.yaml"), this.readTextFile);
+    return readRunYaml(join(runDirectory, "run.yaml"), this.readTextFile, this.migrations);
   }
 
   private readSnapshot(runDirectory: string, stateRevision: number): Promise<StateSnapshot> {
     return readSnapshotDirectory(
       join(runDirectory, "state", "snapshots", String(stateRevision)),
       this.readTextFile,
+      this.migrations,
     );
   }
 

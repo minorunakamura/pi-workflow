@@ -9,9 +9,9 @@ import { withTempRepository, type RepositoryFixture } from "../fixtures/temp-rep
 const RUN_ID = "run-001" as RunId;
 const RUN_DIRECTORY = `.pi/runs/${RUN_ID}`;
 
-function runYaml(stateRevision: number) {
+function runYaml(stateRevision: number, schemaVersion = 1) {
   return {
-    schema_version: 1,
+    schema_version: schemaVersion,
     run_id: RUN_ID,
     request: { id: "request-001", type: "feature" },
     status: "running",
@@ -34,8 +34,8 @@ function runYaml(stateRevision: number) {
   };
 }
 
-function snapshotFiles(stateRevision: number): RepositoryFixture {
-  const header = { schema_version: 1, run_id: RUN_ID, state_revision: stateRevision };
+function snapshotFiles(stateRevision: number, schemaVersion = 1): RepositoryFixture {
+  const header = { schema_version: schemaVersion, run_id: RUN_ID, state_revision: stateRevision };
 
   return {
     [`${RUN_DIRECTORY}/state/snapshots/${stateRevision}/requirement.yaml`]: stringify({
@@ -87,8 +87,8 @@ function snapshotFiles(stateRevision: number): RepositoryFixture {
   };
 }
 
-function runFile(stateRevision: number): RepositoryFixture {
-  return { [`${RUN_DIRECTORY}/run.yaml`]: stringify(runYaml(stateRevision)) };
+function runFile(stateRevision: number, schemaVersion = 1): RepositoryFixture {
+  return { [`${RUN_DIRECTORY}/run.yaml`]: stringify(runYaml(stateRevision, schemaVersion)) };
 }
 
 describe("FileRunReader", () => {
@@ -108,6 +108,34 @@ describe("FileRunReader", () => {
         expect(state.snapshot.manifest.state_revision).toBe(2);
       },
     );
+  });
+
+  it("migrates known legacy schemas in memory without rewriting historical snapshots", async () => {
+    const files = {
+      ...runFile(1, 0),
+      ...snapshotFiles(1, 0),
+    };
+
+    await withTempRepository(files, async (repositoryRoot) => {
+      const before = Object.fromEntries(
+        await Promise.all(
+          Object.keys(files).map(
+            async (path) => [path, await nodeReadFile(join(repositoryRoot, path), "utf8")] as const,
+          ),
+        ),
+      );
+
+      const state = await new FileRunReader(repositoryRoot).load(RUN_ID);
+
+      expect(state.run.schema_version).toBe(1);
+      expect(state.snapshot.requirement.schema_version).toBe(1);
+      expect(state.snapshot.manifest.schema_version).toBe(1);
+      await Promise.all(
+        Object.entries(before).map(([path, contents]) =>
+          expect(nodeReadFile(join(repositoryRoot, path), "utf8")).resolves.toBe(contents),
+        ),
+      );
+    });
   });
 
   it("does not fall back to an older snapshot when the current snapshot is missing", async () => {
