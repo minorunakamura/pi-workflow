@@ -272,9 +272,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Exactly seven formal Agent definitions exist.
-- [ ] Modes/authority/skills/forbidden behavior match the specification.
-- [ ] No Judge Agent is introduced.
+- [x] Exactly seven formal Agent definitions exist.
+- [x] Modes/authority/skills/forbidden behavior match the specification.
+- [x] No Judge Agent is introduced.
 
 **Test Levels:** `CONTRACT`
 
