@@ -358,9 +358,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] U/D/F transitions match canonical states.
-- [ ] Finding reopen preserves identity.
-- [ ] Illegal state/disposition pairs are rejected.
+- [x] U/D/F transitions match canonical states.
+- [x] Finding reopen preserves identity.
+- [x] Illegal state/disposition pairs are rejected.
 
 **Test Levels:** `UNIT`
 
