@@ -131,11 +131,11 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Strict type checking is enabled at a project-compatible level.
-- [ ] Runtime core contracts do not use unrestricted `any` as normal design.
-- [ ] Test fixtures/temp repositories are supported.
-- [ ] Typecheck, lint, format-check, and test commands can run from the package root.
-- [ ] `packageManager` pins the pnpm development version and package dependencies are classified as runtime/peer/dev dependencies according to the implementation specification.
+- [x] Strict type checking is enabled at a project-compatible level.
+- [x] Runtime core contracts do not use unrestricted `any` as normal design.
+- [x] Test fixtures/temp repositories are supported.
+- [x] Typecheck, lint, format-check, and test commands can run from the package root.
+- [x] `packageManager` pins the pnpm development version and package dependencies are classified as runtime/peer/dev dependencies according to the implementation specification.
 
 **Test Levels:** `ARCH`, `UNIT`
 
