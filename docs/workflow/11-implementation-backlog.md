@@ -251,9 +251,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Artifact common status is exactly `complete | partial`.
-- [ ] Event envelope and type-specific union are runtime validated.
-- [ ] Deprecated/noisy Event types are not introduced as canonical types.
+- [x] Artifact common status is exactly `complete | partial`.
+- [x] Event envelope and type-specific union are runtime validated.
+- [x] Deprecated/noisy Event types are not introduced as canonical types.
 
 **Test Levels:** `CONTRACT`
 
