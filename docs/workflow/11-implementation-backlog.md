@@ -638,8 +638,8 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Fixtures can return completed/blocked/failed/invalid results deterministically.
-- [ ] Fake runtime remains reusable after Phase 1 implementation.
+- [x] Fixtures can return completed/blocked/failed/invalid results deterministically.
+- [x] Fake runtime remains reusable after Phase 1 implementation.
 
 **Test Levels:** `INT`
 
