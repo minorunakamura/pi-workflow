@@ -11,6 +11,8 @@ export type UncertaintyId = BrandedId<"UncertaintyId">;
 export type DecisionId = BrandedId<"DecisionId">;
 export type GateId = BrandedId<"GateId">;
 export type FindingId = BrandedId<"FindingId">;
+export type AcceptanceCriterionId = BrandedId<"AcceptanceCriterionId">;
+export type ConstraintId = BrandedId<"ConstraintId">;
 export type PlanUnitId = BrandedId<"PlanUnitId">;
 export type VerificationCheckId = BrandedId<"VerificationCheckId">;
 export type PlanDeviationId = BrandedId<"PlanDeviationId">;
@@ -18,6 +20,7 @@ export type ChangeSetId = BrandedId<"ChangeSetId">;
 export type VerificationRunId = BrandedId<"VerificationRunId">;
 export type ReviewRunId = BrandedId<"ReviewRunId">;
 
+export type RequirementElementId = AcceptanceCriterionId | ConstraintId;
 export type PlanScopedId = PlanUnitId | VerificationCheckId;
 
 export type PlanScopedReference<Id extends PlanScopedId> = Readonly<{
@@ -36,6 +39,8 @@ export interface IdAllocator {
   issueDecisionId(): DecisionId;
   issueGateId(): GateId;
   issueFindingId(): FindingId;
+  issueAcceptanceCriterionId(): AcceptanceCriterionId;
+  issueConstraintId(): ConstraintId;
   issuePlanUnitId(planVersion: number): PlanUnitId;
   issueVerificationCheckId(planVersion: number): VerificationCheckId;
   issuePlanDeviationId(): PlanDeviationId;
@@ -101,6 +106,8 @@ export function createIdAllocator(): IdAllocator {
     issueDecisionId: () => nextId<DecisionId>(counters, "D"),
     issueGateId: () => nextId<GateId>(counters, "G"),
     issueFindingId: () => nextId<FindingId>(counters, "F"),
+    issueAcceptanceCriterionId: () => nextId<AcceptanceCriterionId>(counters, "AC"),
+    issueConstraintId: () => nextId<ConstraintId>(counters, "C"),
     issuePlanUnitId: (planVersion) => nextPlanScopedId<PlanUnitId>(counters, "P", planVersion),
     issueVerificationCheckId: (planVersion) =>
       nextPlanScopedId<VerificationCheckId>(counters, "V", planVersion),

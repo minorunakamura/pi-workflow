@@ -141,7 +141,14 @@ export interface RuntimeSchema<T> {
 
 const REQUEST_CONTRACT = "AgentExecutionRequestV1";
 const RESULT_CONTRACT = "StepResultV1";
-const AUTHORITATIVE_STATE_ID = /^(?:run|step|exec)-\d+$|^(?:U|D|G|F|P|V|PD|CS|VR|RR)-\d+$/;
+const AUTHORITATIVE_STATE_ID = /^(?:run|step|exec)-\d+$|^(?:U|D|G|F|P|V|PD|CS|VR|RR|AC|C)-\d+$/;
+const REQUIREMENT_CANDIDATE_OPERATIONS = ["add", "clarify"] as const;
+const REQUIREMENT_CANDIDATE_EFFECTS = [
+  "preserving",
+  "narrowing",
+  "broadening",
+  "changing",
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -352,6 +359,30 @@ function candidateArray(
   });
 }
 
+function requirementCandidateArray(input: unknown, path: string): readonly ResultCandidate[] {
+  const candidates = candidateArray(input, RESULT_CONTRACT, path);
+  return candidates.map((candidate, index) => {
+    const itemPath = `${path}[${index}]`;
+    const operation = stringValue(candidate.operation, RESULT_CONTRACT, `${itemPath}.operation`);
+    if (!(REQUIREMENT_CANDIDATE_OPERATIONS as readonly string[]).includes(operation)) {
+      fail(
+        RESULT_CONTRACT,
+        `${itemPath}.operation`,
+        `one of ${REQUIREMENT_CANDIDATE_OPERATIONS.join(", ")}`,
+      );
+    }
+    const effect = stringValue(candidate.effect, RESULT_CONTRACT, `${itemPath}.effect`);
+    if (!(REQUIREMENT_CANDIDATE_EFFECTS as readonly string[]).includes(effect)) {
+      fail(
+        RESULT_CONTRACT,
+        `${itemPath}.effect`,
+        `one of ${REQUIREMENT_CANDIDATE_EFFECTS.join(", ")}`,
+      );
+    }
+    return candidate;
+  });
+}
+
 function findAuthoritativeStateId(value: JsonValue, path: string): string | undefined {
   if (typeof value === "string") {
     return AUTHORITATIVE_STATE_ID.test(value) ? path : undefined;
@@ -469,7 +500,7 @@ export function parseStepResultV1(input: unknown): StepResultV1 {
     "requirement_candidates",
   );
   for (const name of ["acceptance_criteria", "constraints", "assumptions"] as const) {
-    candidateArray(requirements[name], RESULT_CONTRACT, `requirement_candidates.${name}`);
+    requirementCandidateArray(requirements[name], `requirement_candidates.${name}`);
   }
 
   const blocked = nullableStructuredObject(root.blocked, RESULT_CONTRACT, "blocked");

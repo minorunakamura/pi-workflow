@@ -153,6 +153,40 @@ describe("Agent execution contracts", () => {
     );
   });
 
+  it("validates requirement candidate operations and effects", () => {
+    expect(() =>
+      StepResultV1Schema.parse({
+        ...validResult(),
+        requirement_candidates: {
+          ...validResult().requirement_candidates,
+          acceptance_criteria: [{ operation: "replace", effect: "changing" }],
+        },
+      }),
+    ).toThrow(/requirement_candidates\.acceptance_criteria\[0\]\.operation.*add, clarify/);
+
+    expect(() =>
+      StepResultV1Schema.parse({
+        ...validResult(),
+        requirement_candidates: {
+          ...validResult().requirement_candidates,
+          constraints: [{ operation: "clarify", effect: "unknown" }],
+        },
+      }),
+    ).toThrow(
+      /requirement_candidates\.constraints\[0\]\.effect.*preserving, narrowing, broadening, changing/,
+    );
+
+    expect(() =>
+      StepResultV1Schema.parse({
+        ...validResult(),
+        requirement_candidates: {
+          ...validResult().requirement_candidates,
+          assumptions: [{ operation: "clarify", effect: "changing", targetId: "AC-001" }],
+        },
+      }),
+    ).toThrow(/authoritative State ID/);
+  });
+
   it("requires structured information for blocked and failed outcomes", () => {
     expect(() => StepResultV1Schema.parse({ ...validResult(), outcome: "blocked" })).toThrow(
       /blocked.*structured blocked value/,

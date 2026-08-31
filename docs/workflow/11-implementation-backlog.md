@@ -396,9 +396,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Candidate operations/effects are validated.
-- [ ] AC/C identity preservation/supersession is deterministic.
-- [ ] Requirement changes can classify Plan impact/reclassification need.
+- [x] Candidate operations/effects are validated.
+- [x] AC/C identity preservation/supersession is deterministic.
+- [x] Requirement changes can classify Plan impact/reclassification need.
 
 **Test Levels:** `UNIT`
 
