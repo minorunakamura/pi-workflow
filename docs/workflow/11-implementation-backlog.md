@@ -834,11 +834,11 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Real Scout output normalizes successfully.
-- [ ] Real Planner output normalizes successfully.
-- [ ] Read-only permissions are actually enforced.
-- [ ] Schema-invalid output takes bounded recovery/retry path.
-- [ ] Smoke tests load the repository through the local Pi Package manifest and resolve the packaged Skills without copied `.pi/agent/skills/` source.
+- [x] Real Scout output normalizes successfully.
+- [x] Real Planner output normalizes successfully.
+- [x] Read-only permissions are actually enforced.
+- [x] Schema-invalid output takes bounded recovery/retry path.
+- [x] Smoke tests load the repository through the local Pi Package manifest and resolve the packaged Skills without copied `.pi/agent/skills/` source.
 
 **Test Levels:** `INT`
 
