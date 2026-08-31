@@ -115,6 +115,20 @@ export type EventEnvelopeV1 = JsonObject &
     data: EventDataV1;
   }>;
 
+export type DomainEventDraft = Pick<
+  EventEnvelopeV1,
+  | "schema_version"
+  | "type"
+  | "timestamp"
+  | "run_id"
+  | "source"
+  | "actor"
+  | "state_revision"
+  | "correlation_id"
+  | "caused_by"
+  | "data"
+>;
+
 export type EventDataByType = {
   [Type in EventType]: EventDataV1;
 };

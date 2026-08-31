@@ -9,6 +9,7 @@ import {
   StateRevisionConflictError,
 } from "../../src/adapters/persistence/write/file-state-store.js";
 import { FileRunReader } from "../../src/adapters/persistence/read/file-run-reader.js";
+import type { DomainEventDraft } from "../../src/contracts/events/event.js";
 import type { RunId } from "../../src/domain/primitives/ids.js";
 import type { WorkflowState } from "../../src/ports/run-reader.js";
 import { withTempRepository, type RepositoryFixture } from "../fixtures/temp-repository.js";
@@ -78,6 +79,18 @@ function workflowState(
         ],
       },
     },
+  };
+}
+
+function eventDraft(stateRevision: number): DomainEventDraft {
+  return {
+    schema_version: 1,
+    type: "step.completed",
+    timestamp: "2026-08-30T03:02:10.123+09:00",
+    run_id: RUN_ID,
+    source: { component: "orchestrator" },
+    state_revision: stateRevision,
+    data: { step_id: "step-001" },
   };
 }
 
@@ -270,6 +283,32 @@ describe("FileStateStore", () => {
       expect(renameCalled).toBe(false);
       await expect(new FileRunReader(repositoryRoot).load(RUN_ID)).resolves.toMatchObject({
         run: { state_revision: 1 },
+      });
+    });
+  });
+
+  it("keeps committed state when event append fails", async () => {
+    const current = workflowState(1);
+    const next = workflowState(2, 2);
+
+    await withTempRepository(fixtureFor(current), async (repositoryRoot) => {
+      const store = new FileStateStore(repositoryRoot, {
+        eventWriter: {
+          append: async () => {
+            throw new Error("simulated event append failure");
+          },
+          appendBatch: async () => {
+            throw new Error("simulated event append failure");
+          },
+        },
+      });
+
+      await expect(
+        store.commit({ expectedRevision: 1, next, events: [eventDraft(2)] }),
+      ).rejects.toThrow("simulated event append failure");
+      await expect(new FileRunReader(repositoryRoot).load(RUN_ID)).resolves.toMatchObject({
+        run: { state_revision: 2 },
+        snapshot: { requirement: { goal: "goal-2" } },
       });
     });
   });

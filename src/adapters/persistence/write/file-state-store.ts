@@ -18,6 +18,7 @@ import {
 import type { RunId } from "../../../domain/primitives/ids.js";
 import { redactSecrets } from "../../../telemetry/redaction.js";
 import { FileRunReader, validateWorkflowStateConsistency } from "../read/file-run-reader.js";
+import { JsonlEventWriter } from "./jsonl-event-writer.js";
 import {
   readRunYaml,
   readSnapshotDirectory,
@@ -25,6 +26,7 @@ import {
   validateRunYaml,
   validateStateSnapshot,
 } from "../read/state-snapshot-files.js";
+import type { EventWriter } from "../../../ports/event-log.js";
 import type { RunReader, StateSnapshot, WorkflowState } from "../../../ports/run-reader.js";
 import type { StateStore, StateStoreCommitInput } from "../../../ports/state-store.js";
 
@@ -37,6 +39,7 @@ export type RemovePath = (path: string) => Promise<void>;
 
 export type FileStateStoreOptions = Readonly<{
   reader?: RunReader;
+  eventWriter?: EventWriter;
   readFile?: ReadTextFile;
   writeFile?: WriteTextFile;
   rename?: RenamePath;
@@ -157,6 +160,7 @@ function runDirectory(repositoryRoot: string, runId: RunId): string {
 export class FileStateStore implements StateStore {
   private readonly repositoryRoot: string;
   private readonly reader: RunReader;
+  private readonly eventWriter: EventWriter;
   private readonly readTextFile: ReadTextFile;
   private readonly writeTextFile: WriteTextFile;
   private readonly renamePath: RenamePath;
@@ -174,6 +178,9 @@ export class FileStateStore implements StateStore {
     this.makeDirectory = options.mkdir ?? defaultMakeDirectory;
     this.makeTempDirectory = options.mkdtemp ?? defaultMakeTempDirectory;
     this.removePath = options.rm ?? defaultRemovePath;
+    this.eventWriter =
+      options.eventWriter ??
+      new JsonlEventWriter(this.repositoryRoot, { readFile: this.readTextFile });
     this.reader =
       options.reader ??
       new FileRunReader(this.repositoryRoot, {
@@ -273,6 +280,10 @@ export class FileStateStore implements StateStore {
       }
 
       await this.renamePath(temporaryRunFile, join(runDir, "run.yaml"));
+      const events = input.events ?? [];
+      if (events.length > 0) {
+        await this.eventWriter.appendBatch(events);
+      }
       return durableNext;
     } finally {
       if (!snapshotFinalized) {

@@ -559,9 +559,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] JSONL sequence/event IDs are writer-owned and monotonic in write order.
-- [ ] Corrupt line does not block state load.
-- [ ] Event append failure does not roll back committed state.
+- [x] JSONL sequence/event IDs are writer-owned and monotonic in write order.
+- [x] Corrupt line does not block state load.
+- [x] Event append failure does not roll back committed state.
 
 **Test Levels:** `INT`, `CRASH`
 

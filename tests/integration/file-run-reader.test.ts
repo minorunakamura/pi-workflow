@@ -175,6 +175,21 @@ describe("FileRunReader", () => {
     });
   });
 
+  it("loads state when the event log contains a corrupt line", async () => {
+    await withTempRepository(
+      {
+        ...runFile(1),
+        ...snapshotFiles(1),
+        [`${RUN_DIRECTORY}/events/events.jsonl`]: "not-json\n",
+      },
+      async (repositoryRoot) => {
+        await expect(new FileRunReader(repositoryRoot).load(RUN_ID)).resolves.toMatchObject({
+          run: { state_revision: 1 },
+        });
+      },
+    );
+  });
+
   it("retries when run.yaml changes its pointer during the read", async () => {
     await withTempRepository(
       {
