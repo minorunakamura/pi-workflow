@@ -10,7 +10,7 @@ const QUOTED_SECRET = new RegExp(
   "gi",
 );
 const UNQUOTED_SECRET = new RegExp(
-  String.raw`((?:^|[^A-Za-z0-9])${SECRET_FIELD}\b\s*[:=]\s*)(?!["'\[])[^\s,;\]}]+`,
+  String.raw`((?:^|[^A-Za-z0-9])${SECRET_FIELD}\b\s*[:=]\s*)(?!["'\[])[^\s,;\]}"']+`,
   "gi",
 );
 const TOKEN_VALUE =

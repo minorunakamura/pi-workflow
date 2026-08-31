@@ -540,9 +540,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] `requirement-v<N>.yaml` is immutable.
-- [ ] Current snapshot revision matches current Requirement revision.
-- [ ] Raw initial `request.md` is not rewritten on amendment.
+- [x] `requirement-v<N>.yaml` is immutable.
+- [x] Current snapshot revision matches current Requirement revision.
+- [x] Raw initial `request.md` is not rewritten on amendment.
 
 **Test Levels:** `INT`
 

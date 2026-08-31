@@ -1,10 +1,11 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { readFile as nodeReadFile, rename as nodeRename } from "node:fs/promises";
 import { join } from "node:path";
-import { stringify } from "yaml";
+import { parse as parseYaml, stringify } from "yaml";
 import { describe, expect, it } from "vitest";
 import {
   FileStateStore,
+  RequirementRevisionConflictError,
   StateRevisionConflictError,
 } from "../../src/adapters/persistence/write/file-state-store.js";
 import { FileRunReader } from "../../src/adapters/persistence/read/file-run-reader.js";
@@ -15,7 +16,11 @@ import { withTempRepository, type RepositoryFixture } from "../fixtures/temp-rep
 const RUN_ID = "run-001" as RunId;
 const RUN_DIRECTORY = `.pi/runs/${RUN_ID}`;
 
-function workflowState(stateRevision: number): WorkflowState {
+function workflowState(
+  stateRevision: number,
+  requirementRevision = 1,
+  goal = `goal-${stateRevision}`,
+): WorkflowState {
   const header = { schema_version: 1, run_id: RUN_ID, state_revision: stateRevision } as const;
 
   return {
@@ -44,8 +49,8 @@ function workflowState(stateRevision: number): WorkflowState {
     snapshot: {
       requirement: {
         ...header,
-        revision: 1,
-        goal: `goal-${stateRevision}`,
+        revision: requirementRevision,
+        goal,
         scope: { in: [], out: [] },
         constraints: [],
         acceptance_criteria: [],
@@ -95,7 +100,7 @@ function fixtureFor(state: WorkflowState): RepositoryFixture {
 describe("FileStateStore", () => {
   it("validates and finalizes the snapshot before atomically replacing run.yaml", async () => {
     const current = workflowState(1);
-    const next = workflowState(2);
+    const next = workflowState(2, 2);
 
     await withTempRepository(fixtureFor(current), async (repositoryRoot) => {
       const renameTargets: string[] = [];
@@ -118,6 +123,79 @@ describe("FileStateStore", () => {
         snapshot: { requirement: { goal: "goal-2" } },
       });
     });
+  });
+
+  it("persists immutable requirement revisions without rewriting the initial request", async () => {
+    const current = workflowState(1);
+    const next = workflowState(2, 2, "api_key: amended-secret");
+    const requestPath = `${RUN_DIRECTORY}/request.md`;
+
+    await withTempRepository(
+      { ...fixtureFor(current), [requestPath]: "the initial request\n" },
+      async (repositoryRoot) => {
+        const store = new FileStateStore(repositoryRoot);
+        const committed = await store.commit({ expectedRevision: 1, next });
+        const requirementsDirectory = join(repositoryRoot, RUN_DIRECTORY, "requirements");
+        const initialHistoryPath = join(requirementsDirectory, "requirement-v1.yaml");
+        const amendedHistoryPath = join(requirementsDirectory, "requirement-v2.yaml");
+
+        expect(committed.snapshot.requirement.revision).toBe(2);
+        await expect(nodeReadFile(join(repositoryRoot, requestPath), "utf8")).resolves.toBe(
+          "the initial request\n",
+        );
+        await expect(nodeReadFile(initialHistoryPath, "utf8")).resolves.not.toContain(
+          "state_revision",
+        );
+        const amendedHistoryDocument = parseYaml(await nodeReadFile(amendedHistoryPath, "utf8"));
+        expect(amendedHistoryDocument).toMatchObject({
+          revision: 2,
+          goal: "api_key: [REDACTED_SECRET]",
+        });
+        await expect(
+          nodeReadFile(
+            join(repositoryRoot, RUN_DIRECTORY, "state", "snapshots", "2", "requirement.yaml"),
+            "utf8",
+          ),
+        ).resolves.not.toContain("amended-secret");
+
+        const amendedHistory = await nodeReadFile(amendedHistoryPath, "utf8");
+        const changed = workflowState(3, 2, "changed requirement");
+        await expect(store.commit({ expectedRevision: 2, next: changed })).rejects.toBeInstanceOf(
+          RequirementRevisionConflictError,
+        );
+        await expect(nodeReadFile(amendedHistoryPath, "utf8")).resolves.toBe(amendedHistory);
+        await expect(store.load(RUN_ID)).resolves.toMatchObject({ run: { state_revision: 2 } });
+      },
+    );
+  });
+
+  it("rejects a requirement history entry that disagrees with its revision", async () => {
+    const current = workflowState(1);
+    const conflictingHistory = stringify({
+      revision: 2,
+      goal: "wrong revision",
+      scope: { in: [], out: [] },
+      constraints: [],
+      acceptance_criteria: [],
+      non_goals: [],
+      supplied_evidence: [],
+      assumptions: [],
+      open_questions: [],
+    });
+
+    await withTempRepository(
+      {
+        ...fixtureFor(current),
+        [`${RUN_DIRECTORY}/requirements/requirement-v1.yaml`]: conflictingHistory,
+      },
+      async (repositoryRoot) => {
+        const store = new FileStateStore(repositoryRoot);
+
+        await expect(
+          store.commit({ expectedRevision: 1, next: workflowState(2) }),
+        ).rejects.toBeInstanceOf(RequirementRevisionConflictError);
+      },
+    );
   });
 
   it("rejects an expected revision mismatch before writing anything", async () => {
@@ -145,7 +223,7 @@ describe("FileStateStore", () => {
 
   it("leaves the old state current when the pointer replacement fails", async () => {
     const current = workflowState(1);
-    const next = workflowState(2);
+    const next = workflowState(2, 2);
 
     await withTempRepository(fixtureFor(current), async (repositoryRoot) => {
       const runPath = join(repositoryRoot, RUN_DIRECTORY, "run.yaml");
@@ -170,7 +248,7 @@ describe("FileStateStore", () => {
 
   it("does not replace the pointer when read-back validation fails", async () => {
     const current = workflowState(1);
-    const next = workflowState(2);
+    const next = workflowState(2, 2);
     let renameCalled = false;
 
     await withTempRepository(fixtureFor(current), async (repositoryRoot) => {
