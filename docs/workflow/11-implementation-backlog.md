@@ -179,9 +179,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Types/functions exist for Run/Step/Execution/U/D/G/F/PD/CS/VR/RR IDs.
-- [ ] `P-*` and `V-*` references carry Plan version.
-- [ ] Issued IDs are not reused; gaps are allowed.
+- [x] Types/functions exist for Run/Step/Execution/U/D/G/F/PD/CS/VR/RR IDs.
+- [x] `P-*` and `V-*` references carry Plan version.
+- [x] Issued IDs are not reused; gaps are allowed.
 
 **Test Levels:** `UNIT`
 
