@@ -857,8 +857,8 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] HEAD/branch/status/snapshot/diff/fingerprint facts are available.
-- [ ] Adapter does not decide semantic relevance/re-plan.
+- [x] HEAD/branch/status/snapshot/diff/fingerprint facts are available.
+- [x] Adapter does not decide semantic relevance/re-plan.
 
 **Test Levels:** `INT`
 
