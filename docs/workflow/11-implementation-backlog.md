@@ -78,13 +78,13 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] The repository is an installable Pi Package with a `package.json` Pi manifest.
-- [ ] Runtime TypeScript is organized under `src/`; packaged Skills are under `skills/`.
-- [ ] The Pi manifest exposes one thin Extension entry point and the nine Core Skills.
-- [ ] Authored implementation source does not depend on `.pi/agent/skills/` or `.pi/workflows/` layout.
-- [ ] `domain`, `contracts`, `application`, `ports`, `adapters`, `telemetry`, `evaluation`, `read-model`, `bootstrap` are separated.
-- [ ] `agents`, `playbooks`, Pi command integration, and `monitor` are separated.
-- [ ] No catch-all giant `utils`/`common` module is introduced.
+- [x] The repository is an installable Pi Package with a `package.json` Pi manifest.
+- [x] Runtime TypeScript is organized under `src/`; packaged Skills are under `skills/`.
+- [x] The Pi manifest exposes one thin Extension entry point and the nine Core Skills.
+- [x] Authored implementation source does not depend on `.pi/agent/skills/` or `.pi/workflows/` layout.
+- [x] `domain`, `contracts`, `application`, `ports`, `adapters`, `telemetry`, `evaluation`, `read-model`, `bootstrap` are separated.
+- [x] `agents`, `playbooks`, Pi command integration, and `monitor` are separated.
+- [x] No catch-all giant `utils`/`common` module is introduced.
 
 **Test Levels:** `ARCH`
 
