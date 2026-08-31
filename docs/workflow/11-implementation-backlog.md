@@ -437,10 +437,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Supported triggers can create dynamic Steps.
-- [ ] Active equivalent purpose is deduplicated.
-- [ ] `max_dynamic_steps` and graph invariants are enforced.
-- [ ] Completed Steps are not reopened.
+- [x] Supported triggers can create dynamic Steps.
+- [x] Active equivalent purpose is deduplicated.
+- [x] `max_dynamic_steps` and graph invariants are enforced.
+- [x] Completed Steps are not reopened.
 
 **Test Levels:** `UNIT`
 

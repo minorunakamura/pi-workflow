@@ -25,6 +25,19 @@ export type StepStatus = (typeof STEP_STATUSES)[number];
 export const STEP_ORIGINS = ["base", "dynamic"] as const;
 export type StepOrigin = (typeof STEP_ORIGINS)[number];
 
+export const DYNAMIC_STEP_TRIGGERS = [
+  "uncertainty",
+  "decision",
+  "verification failure",
+  "review finding",
+  "plan deviation",
+  "repository drift",
+  "execution/runtime failure",
+  "recovery",
+  "request amendment",
+] as const;
+export type DynamicStepTrigger = (typeof DYNAMIC_STEP_TRIGGERS)[number];
+
 export type Step = Readonly<{
   id: StepId;
   type: StepType;
@@ -115,9 +128,16 @@ function nonEmpty(value: string | undefined): value is string {
   return value !== undefined && value.trim().length > 0;
 }
 
+function isDynamicStepTrigger(value: string): value is DynamicStepTrigger {
+  return (DYNAMIC_STEP_TRIGGERS as readonly string[]).includes(value);
+}
+
 function validateStepMetadata(step: Step): void {
   if (step.origin === "dynamic" && !nonEmpty(step.trigger)) {
     throw new StepGraphValidationError([`${step.id}: dynamic Step requires a trigger`]);
+  }
+  if (step.origin === "dynamic" && !isDynamicStepTrigger(step.trigger!)) {
+    throw new StepGraphValidationError([`${step.id}: unsupported dynamic Step trigger`]);
   }
   if (step.origin === "base" && step.trigger !== undefined) {
     throw new StepGraphValidationError([`${step.id}: base Step must not have a trigger`]);
@@ -300,6 +320,42 @@ export function createStepGraph(steps: readonly Step[] = [], graphRevision = 1):
 
 export function addStep(graph: StepGraph, step: Step): StepGraph {
   return createStepGraph([...graph.steps, step], nextGraphRevision(graph.graphRevision));
+}
+
+function assertMaxDynamicSteps(maxDynamicSteps: number): void {
+  if (!Number.isSafeInteger(maxDynamicSteps) || maxDynamicSteps < 0) {
+    throw new StepGraphValidationError([
+      `max_dynamic_steps must be a non-negative safe integer: ${maxDynamicSteps}`,
+    ]);
+  }
+}
+
+function isActiveStep(step: Step): boolean {
+  return step.status !== "completed" && step.status !== "skipped";
+}
+
+export function addDynamicStep(
+  graph: StepGraph,
+  input: DynamicStepInput,
+  maxDynamicSteps: number,
+): StepGraph {
+  assertMaxDynamicSteps(maxDynamicSteps);
+  const step = createDynamicStep(input);
+
+  if (
+    graph.steps.some((existing) => isActiveStep(existing) && existing.objective === step.objective)
+  ) {
+    return graph;
+  }
+
+  const dynamicStepCount = graph.steps.filter(({ origin }) => origin === "dynamic").length;
+  if (dynamicStepCount >= maxDynamicSteps) {
+    throw new StepGraphValidationError([
+      `max_dynamic_steps exceeded: ${dynamicStepCount + 1} > ${maxDynamicSteps}`,
+    ]);
+  }
+
+  return addStep(graph, step);
 }
 
 export function transitionStepInGraph(

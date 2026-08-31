@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  addDynamicStep,
   addStep,
   createDynamicStep,
+  DYNAMIC_STEP_TRIGGERS,
   createStep,
   createStepGraph,
   obsoleteStep,
@@ -57,6 +59,70 @@ describe("Step graph", () => {
     expect(() => transitionStep(completed, "ready")).toThrow(/Invalid Step transition/);
   });
 
+  it("creates dynamic Steps for every supported trigger", () => {
+    for (const [index, trigger] of DYNAMIC_STEP_TRIGGERS.entries()) {
+      const graph = createStepGraph();
+      const next = addDynamicStep(
+        graph,
+        { ...step(`dynamic-${index}`), trigger },
+        DYNAMIC_STEP_TRIGGERS.length,
+      );
+
+      expect(next.steps[0]).toMatchObject({
+        id: `dynamic-${index}`,
+        origin: "dynamic",
+        trigger,
+      });
+    }
+  });
+
+  it("deduplicates active equivalent purposes without consuming a dynamic budget", () => {
+    const existing = createDynamicStep({
+      ...step("existing"),
+      objective: "investigate the failure",
+      trigger: "uncertainty",
+      status: "running",
+    });
+    const graph = createStepGraph([existing]);
+
+    const next = addDynamicStep(
+      graph,
+      { ...step("duplicate"), objective: "investigate the failure", trigger: "decision" },
+      1,
+    );
+
+    expect(next).toBe(graph);
+    expect(next.graphRevision).toBe(graph.graphRevision);
+    expect(next.steps).toHaveLength(1);
+  });
+
+  it("enforces supported triggers, max_dynamic_steps, and graph invariants", () => {
+    const graph = createStepGraph([
+      createDynamicStep({ ...step("existing"), trigger: "uncertainty" }),
+    ]);
+
+    expect(() => addDynamicStep(graph, { ...step("over-limit"), trigger: "decision" }, 1)).toThrow(
+      /max_dynamic_steps/,
+    );
+    expect(() =>
+      addDynamicStep(
+        createStepGraph(),
+        { ...step("missing-reference", ["missing"]), trigger: "decision" },
+        1,
+      ),
+    ).toThrow(/invalid dependency/);
+    expect(() =>
+      addDynamicStep(createStepGraph(), { ...step("cycle", ["cycle"]), trigger: "decision" }, 1),
+    ).toThrow(/cycle/);
+    expect(() =>
+      addDynamicStep(
+        createStepGraph(),
+        { ...step("unsupported"), trigger: "unsupported trigger" },
+        1,
+      ),
+    ).toThrow(/unsupported dynamic Step trigger/);
+  });
+
   it("represents dynamic origin and authorized obsolete skipping", () => {
     const dynamic = createDynamicStep({
       ...step("research"),
@@ -79,6 +145,30 @@ describe("Step graph", () => {
     });
     expect(() => obsoleteStep(transitionStep(step("done"), "ready"), "too late")).toThrow();
     expect(() => createDynamicStep({ ...step("invalid"), trigger: "" })).toThrow(/trigger/);
+  });
+
+  it("does not reopen completed equivalent Steps", () => {
+    const completed = createDynamicStep({
+      ...step("completed"),
+      objective: "investigate the failure",
+      status: "completed",
+      trigger: "uncertainty",
+    });
+    const graph = createStepGraph([completed]);
+
+    const next = addDynamicStep(
+      graph,
+      { ...step("follow-up"), objective: "investigate the failure", trigger: "recovery" },
+      2,
+    );
+
+    expect(next.steps).toHaveLength(2);
+    expect(next.steps[0]).toMatchObject({ id: "completed", status: "completed" });
+    expect(next.steps[1]).toMatchObject({
+      id: "follow-up",
+      origin: "dynamic",
+      status: "pending",
+    });
   });
 
   it("updates lifecycle state without changing graph topology", () => {
