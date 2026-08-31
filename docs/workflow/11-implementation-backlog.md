@@ -156,9 +156,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] A runtime factory/composition module exists.
-- [ ] Application modules do not instantiate concrete persistence/Pi/Git adapters.
-- [ ] Manual constructor injection is sufficient; no Service Locator is added.
+- [x] A runtime factory/composition module exists.
+- [x] Application modules do not instantiate concrete persistence/Pi/Git adapters.
+- [x] Manual constructor injection is sufficient; no Service Locator is added.
 
 **Test Levels:** `ARCH`
 
