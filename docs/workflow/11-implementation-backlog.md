@@ -520,11 +520,11 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Stage/validate/redact/atomic-finalize flow works.
-- [ ] Finalized path overwrite is rejected.
-- [ ] Traversal/symlink escape is rejected.
-- [ ] State can reference only finalized Artifacts.
-- [ ] Partial Artifact is distinct from staging draft.
+- [x] Stage/validate/redact/atomic-finalize flow works.
+- [x] Finalized path overwrite is rejected.
+- [x] Traversal/symlink escape is rejected.
+- [x] State can reference only finalized Artifacts.
+- [x] Partial Artifact is distinct from staging draft.
 
 **Test Levels:** `INT`, `SEC`
 
