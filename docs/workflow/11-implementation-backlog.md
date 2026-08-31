@@ -293,10 +293,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Exactly six Phase 1 Playbooks exist.
-- [ ] Bug/Hotfix root-cause requirements are represented.
-- [ ] Refactor invariant/preservation requirements are represented.
-- [ ] Investigation base graph is read-only without normal Worker/Verifier.
+- [x] Exactly six Phase 1 Playbooks exist.
+- [x] Bug/Hotfix root-cause requirements are represented.
+- [x] Refactor invariant/preservation requirements are represented.
+- [x] Investigation base graph is read-only without normal Worker/Verifier.
 
 **Test Levels:** `CONTRACT`, `UNIT`
 
