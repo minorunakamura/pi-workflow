@@ -52,6 +52,42 @@ describe("GitRepositoryAdapter", () => {
     });
   });
 
+  it("preserves dirty and untracked facts in run and pre-Worker baselines", async () => {
+    await withTempRepository({ "tracked.txt": "before\n" }, async (repositoryRoot) => {
+      await initializeGit(repositoryRoot);
+      await writeFile(`${repositoryRoot}/tracked.txt`, "pre-existing change\n", "utf8");
+      await writeFile(`${repositoryRoot}/pre-existing.txt`, "user change\n", "utf8");
+
+      const adapter = new GitRepositoryAdapter(repositoryRoot);
+      const runBaseline = await adapter.captureSnapshot();
+      const trackedBaselineFingerprint = runBaseline.fingerprints["tracked.txt"];
+      const untrackedBaselineFingerprint = runBaseline.fingerprints["pre-existing.txt"];
+
+      expect(runBaseline.status).toEqual({
+        dirty: true,
+        changed: ["pre-existing.txt", "tracked.txt"],
+        untracked: ["pre-existing.txt"],
+        entries: [
+          { path: "pre-existing.txt", index: "?", worktree: "?" },
+          { path: "tracked.txt", index: " ", worktree: "M" },
+        ],
+      });
+      expect(trackedBaselineFingerprint).toMatch(/^[0-9a-f]{64}$/);
+      expect(untrackedBaselineFingerprint).toMatch(/^[0-9a-f]{64}$/);
+
+      await writeFile(`${repositoryRoot}/worker-output.txt`, "workflow change\n", "utf8");
+      const workerBaseline = await adapter.captureSnapshot({
+        paths: ["pre-existing.txt", "tracked.txt"],
+      });
+
+      expect(workerBaseline.status).toEqual(runBaseline.status);
+      expect(workerBaseline.fingerprints["tracked.txt"]).toBe(trackedBaselineFingerprint);
+      expect(workerBaseline.fingerprints["pre-existing.txt"]).toBe(untrackedBaselineFingerprint);
+      expect(runBaseline.status.untracked).toEqual(["pre-existing.txt"]);
+      expect(runBaseline.status.changed).toEqual(["pre-existing.txt", "tracked.txt"]);
+    });
+  });
+
   it("limits status and fingerprints to the requested scope", async () => {
     await withTempRepository(
       { "inside.txt": "inside\n", "outside.txt": "outside\n" },

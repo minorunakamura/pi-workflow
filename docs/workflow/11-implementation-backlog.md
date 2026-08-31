@@ -875,8 +875,8 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Current-tree workspace is lockable.
-- [ ] Run/pre-Worker baselines preserve dirty/untracked facts.
+- [x] Current-tree workspace is lockable.
+- [x] Run/pre-Worker baselines preserve dirty/untracked facts.
 
 **Test Levels:** `INT`, `SEC`
 
