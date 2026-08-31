@@ -480,9 +480,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] `run.yaml` + referenced snapshot load consistently.
-- [ ] Missing/corrupt current snapshot does not silently roll back.
-- [ ] Future unsupported schema is rejected.
+- [x] `run.yaml` + referenced snapshot load consistently.
+- [x] Missing/corrupt current snapshot does not silently roll back.
+- [x] Future unsupported schema is rejected.
 
 **Test Levels:** `INT`
 
