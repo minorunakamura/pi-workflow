@@ -1,5 +1,6 @@
 ---
 name: architect
+version: 1.0.0
 description: Review workflow architecture boundaries.
 ---
 

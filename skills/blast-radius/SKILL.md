@@ -1,5 +1,6 @@
 ---
 name: blast-radius
+version: 1.0.0
 description: Assess the impact of a workflow change.
 ---
 

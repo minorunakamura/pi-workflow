@@ -1,5 +1,6 @@
 ---
 name: show-me-your-work
+version: 1.0.0
 description: Present workflow progress and supporting evidence.
 ---
 

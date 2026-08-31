@@ -789,10 +789,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Nine Core Skills are discoverable/versioned.
-- [ ] Dependencies/allowlists are validated.
-- [ ] Allowlisted Skills are not automatically loaded.
-- [ ] Skills are resolved as Pi Package resources and do not require `.pi/agent/skills/` source placement.
+- [x] Nine Core Skills are discoverable/versioned.
+- [x] Dependencies/allowlists are validated.
+- [x] Allowlisted Skills are not automatically loaded.
+- [x] Skills are resolved as Pi Package resources and do not require `.pi/agent/skills/` source placement.
 
 **Test Levels:** `CONTRACT`
 

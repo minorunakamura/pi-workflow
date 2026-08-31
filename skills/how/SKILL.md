@@ -1,5 +1,6 @@
 ---
 name: how
+version: 1.0.0
 description: Explain how to approach a workflow task.
 ---
 

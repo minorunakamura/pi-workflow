@@ -1,5 +1,6 @@
 ---
 name: tdd
+version: 1.0.0
 description: Guide test-driven workflow implementation.
 ---
 

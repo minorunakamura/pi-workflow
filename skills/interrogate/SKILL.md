@@ -1,5 +1,6 @@
 ---
 name: interrogate
+version: 1.0.0
 description: Identify unanswered workflow requirements and risks.
 ---
 

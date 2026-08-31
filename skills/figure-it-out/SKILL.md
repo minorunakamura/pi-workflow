@@ -1,5 +1,6 @@
 ---
 name: figure-it-out
+version: 1.0.0
 description: Investigate unknowns in a workflow task.
 ---
 

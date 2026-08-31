@@ -1,5 +1,6 @@
 ---
 name: why
+version: 1.0.0
 description: Explain the rationale behind a workflow decision.
 ---
 

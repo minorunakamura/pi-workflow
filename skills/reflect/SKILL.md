@@ -1,5 +1,6 @@
 ---
 name: reflect
+version: 1.0.0
 description: Review a workflow result and its lessons.
 ---
 
