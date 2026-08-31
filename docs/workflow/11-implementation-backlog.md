@@ -747,11 +747,11 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] One request maps to one Agent Execution.
-- [ ] Adapter returns StepResult contract only.
-- [ ] Adapter never commits Workflow State.
-- [ ] No giant multi-Agent workflowScript exists.
-- [ ] The Adapter is reached through the installed/local Pi Package Extension entry point rather than copied `.pi/` source files.
+- [x] One request maps to one Agent Execution.
+- [x] Adapter returns StepResult contract only.
+- [x] Adapter never commits Workflow State.
+- [x] No giant multi-Agent workflowScript exists.
+- [x] The Adapter is reached through the installed/local Pi Package Extension entry point rather than copied `.pi/` source files.
 
 **Test Levels:** `INT`
 

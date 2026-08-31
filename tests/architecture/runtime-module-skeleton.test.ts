@@ -51,10 +51,14 @@ describe("runtime module skeleton", () => {
 
     expect(manifest).toEqual(
       expect.objectContaining({
-        pi: {
-          extensions: ["./src/extensions/workflow.ts"],
+        pi: expect.objectContaining({
+          extensions: expect.arrayContaining([
+            "./src/extensions/workflow.ts",
+            "./node_modules/pi-subagents/index.ts",
+          ]),
           skills: ["./skills"],
-        },
+        }),
+        bundledDependencies: expect.arrayContaining(["pi-subagents"]),
       }),
     );
     expect(existsSync(resolve(projectRoot, "src/extensions/workflow.ts"))).toBe(true);
