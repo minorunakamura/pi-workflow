@@ -377,9 +377,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Evidence/Uncertainty/Decision/Verification/Approval/Completion evaluators exist.
-- [ ] Evaluators are side-effect free.
-- [ ] Completion Gate delegates to CompletionEvaluator result rather than recursing.
+- [x] Evidence/Uncertainty/Decision/Verification/Approval/Completion evaluators exist.
+- [x] Evaluators are side-effect free.
+- [x] Completion Gate delegates to CompletionEvaluator result rather than recursing.
 
 **Test Levels:** `UNIT`
 
