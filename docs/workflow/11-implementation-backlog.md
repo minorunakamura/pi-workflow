@@ -336,11 +336,11 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] At most one Step is selected in Phase 1.
-- [ ] Dependency/Gate/blocker checks are deterministic.
-- [ ] Priority/tie breaking is deterministic.
-- [ ] Scheduler never mutates state.
-- [ ] No-progress is detectable.
+- [x] At most one Step is selected in Phase 1.
+- [x] Dependency/Gate/blocker checks are deterministic.
+- [x] Priority/tie breaking is deterministic.
+- [x] Scheduler never mutates state.
+- [x] No-progress is detectable.
 
 **Test Levels:** `UNIT`
 
