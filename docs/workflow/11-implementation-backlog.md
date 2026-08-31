@@ -898,10 +898,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Runtime validates actual diff against Write Scope.
-- [ ] Pre-existing changes are preserved/attributed.
-- [ ] Complete/partial/no-op CS finalization works.
-- [ ] Git write is denied.
+- [x] Runtime validates actual diff against Write Scope.
+- [x] Pre-existing changes are preserved/attributed.
+- [x] Complete/partial/no-op CS finalization works.
+- [x] Git write is denied.
 
 **Test Levels:** `INT`, `E2E`, `SEC`
 
