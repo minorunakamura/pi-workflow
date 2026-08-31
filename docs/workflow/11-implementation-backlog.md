@@ -105,13 +105,13 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] `domain → application/adapters` fails tests.
-- [ ] `application → adapters` fails tests.
-- [ ] `adapters → application` fails tests.
-- [ ] `monitor → persistence/write` fails tests.
-- [ ] Agent/Playbook definition → adapter imports fail.
-- [ ] circular imports fail.
-- [ ] Package manifest resource paths resolve and package source does not require authored `.pi/` implementation directories.
+- [x] `domain → application/adapters` fails tests.
+- [x] `application → adapters` fails tests.
+- [x] `adapters → application` fails tests.
+- [x] `monitor → persistence/write` fails tests.
+- [x] Agent/Playbook definition → adapter imports fail.
+- [x] circular imports fail.
+- [x] Package manifest resource paths resolve and package source does not require authored `.pi/` implementation directories.
 
 **Test Levels:** `ARCH`
 
