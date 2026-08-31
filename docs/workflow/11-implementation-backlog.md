@@ -656,10 +656,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Current authoritative refs are selected by priority.
-- [ ] Conversation is not required/default context.
-- [ ] Stale/superseded evidence is excluded from authoritative context.
-- [ ] Budget errors do not drop required Requirement/Decision content.
+- [x] Current authoritative refs are selected by priority.
+- [x] Conversation is not required/default context.
+- [x] Stale/superseded evidence is excluded from authoritative context.
+- [x] Budget errors do not drop required Requirement/Decision content.
 
 **Test Levels:** `UNIT`
 
