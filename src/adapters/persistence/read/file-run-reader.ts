@@ -1,25 +1,12 @@
 import { readFile as nodeReadFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { parse as parseYaml } from "yaml";
-import {
-  ContractValidationError,
-  type RuntimeSchema,
-} from "../../../contracts/execution/agent-execution.js";
-import {
-  DecisionsSnapshotV1Schema,
-  FindingsSnapshotV1Schema,
-  GatesSnapshotV1Schema,
-  RequirementSnapshotV1Schema,
-  RunYamlV1Schema,
-  SnapshotManifestV1Schema,
-  StepsSnapshotV1Schema,
-  UncertaintiesSnapshotV1Schema,
-  type RunYamlV1,
-} from "../../../contracts/state/workflow-state.js";
+import { ContractValidationError } from "../../../contracts/execution/agent-execution.js";
 import type { RunId } from "../../../domain/primitives/ids.js";
+import type { RunYamlV1 } from "../../../contracts/state/workflow-state.js";
 import type { RunReader, StateSnapshot, WorkflowState } from "../../../ports/run-reader.js";
+import { readRunYaml, readSnapshotDirectory, type ReadTextFile } from "./state-snapshot-files.js";
 
-export type ReadTextFile = (path: string) => Promise<string>;
+export type { ReadTextFile } from "./state-snapshot-files.js";
 
 export type FileRunReaderOptions = Readonly<{
   maxAttempts?: number;
@@ -40,22 +27,6 @@ export class RunReaderConsistencyError extends Error {
 
 function failConsistency(path: string, expected: string): never {
   throw new ContractValidationError("WorkflowState", { path, expected });
-}
-
-async function readYaml<T>(
-  path: string,
-  schema: RuntimeSchema<T>,
-  readTextFile: ReadTextFile,
-): Promise<T> {
-  return schema.parse(parseYaml(await readTextFile(path)));
-}
-
-async function readJson<T>(
-  path: string,
-  schema: RuntimeSchema<T>,
-  readTextFile: ReadTextFile,
-): Promise<T> {
-  return schema.parse(JSON.parse(await readTextFile(path)) as unknown);
 }
 
 export class FileRunReader implements RunReader {
@@ -103,7 +74,7 @@ export class FileRunReader implements RunReader {
         continue;
       }
 
-      validateConsistency(latestRun, snapshot);
+      validateWorkflowStateConsistency(latestRun, snapshot);
       return { run: latestRun, snapshot };
     }
 
@@ -111,43 +82,14 @@ export class FileRunReader implements RunReader {
   }
 
   private async readRun(runDirectory: string): Promise<RunYamlV1> {
-    return readYaml(join(runDirectory, "run.yaml"), RunYamlV1Schema, this.readTextFile);
+    return readRunYaml(join(runDirectory, "run.yaml"), this.readTextFile);
   }
 
-  private async readSnapshot(runDirectory: string, stateRevision: number): Promise<StateSnapshot> {
-    const snapshotDirectory = join(runDirectory, "state", "snapshots", String(stateRevision));
-    const [requirement, steps, uncertainties, decisions, gates, findings, manifest] =
-      await Promise.all([
-        readYaml(
-          join(snapshotDirectory, "requirement.yaml"),
-          RequirementSnapshotV1Schema,
-          this.readTextFile,
-        ),
-        readYaml(join(snapshotDirectory, "steps.yaml"), StepsSnapshotV1Schema, this.readTextFile),
-        readYaml(
-          join(snapshotDirectory, "uncertainties.yaml"),
-          UncertaintiesSnapshotV1Schema,
-          this.readTextFile,
-        ),
-        readYaml(
-          join(snapshotDirectory, "decisions.yaml"),
-          DecisionsSnapshotV1Schema,
-          this.readTextFile,
-        ),
-        readYaml(join(snapshotDirectory, "gates.yaml"), GatesSnapshotV1Schema, this.readTextFile),
-        readYaml(
-          join(snapshotDirectory, "findings.yaml"),
-          FindingsSnapshotV1Schema,
-          this.readTextFile,
-        ),
-        readJson(
-          join(snapshotDirectory, "manifest.json"),
-          SnapshotManifestV1Schema,
-          this.readTextFile,
-        ),
-      ]);
-
-    return { requirement, steps, uncertainties, decisions, gates, findings, manifest };
+  private readSnapshot(runDirectory: string, stateRevision: number): Promise<StateSnapshot> {
+    return readSnapshotDirectory(
+      join(runDirectory, "state", "snapshots", String(stateRevision)),
+      this.readTextFile,
+    );
   }
 
   private samePointer(left: RunYamlV1, right: RunYamlV1): boolean {
@@ -155,7 +97,7 @@ export class FileRunReader implements RunReader {
   }
 }
 
-function validateConsistency(run: RunYamlV1, snapshot: StateSnapshot): void {
+export function validateWorkflowStateConsistency(run: RunYamlV1, snapshot: StateSnapshot): void {
   const documents = [
     ["requirement", snapshot.requirement],
     ["steps", snapshot.steps],

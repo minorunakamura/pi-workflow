@@ -500,10 +500,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Next snapshot is fully written/validated before pointer replacement.
-- [ ] `run.yaml` replacement is the logical commit point.
-- [ ] Crash before pointer leaves old state current.
-- [ ] Expected revision mismatch fails.
+- [x] Next snapshot is fully written/validated before pointer replacement.
+- [x] `run.yaml` replacement is the logical commit point.
+- [x] Crash before pointer leaves old state current.
+- [x] Expected revision mismatch fails.
 
 **Test Levels:** `INT`, `CRASH`
 
