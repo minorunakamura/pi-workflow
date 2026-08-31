@@ -698,8 +698,8 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Feature/Bug/Hotfix/Chore/Refactor/Investigation complete with deterministic fake outputs.
-- [ ] Persisted State/Artifacts/Events/Outcome are coherent.
+- [x] Feature/Bug/Hotfix/Chore/Refactor/Investigation complete with deterministic fake outputs.
+- [x] Persisted State/Artifacts/Events/Outcome are coherent.
 
 **Test Levels:** `E2E`
 
