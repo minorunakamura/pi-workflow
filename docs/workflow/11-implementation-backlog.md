@@ -315,9 +315,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] DAG/reference validation rejects cycles/invalid dependencies.
-- [ ] Valid Step transitions are enforced.
-- [ ] Dynamic origin and skip/obsolete behavior are representable.
+- [x] DAG/reference validation rejects cycles/invalid dependencies.
+- [x] Valid Step transitions are enforced.
+- [x] Dynamic origin and skip/obsolete behavior are representable.
 
 **Test Levels:** `UNIT`
 
