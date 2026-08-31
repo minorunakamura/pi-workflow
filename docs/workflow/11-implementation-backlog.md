@@ -721,11 +721,11 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Researcher/Oracle insertion paths work.
-- [ ] D3 block/user resolution/resume works.
-- [ ] Verification/Review fix cycle works.
-- [ ] Requirement amendment → applicability/re-plan works.
-- [ ] Playbook switch preserves Run/history.
+- [x] Researcher/Oracle insertion paths work.
+- [x] D3 block/user resolution/resume works.
+- [x] Verification/Review fix cycle works.
+- [x] Requirement amendment → applicability/re-plan works.
+- [x] Playbook switch preserves Run/history.
 
 **Test Levels:** `E2E`
 
