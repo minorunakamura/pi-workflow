@@ -13,7 +13,7 @@ import {
 import { RunDiscovery, type RunCandidate } from "./run-discovery.js";
 
 export const DEFAULT_MONITOR_INDEX_PATH = [".pi", "monitor", "index.sqlite"] as const;
-export const SQLITE_INDEX_SCHEMA_VERSION = 1 as const;
+export const SQLITE_INDEX_SCHEMA_VERSION = 2 as const;
 
 export type RunIndexerOptions = Readonly<{
   databasePath?: string;
@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS runs (
   request_type TEXT,
   status TEXT,
   finalized INTEGER,
+  resumable INTEGER,
+  current_step TEXT,
   initial_playbook TEXT,
   current_playbook TEXT,
   state_revision INTEGER,
@@ -215,7 +217,14 @@ function runTelemetryField(run: RunYamlV1, name: string): string | null {
 
 function isCompatibleSchema(database: DatabaseSync): boolean {
   const requiredColumns: Readonly<Record<string, readonly string[]>> = {
-    runs: ["run_id", "last_indexed_state_revision", "last_indexed_event_sequence", "index_status"],
+    runs: [
+      "run_id",
+      "resumable",
+      "current_step",
+      "last_indexed_state_revision",
+      "last_indexed_event_sequence",
+      "index_status",
+    ],
     steps: ["run_id", "step_id", "metadata_json"],
     executions: ["run_id", "execution_id", "metadata_json"],
     events: ["run_id", "sequence", "payload_json"],
@@ -427,6 +436,7 @@ export class RunIndexer {
     const run = candidate.run;
     const request = run === undefined ? undefined : run.request;
     const outcome = run === undefined ? undefined : record(run.outcome);
+    const failure = run === undefined ? undefined : record(run.failure);
     const telemetryQuality =
       run === undefined
         ? rowString(existing, "telemetry_quality")
@@ -437,18 +447,20 @@ export class RunIndexer {
     this.database
       .prepare(
         `INSERT INTO runs (
-          run_id, run_path, request_id, request_type, status, finalized,
+          run_id, run_path, request_id, request_type, status, finalized, resumable, current_step,
           initial_playbook, current_playbook, state_revision, graph_revision,
           created_at, started_at, updated_at, finalized_at, request_satisfied,
           telemetry_level, telemetry_quality, baseline_head,
           last_indexed_state_revision, last_indexed_event_sequence, index_status, error_message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(run_id) DO UPDATE SET
           run_path = excluded.run_path,
           request_id = excluded.request_id,
           request_type = excluded.request_type,
           status = excluded.status,
           finalized = excluded.finalized,
+          resumable = excluded.resumable,
+          current_step = excluded.current_step,
           initial_playbook = excluded.initial_playbook,
           current_playbook = excluded.current_playbook,
           state_revision = excluded.state_revision,
@@ -473,6 +485,8 @@ export class RunIndexer {
         request?.type ?? rowString(existing, "request_type"),
         run?.status ?? rowString(existing, "status"),
         run === undefined ? rowNumber(existing, "finalized") : booleanValue(run.finalized),
+        run === undefined ? rowNumber(existing, "resumable") : booleanValue(failure?.resumable),
+        run === undefined ? rowString(existing, "current_step") : json(run.current_step),
         run === undefined ? rowString(existing, "initial_playbook") : json(run.playbook.initial),
         run === undefined ? rowString(existing, "current_playbook") : json(run.playbook.current),
         run?.state_revision ?? rowNumber(existing, "state_revision"),

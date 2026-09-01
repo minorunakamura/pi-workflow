@@ -1336,9 +1336,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Run lifecycle variants are visually distinguishable.
-- [ ] Correctness/blocker information precedes efficiency for relevant views.
-- [ ] Timeline uses Event sequence and collapses Tool detail by default.
+- [x] Run lifecycle variants are visually distinguishable.
+- [x] Correctness/blocker information precedes efficiency for relevant views.
+- [x] Timeline uses Event sequence and collapses Tool detail by default.
 
 **Test Levels:** `E2E`
 

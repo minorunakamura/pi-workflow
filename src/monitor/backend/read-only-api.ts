@@ -15,11 +15,18 @@ import {
   resolveRunRelativeArtifactPath,
 } from "../../read-model/run-store-readers.js";
 import { defaultMonitorIndexPath } from "../indexer/sqlite-run-indexer.js";
+import {
+  renderMonitorPage,
+  type MonitorEvent,
+  type MonitorRunDetail,
+  type MonitorPageData,
+} from "../frontend/render-monitor.js";
 
 export const DEFAULT_MONITOR_HOST = "127.0.0.1";
 export const DEFAULT_MONITOR_PORT = 0;
 
 export const READ_ONLY_MONITOR_ROUTES = [
+  "GET /",
   "GET /api/v1/runs",
   "GET /api/v1/runs/:runId",
   "GET /api/v1/runs/:runId/state",
@@ -60,6 +67,8 @@ export type MonitorRunSummary = Readonly<{
   request_type: string | null;
   status: string | null;
   finalized: boolean | null;
+  resumable: boolean | null;
+  current_step: unknown;
   initial_playbook: unknown;
   current_playbook: unknown;
   state_revision: number | null;
@@ -142,6 +151,8 @@ function runSummary(row: Row): MonitorRunSummary {
     request_type: text(row.request_type),
     status: text(row.status),
     finalized: booleanValue(row.finalized),
+    resumable: booleanValue(row.resumable),
+    current_step: jsonValue(row.current_step),
     initial_playbook: jsonValue(row.initial_playbook),
     current_playbook: jsonValue(row.current_playbook),
     state_revision: numberValue(row.state_revision),
@@ -296,6 +307,18 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   response.end(payload);
 }
 
+function sendHtml(response: ServerResponse, status: number, body: string): void {
+  response.writeHead(status, {
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(body),
+    "content-security-policy":
+      "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "text/html; charset=utf-8",
+    "x-content-type-options": "nosniff",
+  });
+  response.end(body);
+}
+
 function sendError(response: ServerResponse, error: unknown): void {
   if (error instanceof MonitorApiError) {
     sendJson(response, error.status, { error: { code: error.code, message: error.message } });
@@ -337,6 +360,10 @@ export class ReadOnlyMonitorApi {
 
     try {
       const url = new URL(request.url ?? "", "http://127.0.0.1");
+      if (url.pathname === "/") {
+        sendHtml(response, 200, await this.frontend(url.searchParams));
+        return;
+      }
       const body = await this.route(url);
       sendJson(response, 200, body);
     } catch (error) {
@@ -384,6 +411,34 @@ export class ReadOnlyMonitorApi {
     }
 
     throw new MonitorApiError(404, "NOT_FOUND", "Monitoring API endpoint was not found");
+  }
+
+  private async frontend(search: URLSearchParams): Promise<string> {
+    const listSearch = new URLSearchParams(search);
+    listSearch.delete("run");
+    const list = this.listRuns(listSearch) as Readonly<{
+      runs: readonly MonitorRunSummary[];
+    }>;
+    const page: MonitorPageData = {
+      runs: list.runs,
+      filters: {
+        ...(search.get("search") === null ? {} : { search: search.get("search") ?? "" }),
+        ...(search.get("status") === null ? {} : { status: search.get("status") ?? "" }),
+      },
+    };
+
+    const selectedRunId = search.get("run");
+    if (selectedRunId === null) return renderMonitorPage(page);
+
+    const runId = validRunId(selectedRunId);
+    const detail = (await this.detail(runId)) as MonitorRunDetail;
+    const events = this.events(runId, new URLSearchParams("limit=200")) as Readonly<{
+      events: readonly MonitorEvent[];
+    }>;
+    return renderMonitorPage({
+      ...page,
+      selected: { detail, events: events.events },
+    });
   }
 
   private query(sql: string, ...parameters: QueryValue[]): Row[] {
