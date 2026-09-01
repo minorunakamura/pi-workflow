@@ -83,7 +83,10 @@ describe("workflow runtime status/resume/cancel commands", () => {
     expect(statusCalls).toBe(1);
     expect(writeCalls).toBe(0);
     expect(notifications).toEqual([
-      ["Run run-001: status=blocked; finalized=false; revision=4; step=step-001", "info"],
+      [
+        "Run run-001: status=blocked; finalized=false; revision=4; milestone=step-001; progress=unknown; blocker=blocked",
+        "info",
+      ],
     ]);
   });
 
@@ -106,16 +109,77 @@ describe("workflow runtime status/resume/cancel commands", () => {
     const runtime = createWorkflowRuntime(dependencies);
 
     await expect(runtime.execute("resume", "  run-001  ")).resolves.toBe(
-      "Run run-001 resumed: status=running; finalized=false; revision=2",
+      "Run run-001 resumed: status=running; finalized=false; revision=2; milestone=step-001; progress=unknown; blocker=-",
     );
     await expect(runtime.execute("cancel", "run-001 stop because requested")).resolves.toBe(
-      "Run run-001 cancelled: status=cancelled; finalized=true; revision=3",
+      "Run run-001 cancelled: status=cancelled; finalized=true; revision=3; outcome=cancelled; request_satisfied=-; summary=-; artifact=-",
     );
 
     expect(calls).toEqual([
       ["resume", RUN_ID],
       ["cancel", RUN_ID, { requestedBy: "user", reason: "stop because requested" }],
     ]);
+  });
+
+  it("renders compact milestones and blockers without echoing agent transcript content", async () => {
+    const progressState = {
+      run: {
+        run_id: RUN_ID,
+        status: "blocked",
+        finalized: false,
+        state_revision: 7,
+        current_step: {
+          id: "step-003",
+          type: "verification",
+          transcript: "full agent transcript must not be echoed",
+        },
+        blocked: { reason: "user-input-required" },
+      },
+      snapshot: {
+        steps: {
+          steps: [
+            { id: "step-001", status: "completed" },
+            { id: "step-002", status: "running" },
+            { id: "step-003", status: "ready" },
+          ],
+        },
+        decisions: { decisions: [{ id: "decision-001", status: "pending" }] },
+      },
+    } as unknown as WorkflowState;
+    const finalState = {
+      ...progressState,
+      run: {
+        ...progressState.run,
+        status: "completed",
+        finalized: true,
+        outcome: {
+          status: "completed",
+          request_satisfied: true,
+          summary: "All required checks passed",
+          artifact_path: "outcome.md",
+          transcript: "final agent transcript must not be echoed",
+        },
+      },
+    } as unknown as WorkflowState;
+    let current = progressState;
+    const runtime = createWorkflowRuntime({
+      statusWorkflow: {
+        async execute() {
+          return current;
+        },
+      },
+    });
+
+    await expect(runtime.execute("status", "run-001")).resolves.toBe(
+      "Run run-001: status=blocked; finalized=false; revision=7; milestone=step-003(verification); progress=1/3; blocker=user-input-required",
+    );
+    current = finalState;
+    await expect(runtime.execute("status", "run-001")).resolves.toBe(
+      "Run run-001: status=completed; finalized=true; revision=7; outcome=completed; request_satisfied=true; summary=All required checks passed; artifact=outcome.md",
+    );
+
+    const progress = await runtime.execute("status", "run-001");
+    expect(progress).not.toContain("transcript");
   });
 
   it("rejects missing or malformed command arguments before invoking a use case", async () => {

@@ -1175,9 +1175,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Progress contains compact milestone/blocker information.
-- [ ] Agent transcript is not echoed wholesale into Main Session.
-- [ ] Final response is derived from final Outcome/current state.
+- [x] Progress contains compact milestone/blocker information.
+- [x] Agent transcript is not echoed wholesale into Main Session.
+- [x] Final response is derived from final Outcome/current state.
 
 **Test Levels:** `E2E`
 

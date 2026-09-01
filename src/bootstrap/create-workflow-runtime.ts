@@ -8,6 +8,7 @@ import {
   type WorkflowCommand,
   type WorkflowCommandHandler,
   type WorkflowCommandOutput,
+  renderWorkflowResponse,
 } from "../application/workflow-command-handler.js";
 import { PiUserInteractionAdapter } from "../adapters/pi/pi-user-interaction-adapter.js";
 import type { RunId } from "../domain/primitives/ids.js";
@@ -69,14 +70,12 @@ function parseCancelArguments(args: string): Readonly<{ runId: RunId; reason?: s
   return reason.length === 0 ? { runId: rawRunId as RunId } : { runId: rawRunId as RunId, reason };
 }
 
-function runSummary(state: WorkflowState): string {
-  const step = typeof state.run.current_step.id === "string" ? state.run.current_step.id : "-";
-  return `Run ${state.run.run_id}: status=${state.run.status}; finalized=${String(state.run.finalized)}; revision=${String(state.run.state_revision)}; step=${step}`;
-}
-
 function commandSummary(command: "resume" | "cancel", state: WorkflowState): string {
   const action = command === "resume" ? "resumed" : "cancelled";
-  return `Run ${state.run.run_id} ${action}: status=${state.run.status}; finalized=${String(state.run.finalized)}; revision=${String(state.run.state_revision)}`;
+  return renderWorkflowResponse(state).replace(
+    `Run ${state.run.run_id}:`,
+    `Run ${state.run.run_id} ${action}:`,
+  );
 }
 
 function createRuntimeHandler(dependencies: RuntimeUseCases): WorkflowCommandHandler {
@@ -88,17 +87,18 @@ function createRuntimeHandler(dependencies: RuntimeUseCases): WorkflowCommandHan
     ): Promise<WorkflowCommandOutput | void> {
       if (isStartWorkflowCommand(command)) {
         if (dependencies.startWorkflow === undefined) throw new Error(NOT_IMPLEMENTED_MESSAGE);
-        if (userInteraction === undefined) {
-          await dependencies.startWorkflow.execute(command, args);
-        } else {
-          await dependencies.startWorkflow.execute(command, args, userInteraction);
-        }
-        return;
+        const state =
+          userInteraction === undefined
+            ? await dependencies.startWorkflow.execute(command, args)
+            : await dependencies.startWorkflow.execute(command, args, userInteraction);
+        return state === undefined ? undefined : renderWorkflowResponse(state);
       }
 
       if (command === "status") {
         if (dependencies.statusWorkflow === undefined) throw new Error(NOT_IMPLEMENTED_MESSAGE);
-        return runSummary(await dependencies.statusWorkflow.execute(parseRunId(args, "wf-status")));
+        return renderWorkflowResponse(
+          await dependencies.statusWorkflow.execute(parseRunId(args, "wf-status")),
+        );
       }
 
       if (command === "resume") {
