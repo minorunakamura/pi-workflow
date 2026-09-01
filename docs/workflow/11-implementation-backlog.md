@@ -961,9 +961,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Verification failure inserts bounded fix/reverify path.
-- [ ] Blocking Finding inserts bounded fix/reverify/rereview path.
-- [ ] Final current evidence becomes fresh before completion.
+- [x] Verification failure inserts bounded fix/reverify path.
+- [x] Blocking Finding inserts bounded fix/reverify/rereview path.
+- [x] Final current evidence becomes fresh before completion.
 
 **Test Levels:** `E2E`
 

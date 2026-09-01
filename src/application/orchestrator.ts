@@ -20,6 +20,7 @@ import type {
   SchedulerResult,
   SchedulerStep,
 } from "../domain/scheduling/scheduler.js";
+import { FixReverifyRereviewRouter } from "./fix-reverify-rereview.js";
 
 const DEFAULT_MAX_ITERATIONS = 1_000;
 
@@ -103,6 +104,7 @@ export type OrchestratorDependencies = Readonly<{
   maxArtifactBytes?: number;
   idAllocator?: IdAllocator;
   events?: OrchestratorEventFactory;
+  fixCycle?: Pick<FixReverifyRereviewRouter, "guardCompletion" | "route"> | false;
   maxIterations?: number;
 }>;
 
@@ -142,6 +144,9 @@ export class Orchestrator {
   private readonly postconditions: OrchestratorPostconditionPhase;
   private readonly finalize: OrchestratorFinalizePhase;
   private readonly events: OrchestratorEventFactory;
+  private readonly fixCycle:
+    | Pick<FixReverifyRereviewRouter, "guardCompletion" | "route">
+    | undefined;
   private readonly idAllocator: IdAllocator;
   private readonly maxIterations: number;
 
@@ -159,6 +164,11 @@ export class Orchestrator {
     this.finalize = dependencies.finalize ?? noFinalization;
     this.events = dependencies.events ?? noEvents;
     this.idAllocator = dependencies.idAllocator ?? createIdAllocator();
+    this.fixCycle =
+      dependencies.fixCycle === false
+        ? undefined
+        : (dependencies.fixCycle ??
+          new FixReverifyRereviewRouter({ idAllocator: this.idAllocator }));
     this.maxIterations = maxIterations;
   }
 
@@ -174,7 +184,27 @@ export class Orchestrator {
       state = await this.reconcile(state);
       state = await this.trigger(state);
 
-      const completion = await this.dependencies.completion(state);
+      const evaluatedCompletion = await this.dependencies.completion(state);
+      const completion = this.fixCycle
+        ? this.fixCycle.guardCompletion(state, evaluatedCompletion)
+        : evaluatedCompletion;
+
+      if (!completion.eligible && this.fixCycle !== undefined) {
+        const recovery = this.fixCycle.route({ state, blockers: completion.blockers });
+        if (recovery.inserted) {
+          await this.commit({
+            before: loaded,
+            candidate: recovery.state,
+            completion,
+            result: null,
+            step: null,
+            normalized: null,
+            iteration,
+          });
+          continue;
+        }
+      }
+
       if (completion.eligible) {
         const finalized = await this.finalize({
           state,
@@ -245,6 +275,14 @@ export class Orchestrator {
         step,
         normalized,
       });
+      if (this.fixCycle !== undefined) {
+        const recovery = this.fixCycle.route({
+          state,
+          step,
+          result: normalized.result,
+        });
+        state = recovery.state;
+      }
       await this.commit({
         before: loaded,
         candidate: state,
