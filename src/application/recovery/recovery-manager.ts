@@ -42,8 +42,39 @@ export class NonResumableRunError extends Error {
   }
 }
 
+function hasResumableFailure(state: WorkflowState): boolean {
+  return state.run.failure?.resumable === true;
+}
+
+export function isRunResumeAllowed(state: WorkflowState): boolean {
+  return (
+    !state.run.finalized &&
+    (state.run.status === "blocked" ||
+      (state.run.status === "failed" && hasResumableFailure(state)))
+  );
+}
+
+export function assertRunResumeAllowed(state: WorkflowState): void {
+  if (!isRunResumeAllowed(state)) {
+    throw new NonResumableRunError(state.run.run_id, state.run.status);
+  }
+}
+
+export function resumeRun(state: WorkflowState): WorkflowState {
+  assertRunResumeAllowed(state);
+  return {
+    ...state,
+    run: { ...state.run, status: "running", blocked: null },
+  };
+}
+
 export function assertRunResumable(state: WorkflowState): void {
-  if (state.run.finalized || state.run.status === "completed" || state.run.status === "cancelled") {
+  if (
+    state.run.finalized ||
+    state.run.status === "completed" ||
+    state.run.status === "cancelled" ||
+    (state.run.status === "failed" && !hasResumableFailure(state))
+  ) {
     throw new NonResumableRunError(state.run.run_id, state.run.status);
   }
 }

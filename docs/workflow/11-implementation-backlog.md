@@ -1038,10 +1038,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] blocked/resumable failed can resume.
-- [ ] completed/cancelled/final failed cannot resume.
-- [ ] budgets are not reset.
-- [ ] resume re-checks repository/freshness.
+- [x] blocked/resumable failed can resume.
+- [x] completed/cancelled/final failed cannot resume.
+- [x] budgets are not reset.
+- [x] resume re-checks repository/freshness.
 
 **Test Levels:** `E2E`
 
