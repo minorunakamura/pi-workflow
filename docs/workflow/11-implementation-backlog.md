@@ -1003,8 +1003,8 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Load/migrate/lock/workspace/drift/interruption/cancellation order is implemented.
-- [ ] State is reloaded after lock where needed.
+- [x] Load/migrate/lock/workspace/drift/interruption/cancellation order is implemented.
+- [x] State is reloaded after lock where needed.
 
 **Test Levels:** `CRASH`
 
