@@ -1316,9 +1316,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] `/api/v1` read endpoints cover Run/detail/graph/events/steps/executions/artifacts/evaluation/compare.
-- [ ] No workflow-control mutation endpoint is present.
-- [ ] Artifact path traversal/symlink escape is rejected.
+- [x] `/api/v1` read endpoints cover Run/detail/graph/events/steps/executions/artifacts/evaluation/compare.
+- [x] No workflow-control mutation endpoint is present.
+- [x] Artifact path traversal/symlink escape is rejected.
 
 **Test Levels:** `INT`, `SEC`
 
