@@ -1156,9 +1156,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] D3 approval/options/custom answer/cancel are supported through adapter.
-- [ ] Agent cannot directly invoke user interaction.
-- [ ] User answer is applied through an Orchestrator state transition.
+- [x] D3 approval/options/custom answer/cancel are supported through adapter.
+- [x] Agent cannot directly invoke user interaction.
+- [x] User answer is applied through an Orchestrator state transition.
 
 **Test Levels:** `INT`
 

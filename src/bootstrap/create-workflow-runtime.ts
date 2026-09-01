@@ -1,3 +1,4 @@
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import {
   START_WORKFLOW_COMMANDS,
   type CancelWorkflowUseCase,
@@ -8,8 +9,10 @@ import {
   type WorkflowCommandHandler,
   type WorkflowCommandOutput,
 } from "../application/workflow-command-handler.js";
-import type { WorkflowState } from "../ports/run-reader.js";
+import { PiUserInteractionAdapter } from "../adapters/pi/pi-user-interaction-adapter.js";
 import type { RunId } from "../domain/primitives/ids.js";
+import type { WorkflowState } from "../ports/run-reader.js";
+import type { UserInteraction } from "../ports/user-interaction.js";
 
 const NOT_IMPLEMENTED_MESSAGE = "Workflow runtime is not implemented yet.";
 const RUN_ID_PATTERN = /^run-\d+$/;
@@ -24,6 +27,12 @@ type RuntimeUseCases = Readonly<{
 export type WorkflowRuntimeDependencies = RuntimeUseCases & {
   commandHandler?: WorkflowCommandHandler;
 };
+
+export function createPiUserInteraction(
+  ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">,
+): UserInteraction {
+  return new PiUserInteractionAdapter(ui);
+}
 
 function isStartWorkflowCommand(
   command: WorkflowCommand,
@@ -72,10 +81,18 @@ function commandSummary(command: "resume" | "cancel", state: WorkflowState): str
 
 function createRuntimeHandler(dependencies: RuntimeUseCases): WorkflowCommandHandler {
   return {
-    async execute(command: WorkflowCommand, args: string): Promise<WorkflowCommandOutput | void> {
+    async execute(
+      command: WorkflowCommand,
+      args: string,
+      userInteraction?: UserInteraction,
+    ): Promise<WorkflowCommandOutput | void> {
       if (isStartWorkflowCommand(command)) {
         if (dependencies.startWorkflow === undefined) throw new Error(NOT_IMPLEMENTED_MESSAGE);
-        await dependencies.startWorkflow.execute(command, args);
+        if (userInteraction === undefined) {
+          await dependencies.startWorkflow.execute(command, args);
+        } else {
+          await dependencies.startWorkflow.execute(command, args, userInteraction);
+        }
         return;
       }
 
@@ -86,10 +103,12 @@ function createRuntimeHandler(dependencies: RuntimeUseCases): WorkflowCommandHan
 
       if (command === "resume") {
         if (dependencies.resumeWorkflow === undefined) throw new Error(NOT_IMPLEMENTED_MESSAGE);
-        return commandSummary(
-          command,
-          await dependencies.resumeWorkflow.execute(parseRunId(args, "wf-resume")),
-        );
+        const runId = parseRunId(args, "wf-resume");
+        const state =
+          userInteraction === undefined
+            ? await dependencies.resumeWorkflow.execute(runId)
+            : await dependencies.resumeWorkflow.execute(runId, userInteraction);
+        return commandSummary(command, state);
       }
 
       if (dependencies.cancelWorkflow === undefined) throw new Error(NOT_IMPLEMENTED_MESSAGE);

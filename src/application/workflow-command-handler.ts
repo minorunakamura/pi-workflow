@@ -1,6 +1,7 @@
 import type { RunId } from "../domain/primitives/ids.js";
 import type { WorkflowState } from "../ports/run-reader.js";
 import type { CancellationRequestOptions } from "./recovery/cancellation-lifecycle.js";
+import type { UserInteraction } from "../ports/user-interaction.js";
 
 export const START_WORKFLOW_COMMANDS = [
   "feature",
@@ -17,7 +18,11 @@ export type WorkflowCommand = StartWorkflowCommand | "status" | "resume" | "canc
 export type WorkflowCommandOutput = string;
 
 export interface StartWorkflowUseCase {
-  execute(command: StartWorkflowCommand, args: string): Promise<void>;
+  execute(
+    command: StartWorkflowCommand,
+    args: string,
+    userInteraction?: UserInteraction,
+  ): Promise<void>;
 }
 
 export interface StatusWorkflowUseCase {
@@ -25,7 +30,7 @@ export interface StatusWorkflowUseCase {
 }
 
 export interface ResumeWorkflowUseCase {
-  execute(runId: RunId): Promise<WorkflowState>;
+  execute(runId: RunId, userInteraction?: UserInteraction): Promise<WorkflowState>;
 }
 
 export interface CancelWorkflowUseCase {
@@ -33,5 +38,9 @@ export interface CancelWorkflowUseCase {
 }
 
 export interface WorkflowCommandHandler {
-  execute(command: WorkflowCommand, args: string): Promise<WorkflowCommandOutput | void>;
+  execute(
+    command: WorkflowCommand,
+    args: string,
+    userInteraction?: UserInteraction,
+  ): Promise<WorkflowCommandOutput | void>;
 }

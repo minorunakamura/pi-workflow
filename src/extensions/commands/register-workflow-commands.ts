@@ -1,8 +1,9 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type {
   WorkflowCommand,
   WorkflowCommandHandler,
 } from "../../application/workflow-command-handler.js";
+import type { UserInteraction } from "../../ports/user-interaction.js";
 
 export const WORKFLOW_COMMANDS = [
   { name: "wf-feature", command: "feature", description: "Start a feature workflow." },
@@ -24,16 +25,25 @@ export const WORKFLOW_COMMANDS = [
   description: string;
 }>;
 
+export type UserInteractionFactory = (
+  ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">,
+) => UserInteraction;
+
 export function registerWorkflowCommands(
   pi: Pick<ExtensionAPI, "registerCommand">,
   handler: WorkflowCommandHandler,
+  createUserInteraction?: UserInteractionFactory,
 ): void {
   for (const command of WORKFLOW_COMMANDS) {
     pi.registerCommand(command.name, {
       description: command.description,
       handler: async (args, context) => {
         try {
-          const output = await handler.execute(command.command, args);
+          const userInteraction =
+            context.hasUI && createUserInteraction !== undefined
+              ? createUserInteraction(context.ui)
+              : undefined;
+          const output = await handler.execute(command.command, args, userInteraction);
           if (output !== undefined) context.ui.notify(output, "info");
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

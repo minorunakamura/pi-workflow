@@ -3,9 +3,16 @@ import {
   type StepResultV1,
 } from "../contracts/execution/agent-execution.js";
 import type { DomainEventDraft } from "../contracts/events/event.js";
-import { createIdAllocator, type IdAllocator, type RunId } from "../domain/primitives/ids.js";
+import {
+  createIdAllocator,
+  type DecisionId,
+  type IdAllocator,
+  type RunId,
+  type StepId,
+} from "../domain/primitives/ids.js";
 import {
   normalizeStepResult,
+  type NormalizedCandidate,
   type ResultArtifactValidation,
   type ResultNormalizationResult,
   type ResultValidationPhase,
@@ -15,6 +22,12 @@ import type { AgentRuntime } from "../ports/agent-runtime.js";
 import type { ArtifactReader } from "../ports/artifact-store.js";
 import type { RunReader, WorkflowState } from "../ports/run-reader.js";
 import type { StateStore } from "../ports/state-store.js";
+import {
+  USER_INTERACTION_KINDS,
+  type UserInteraction,
+  type UserInteractionRequest,
+  type UserInteractionResult,
+} from "../ports/user-interaction.js";
 import type {
   SchedulerIdleReason,
   SchedulerResult,
@@ -111,6 +124,7 @@ export type OrchestratorDependencies = Readonly<{
   events?: OrchestratorEventFactory;
   fixCycle?: Pick<FixReverifyRereviewRouter, "guardCompletion" | "route"> | false;
   cancellation?: Pick<CancellationCoordinator, "isRequested" | "register">;
+  userInteraction?: UserInteraction;
   maxIterations?: number;
 }>;
 
@@ -141,6 +155,176 @@ const unchanged: OrchestratorStatePhase = (state) => state;
 const noPostconditions: OrchestratorPostconditionPhase = ({ state }) => state;
 const noFinalization: OrchestratorFinalizePhase = ({ state }) => state;
 const noEvents: OrchestratorEventFactory = () => [];
+const pendingDecisionCompletion: CompletionEvaluation = {
+  eligible: false,
+  blockers: ["DECISION_PENDING"],
+};
+
+type D3Candidate = NormalizedCandidate<DecisionId>;
+
+type D3Resolution = Readonly<{
+  state: WorkflowState;
+  changed: boolean;
+  cancelled: boolean;
+}>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requiredText(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`D3 interaction ${path} must be a non-empty string`);
+  }
+  return value;
+}
+
+function interactionKind(value: unknown): UserInteractionRequest["kind"] {
+  const kind =
+    typeof value === "string"
+      ? USER_INTERACTION_KINDS.find((candidate) => candidate === value)
+      : undefined;
+  if (kind === undefined) {
+    throw new Error(`D3 interaction kind must be one of ${USER_INTERACTION_KINDS.join(", ")}`);
+  }
+  return kind;
+}
+
+function optionValues(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("D3 options interaction requires a non-empty string options array");
+  }
+  const options = value.filter((option): option is string => typeof option === "string");
+  if (options.length !== value.length || options.some((option) => option.trim().length === 0)) {
+    throw new Error("D3 options interaction requires non-empty option labels");
+  }
+  return options;
+}
+
+function d3InteractionRequest(
+  runId: RunId,
+  candidate: D3Candidate,
+): UserInteractionRequest | undefined {
+  if (candidate.class !== "D3") return undefined;
+
+  const kind = interactionKind(candidate.kind);
+  const title = requiredText(candidate.title, "title");
+  const message = requiredText(candidate.message, "message");
+  const base = { runId, decisionId: candidate.id, class: "D3" as const, title, message };
+
+  switch (kind) {
+    case "approval":
+      return { ...base, kind };
+    case "options":
+      return { ...base, kind, options: optionValues(candidate.options) };
+    case "custom": {
+      const placeholder = candidate.placeholder;
+      if (placeholder !== undefined && typeof placeholder !== "string") {
+        throw new Error("D3 custom interaction placeholder must be a string");
+      }
+      return {
+        ...base,
+        kind,
+        ...(placeholder === undefined ? {} : { placeholder }),
+      };
+    }
+  }
+  throw new Error("Unsupported D3 interaction kind");
+}
+
+function assertUserInteractionResult(
+  request: UserInteractionRequest,
+  result: UserInteractionResult,
+): void {
+  if (!isRecord(result) || (result.kind !== "answered" && result.kind !== "cancelled")) {
+    throw new Error("UserInteraction returned an invalid result");
+  }
+  if (result.kind !== "answered") return;
+
+  if (request.kind === "approval" && typeof result.answer !== "boolean") {
+    throw new Error("D3 approval interaction requires a boolean answer");
+  }
+  if (request.kind === "options") {
+    if (typeof result.answer !== "string" || !request.options.includes(result.answer)) {
+      throw new Error("D3 options interaction requires one of the offered options");
+    }
+  }
+  if (request.kind === "custom" && typeof result.answer !== "string") {
+    throw new Error("D3 custom interaction requires a string answer");
+  }
+}
+
+function stepIdFrom(value: unknown): StepId | undefined {
+  return typeof value === "string" && /^step-\d+$/.test(value) ? (value as StepId) : undefined;
+}
+
+function reopenBlockedStep(state: WorkflowState, stepId: StepId | undefined): WorkflowState {
+  if (stepId === undefined) return state;
+
+  const steps = state.snapshot.steps.steps.map((step) =>
+    step.id === stepId && step.status === "blocked"
+      ? { ...step, status: "ready" as const, blocked_by: [] }
+      : step,
+  );
+  const currentStep = state.run.current_step;
+  const nextCurrentStep =
+    isRecord(currentStep) && currentStep.id === stepId && currentStep.status === "blocked"
+      ? { ...currentStep, status: "ready" }
+      : currentStep;
+
+  return {
+    ...state,
+    run: { ...state.run, current_step: nextCurrentStep },
+    snapshot: {
+      ...state.snapshot,
+      steps: { ...state.snapshot.steps, steps },
+    },
+  };
+}
+
+function applyD3Response(
+  state: WorkflowState,
+  candidate: D3Candidate,
+  response: UserInteractionResult,
+  stepId: StepId | undefined,
+): WorkflowState {
+  const existing = state.snapshot.decisions.decisions.find(({ id }) => id === candidate.id);
+  if (existing !== undefined && existing.class !== "D3") {
+    throw new Error(`Decision ${candidate.id} is not a D3 decision`);
+  }
+
+  const decision = {
+    ...candidate,
+    id: candidate.id,
+    class: "D3" as const,
+    ...(stepId === undefined ? {} : { step_id: stepId }),
+    status: response.kind === "answered" ? ("resolved" as const) : ("pending" as const),
+    ...(response.kind === "answered" ? { authority: "user", resolution: response.answer } : {}),
+  };
+  const decisions =
+    existing === undefined
+      ? [...state.snapshot.decisions.decisions, decision]
+      : state.snapshot.decisions.decisions.map((current) =>
+          current.id === candidate.id ? decision : current,
+        );
+  const next = {
+    ...state,
+    run:
+      response.kind === "answered"
+        ? { ...state.run, status: "running" as const, blocked: null }
+        : {
+            ...state.run,
+            status: "blocked" as const,
+            blocked: { reason: "user-input-required", decision_id: candidate.id },
+          },
+    snapshot: {
+      ...state.snapshot,
+      decisions: { ...state.snapshot.decisions, decisions },
+    },
+  };
+
+  return response.kind === "answered" ? reopenBlockedStep(next, stepId) : next;
+}
 
 export class Orchestrator {
   private readonly runReader: RunReader;
@@ -201,6 +385,40 @@ export class Orchestrator {
           iterations: iteration,
           reason: "RUN_TERMINAL",
         };
+      }
+
+      const pendingDecisions =
+        state.run.finalized || state.run.status === "completed" || state.run.status === "cancelled"
+          ? []
+          : state.snapshot.decisions.decisions.filter(
+              (decision) =>
+                decision.class === "D3" && decision.status === "pending" && "kind" in decision,
+            );
+      if (pendingDecisions.length > 0) {
+        const resolved = await this.resolveD3Candidates({
+          state,
+          candidates: pendingDecisions,
+        });
+        if (resolved.changed) {
+          const committed = await this.commit({
+            before: loaded,
+            candidate: resolved.state,
+            completion: pendingDecisionCompletion,
+            result: null,
+            step: null,
+            normalized: null,
+            iteration,
+          });
+          if (resolved.cancelled) {
+            return {
+              kind: "idle",
+              state: committed,
+              iterations: iteration,
+              reason: "RECOVERABLE_BLOCKER",
+            };
+          }
+          continue;
+        }
       }
 
       const evaluatedCompletion = await this.dependencies.completion(state);
@@ -371,7 +589,22 @@ export class Orchestrator {
           });
           state = recovery.state;
         }
-        await this.commit({
+        const d3Resolution = await this.resolveD3Candidates({
+          state,
+          candidates: normalized.candidates.decision_requests,
+          stepId: step.id,
+          signal: controller.signal,
+        });
+        state = d3Resolution.state;
+        if (controller.signal.aborted || this.isCancellationRequested(runId, state)) {
+          return {
+            kind: "idle",
+            state: await this.runReader.load(runId),
+            iterations: iteration,
+            reason: "RUN_TERMINAL",
+          };
+        }
+        const committed = await this.commit({
           before: loaded,
           candidate: state,
           completion,
@@ -380,6 +613,14 @@ export class Orchestrator {
           normalized,
           iteration,
         });
+        if (d3Resolution.cancelled) {
+          return {
+            kind: "idle",
+            state: committed,
+            iterations: iteration,
+            reason: "RECOVERABLE_BLOCKER",
+          };
+        }
       } catch (error) {
         if (controller.signal.aborted || this.isCancellationRequested(runId, state)) {
           return {
@@ -397,6 +638,40 @@ export class Orchestrator {
     }
 
     throw new OrchestratorIterationLimitError(runId, this.maxIterations);
+  }
+
+  private async resolveD3Candidates(input: {
+    state: WorkflowState;
+    candidates: readonly D3Candidate[];
+    stepId?: StepId;
+    signal?: AbortSignal;
+  }): Promise<D3Resolution> {
+    let state = input.state;
+    let changed = false;
+
+    for (const candidate of input.candidates) {
+      const request = d3InteractionRequest(state.run.run_id, candidate);
+      if (request === undefined) continue;
+      const userInteraction = this.dependencies.userInteraction;
+      if (userInteraction === undefined) {
+        throw new Error("D3 decision requires a UserInteraction adapter");
+      }
+
+      const response = await userInteraction.ask(request, input.signal);
+      assertUserInteractionResult(request, response);
+      state = applyD3Response(
+        state,
+        candidate,
+        response,
+        input.stepId ?? stepIdFrom(candidate.step_id),
+      );
+      changed = true;
+      if (response.kind === "cancelled") {
+        return { state, changed, cancelled: true };
+      }
+    }
+
+    return { state, changed, cancelled: false };
   }
 
   private async commit(input: {
