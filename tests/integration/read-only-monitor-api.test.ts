@@ -317,7 +317,13 @@ describe("read-only monitoring API", () => {
           expect((state.body.run as Record<string, unknown>).run_id).toBe(RUN_ONE);
           expect(graph.status).toBe(200);
           expect(graph.body.nodes).toEqual([
-            expect.objectContaining({ id: "step-001", status: "running" }),
+            expect.objectContaining({
+              id: "step-001",
+              status: "running",
+              depends_on: [],
+              attempts: [expect.objectContaining({ id: "exec-001", attempt: 1 })],
+              artifacts: [expect.objectContaining({ path: ARTIFACT_PATH })],
+            }),
           ]);
           expect(graph.body.gates).toEqual([
             expect.objectContaining({ id: "G-001", annotation: true }),
@@ -325,7 +331,15 @@ describe("read-only monitoring API", () => {
           expect(events.status).toBe(200);
           expect(events.body.events).toHaveLength(2);
           expect(step.status).toBe(200);
-          expect((step.body.step as Record<string, unknown>).id).toBe("step-001");
+          expect(step.body.step).toEqual(
+            expect.objectContaining({
+              id: "step-001",
+              completion_criteria: [],
+              blocked_by: [],
+              attempts: [expect.objectContaining({ id: "exec-001" })],
+              artifacts: [expect.objectContaining({ path: ARTIFACT_PATH })],
+            }),
+          );
           expect(execution.status).toBe(200);
           expect((execution.body.execution as Record<string, unknown>).id).toBe("exec-001");
           expect(artifacts.status).toBe(200);
@@ -333,6 +347,8 @@ describe("read-only monitoring API", () => {
             expect.objectContaining({ path: ARTIFACT_PATH }),
           ]);
           expect(artifact.status).toBe(200);
+          expect(artifact.headers["content-type"]).toMatch(/application\/json/);
+          expect(artifact.headers["x-content-type-options"]).toBe("nosniff");
           expect((artifact.body.content as Record<string, unknown>).body).toBe("artifact body\n");
           expect(evaluation.status).toBe(200);
           expect((evaluation.body.evaluation as Record<string, unknown>).metrics).toBeDefined();

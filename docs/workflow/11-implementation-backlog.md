@@ -1356,10 +1356,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Step graph uses Steps/depends_on; Gates are annotations.
-- [ ] Dynamic origin/skip reason is visible.
-- [ ] Artifact bodies are lazy-loaded and sanitized.
-- [ ] VR/RR/F detail is accessible.
+- [x] Step graph uses Steps/depends_on; Gates are annotations.
+- [x] Dynamic origin/skip reason is visible.
+- [x] Artifact bodies are lazy-loaded and sanitized.
+- [x] VR/RR/F detail is accessible.
 
 **Test Levels:** `E2E`, `SEC`
 

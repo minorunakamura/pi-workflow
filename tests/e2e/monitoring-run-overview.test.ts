@@ -93,16 +93,35 @@ function snapshots(runId: RunId): RepositoryFixture {
           type: "implementation",
           objective: "Expose monitoring",
           agent: "worker",
-          skills: [],
+          skills: ["monitoring"],
           inputs: [],
           outputs: [],
           depends_on: [],
-          completion_criteria: [],
+          completion_criteria: ["monitoring is visible"],
           status: "running",
           blocked_by: [],
           result: null,
           mandatory: true,
-          origin: "initial",
+          origin: "base",
+        },
+        {
+          id: "step-002",
+          type: "review",
+          objective: "Review monitoring output",
+          agent: "reviewer",
+          skills: [],
+          inputs: ["D-001", "G-001"],
+          outputs: ["F-001"],
+          depends_on: ["step-001"],
+          completion_criteria: ["review is recorded"],
+          status: "skipped",
+          blocked_by: [],
+          result: null,
+          mandatory: false,
+          origin: "dynamic",
+          trigger: "review finding",
+          skip_reason: "superseded by review finding",
+          obsolete: true,
         },
       ],
     }),
@@ -196,12 +215,36 @@ function runFiles(runId: RunId, fixture: LifecycleFixture): RepositoryFixture {
       attempt: 1,
       status: "completed",
     }),
+    event(runId, 8, "artifact.finalized", {
+      path: "analysis/analysis-exec-1.md",
+      type: "analysis",
+      status: "complete",
+      step_id: "step-001",
+      execution_id: "exec-001",
+      handoff_summary: "monitoring artifact summary",
+    }),
+    event(runId, 9, "finding.reopened", {
+      finding_id: "F-001",
+      reason: "new evidence requires recheck",
+    }),
   ];
+  const artifact = `---\n${stringify({
+    schema_version: 1,
+    run_id: runId,
+    step_id: "step-001",
+    execution_id: "exec-001",
+    execution_state_revision: 1,
+    agent: { id: "worker", version: 1 },
+    artifact: { type: "analysis", status: "complete" },
+    created_at: TIMESTAMP,
+    skills: [],
+  }).trimEnd()}\n---\n<script>alert("artifact-xss")</script>\n`;
 
   return {
     [`${root}/run.yaml`]: stringify(runYaml(runId, fixture)),
     ...snapshots(runId),
     [`${root}/events/events.jsonl`]: `${events.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    [`${root}/analysis/analysis-exec-1.md`]: artifact,
   };
 }
 
@@ -316,6 +359,38 @@ describe("monitoring Run overview and timeline", () => {
         expect(completed.body).toContain("Accepted risks / limitations");
         expect(completed.body).toContain("Current Plan/applicability");
         expect(completed.body).toContain("Open Decisions/Uncertainties");
+        expect(completed.body).toContain('data-section="verification-detail"');
+        expect(completed.body).toContain("Derived freshness");
+        expect(completed.body).toContain('data-section="review-detail"');
+        expect(completed.body).toContain("New Findings");
+        expect(completed.body).toContain('data-section="finding-detail"');
+        expect(completed.body).toContain("F-001");
+        expect(completed.body).toContain("Finding reopened");
+        expect(completed.body).toContain('data-section="execution-graph"');
+        expect(completed.body).toContain("depends_on edges");
+        expect(completed.body).toContain('data-graph-kind="gate-annotation"');
+        expect(completed.body).toContain("dynamic");
+        expect(completed.body).toContain("review finding");
+        expect(completed.body).toContain("superseded by review finding");
+        expect(completed.body).toContain("Attempts");
+        expect(completed.body).toContain("Related U/D/G/F");
+        expect(completed.body).toContain('data-section="artifact-viewer"');
+        expect(completed.body).toContain("Handoff Summary");
+        expect(completed.body).toContain(
+          "Artifact bodies are not loaded until a body link is selected",
+        );
+        expect(completed.body).not.toContain('<script>alert("artifact-xss")</script>');
+
+        const loadedArtifact = await getText(
+          port,
+          `/?run=run-005&artifact=${encodeURIComponent("analysis/analysis-exec-1.md")}`,
+        );
+        expect(loadedArtifact.status).toBe(200);
+        expect(loadedArtifact.body).toContain("Loaded Markdown body");
+        expect(loadedArtifact.body).toContain(
+          "&lt;script&gt;alert(&quot;artifact-xss&quot;)&lt;/script&gt;",
+        );
+        expect(loadedArtifact.body).not.toContain('<script>alert("artifact-xss")</script>');
 
         const recoverable = await getText(port, "/?run=run-003");
         expect(recoverable.body).toContain("Recovery available: this Run can be resumed.");

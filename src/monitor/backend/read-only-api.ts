@@ -17,7 +17,9 @@ import {
 import { defaultMonitorIndexPath } from "../indexer/sqlite-run-indexer.js";
 import {
   renderMonitorPage,
+  type MonitorArtifactView,
   type MonitorEvent,
+  type MonitorGraph,
   type MonitorRunDetail,
   type MonitorPageData,
 } from "../frontend/render-monitor.js";
@@ -136,6 +138,22 @@ function jsonArray(value: unknown): unknown[] {
 
 function rowMetadata(row: Row): unknown {
   return jsonValue(row.metadata_json);
+}
+
+function metadataValue(row: Row, name: string): unknown {
+  const metadata = rowMetadata(row);
+  return isRecord(metadata) ? metadata[name] : undefined;
+}
+
+function metadataArray(row: Row, name: string): unknown[] {
+  const value = metadataValue(row, name);
+  return Array.isArray(value) ? value : [];
+}
+
+function stepDependsOn(row: Row): unknown[] {
+  return row.depends_on_json === null || row.depends_on_json === undefined
+    ? metadataArray(row, "depends_on")
+    : jsonArray(row.depends_on_json);
 }
 
 function requireRunId(row: Row | undefined): string {
@@ -435,10 +453,21 @@ export class ReadOnlyMonitorApi {
     const events = this.events(runId, new URLSearchParams("limit=200")) as Readonly<{
       events: readonly MonitorEvent[];
     }>;
-    return renderMonitorPage({
-      ...page,
-      selected: { detail, events: events.events },
-    });
+    const graph = (await this.graph(runId)) as MonitorGraph;
+    const artifactListing = this.artifacts(runId) as Readonly<{
+      artifacts: readonly MonitorArtifactView["artifact"][];
+    }>;
+    const artifactPath = search.get("artifact");
+    const selected = {
+      detail,
+      events: events.events,
+      graph,
+      artifacts: artifactListing.artifacts,
+      ...(artifactPath === null
+        ? {}
+        : { artifact: (await this.artifact(runId, artifactPath)) as MonitorArtifactView }),
+    };
+    return renderMonitorPage({ ...page, selected });
   }
 
   private query(sql: string, ...parameters: QueryValue[]): Row[] {
@@ -552,29 +581,23 @@ export class ReadOnlyMonitorApi {
       "SELECT * FROM steps WHERE run_id = ? ORDER BY order_index ASC, step_id ASC",
       runId,
     );
-    const nodes = stepRows.map((step) => {
-      const metadata = rowMetadata(step);
-      const metadataRecord = isRecord(metadata) ? metadata : undefined;
-      const dependsOn =
-        step.depends_on_json === null
-          ? Array.isArray(metadataRecord?.depends_on)
-            ? metadataRecord.depends_on
-            : []
-          : jsonArray(step.depends_on_json);
-      return {
-        id: text(step.step_id),
-        type: text(step.type),
-        objective: text(step.objective),
-        agent: text(step.agent),
-        status: text(step.status),
-        mandatory: booleanValue(step.mandatory),
-        origin: text(step.origin),
-        depends_on: dependsOn,
-        current_execution_id: text(step.current_execution_id),
-      };
-    });
+    const executionRows = this.query(
+      "SELECT * FROM executions WHERE run_id = ? ORDER BY attempt ASC, execution_id ASC",
+      runId,
+    );
+    const artifactRows = this.query(
+      "SELECT * FROM artifacts WHERE run_id = ? ORDER BY path ASC",
+      runId,
+    );
+    const nodes = stepRows.map((step) =>
+      this.stepView(
+        step,
+        executionRows.filter((execution) => execution.step_id === step.step_id),
+        artifactRows.filter((artifact) => artifact.step_id === step.step_id),
+      ),
+    );
     const edges = nodes.flatMap((node) =>
-      node.depends_on
+      (Array.isArray(node.depends_on) ? node.depends_on : [])
         .filter((dependency): dependency is string => typeof dependency === "string")
         .map((dependency) => ({ source: dependency, target: node.id })),
     );
@@ -632,28 +655,73 @@ export class ReadOnlyMonitorApi {
     };
   }
 
+  private stepView(
+    row: Row,
+    executionRows: readonly Row[],
+    artifactRows: readonly Row[],
+  ): Record<string, unknown> {
+    const metadata = rowMetadata(row);
+    const metadataRecord = isRecord(metadata) ? metadata : undefined;
+    return {
+      id: text(row.step_id),
+      type: text(row.type),
+      objective: text(row.objective),
+      agent: text(row.agent),
+      skills: metadataArray(row, "skills"),
+      inputs: metadataArray(row, "inputs"),
+      outputs: metadataArray(row, "outputs"),
+      depends_on: stepDependsOn(row),
+      completion_criteria: metadataArray(row, "completion_criteria"),
+      status: text(row.status),
+      blocked_by: metadataArray(row, "blocked_by"),
+      result: metadataRecord?.result ?? null,
+      mandatory: booleanValue(row.mandatory),
+      origin: text(row.origin) ?? text(metadataRecord?.origin),
+      trigger: text(metadataRecord?.trigger),
+      skip_reason: text(metadataRecord?.skip_reason),
+      obsolete: booleanValue(metadataRecord?.obsolete),
+      order_index: numberValue(row.order_index),
+      current_execution_id: text(row.current_execution_id),
+      attempts: executionRows.map((execution) => this.executionSummary(execution)),
+      artifacts: artifactRows.map((artifact) => this.artifactSummary(artifact)),
+      related: metadataRecord?.related ?? metadataRecord?.related_ids ?? null,
+      metadata,
+    };
+  }
+
+  private executionSummary(row: Row): Record<string, unknown> {
+    return {
+      id: text(row.execution_id),
+      step_id: text(row.step_id),
+      agent: text(row.agent),
+      attempt: numberValue(row.attempt),
+      status: text(row.status),
+      timing: jsonValue(row.timing_json),
+      provider: text(row.provider),
+      model: text(row.model),
+      thinking: text(row.thinking),
+      tokens: jsonValue(row.tokens_json),
+      metadata: rowMetadata(row),
+    };
+  }
+
   private step(runId: RunId, stepId: string): unknown {
     this.requireRun(runId);
     const row = this.one("SELECT * FROM steps WHERE run_id = ? AND step_id = ?", runId, stepId);
     if (row === undefined) {
       throw new MonitorApiError(404, "STEP_NOT_FOUND", "Step was not found");
     }
-    return {
-      run_id: runId,
-      step: {
-        id: text(row.step_id),
-        type: text(row.type),
-        objective: text(row.objective),
-        agent: text(row.agent),
-        status: text(row.status),
-        mandatory: booleanValue(row.mandatory),
-        origin: text(row.origin),
-        depends_on: jsonArray(row.depends_on_json),
-        order_index: numberValue(row.order_index),
-        current_execution_id: text(row.current_execution_id),
-        metadata: rowMetadata(row),
-      },
-    };
+    const executions = this.query(
+      "SELECT * FROM executions WHERE run_id = ? AND step_id = ? ORDER BY attempt ASC, execution_id ASC",
+      runId,
+      stepId,
+    );
+    const artifacts = this.query(
+      "SELECT * FROM artifacts WHERE run_id = ? AND step_id = ? ORDER BY path ASC",
+      runId,
+      stepId,
+    );
+    return { run_id: runId, step: this.stepView(row, executions, artifacts) };
   }
 
   private execution(runId: RunId, executionId: string): unknown {
@@ -666,22 +734,7 @@ export class ReadOnlyMonitorApi {
     if (row === undefined) {
       throw new MonitorApiError(404, "EXECUTION_NOT_FOUND", "Execution was not found");
     }
-    return {
-      run_id: runId,
-      execution: {
-        id: text(row.execution_id),
-        step_id: text(row.step_id),
-        agent: text(row.agent),
-        attempt: numberValue(row.attempt),
-        status: text(row.status),
-        timing: jsonValue(row.timing_json),
-        provider: text(row.provider),
-        model: text(row.model),
-        thinking: text(row.thinking),
-        tokens: jsonValue(row.tokens_json),
-        metadata: rowMetadata(row),
-      },
-    };
+    return { run_id: runId, execution: this.executionSummary(row) };
   }
 
   private artifacts(runId: RunId): unknown {

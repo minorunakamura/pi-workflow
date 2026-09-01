@@ -24,6 +24,23 @@ type MonitorRunSummary = Readonly<{
 
 type JsonRecord = Record<string, unknown>;
 
+export type MonitorGraph = Readonly<{
+  run_id: string;
+  graph_revision: number | null;
+  nodes: readonly JsonRecord[];
+  edges: readonly JsonRecord[];
+  gates: readonly JsonRecord[];
+  warnings?: readonly string[];
+}>;
+
+export type MonitorArtifactView = Readonly<{
+  artifact: JsonRecord;
+  content: Readonly<{
+    front_matter: unknown;
+    body: string;
+  }>;
+}>;
+
 type MonitorEvent = Readonly<{
   run_id: string | null;
   sequence: number | null;
@@ -54,6 +71,9 @@ export type MonitorPageData = Readonly<{
   selected?: Readonly<{
     detail: MonitorRunDetail;
     events: readonly MonitorEvent[];
+    graph?: MonitorGraph;
+    artifacts?: readonly JsonRecord[];
+    artifact?: MonitorArtifactView;
   }>;
 }>;
 
@@ -129,6 +149,10 @@ const EVENT_LABELS: Readonly<Record<string, string>> = {
   "tool.completed": "Tool completed",
   "tool.failed": "Tool failed",
   "artifact.finalized": "Artifact finalized",
+  "finding.created": "Finding created",
+  "finding.disposition-changed": "Finding disposition changed",
+  "finding.severity-changed": "Finding severity changed",
+  "finding.reopened": "Finding reopened",
   "verification.completed": "Verification completed",
   "verification.invalidated": "Verification invalidated",
   "review.completed": "Review completed",
@@ -142,6 +166,10 @@ function record(value: unknown): JsonRecord | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonRecord)
     : undefined;
+}
+
+function arrayValue(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function text(value: unknown): string | null {
@@ -357,6 +385,264 @@ function openCount(value: unknown, field: string): number {
 
 function fieldRow(label: string, value: unknown): string {
   return `<div class="fact"><dt>${escapeHtml(label)}</dt><dd>${valueMarkup(value)}</dd></div>`;
+}
+
+function htmlFieldRow(label: string, markup: string): string {
+  return `<div class="fact"><dt>${escapeHtml(label)}</dt><dd>${markup}</dd></div>`;
+}
+
+function apiStepHref(runId: string, stepId: string): string {
+  return `/api/v1/runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}`;
+}
+
+function apiExecutionHref(runId: string, executionId: string): string {
+  return `/api/v1/runs/${encodeURIComponent(runId)}/executions/${encodeURIComponent(executionId)}`;
+}
+
+function artifactPageHref(runId: string, path: string): string {
+  return `/?run=${encodeURIComponent(runId)}&artifact=${encodeURIComponent(path)}`;
+}
+
+function artifactApiHref(runId: string, path: string): string {
+  return `/api/v1/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`;
+}
+
+function identifierLinks(runId: string, value: unknown, kind: "step" | "execution"): string {
+  const ids = arrayValue(value)
+    .map(text)
+    .filter((id): id is string => id !== null);
+  if (ids.length === 0) return '<span class="muted">-</span>';
+  return ids
+    .map((id) => {
+      const href = kind === "step" ? apiStepHref(runId, id) : apiExecutionHref(runId, id);
+      return `<a href="${escapeHtml(href)}">${escapeHtml(id)}</a>`;
+    })
+    .join(", ");
+}
+
+function attemptLinks(runId: string, value: unknown): string {
+  const attempts = arrayValue(value);
+  if (attempts.length === 0) return '<span class="muted">-</span>';
+  return attempts
+    .map((attempt) => {
+      const entry = record(attempt);
+      const id = text(entry?.id);
+      const status = text(entry?.status);
+      const label =
+        id === null
+          ? valueMarkup(attempt)
+          : `<a href="${escapeHtml(apiExecutionHref(runId, id))}">${escapeHtml(id)}</a>`;
+      return `${label}${status === null ? "" : ` <span class="muted">(${escapeHtml(status)})</span>`}`;
+    })
+    .join(", ");
+}
+
+function attemptComparison(value: unknown): string {
+  const attempts = arrayValue(value);
+  if (attempts.length < 2) return "";
+  return `<table class="attempt-comparison"><caption>Attempt comparison</caption><thead><tr><th scope="col">Attempt</th><th scope="col">Model</th><th scope="col">Result</th><th scope="col">Duration</th><th scope="col">Tokens</th></tr></thead><tbody>${attempts
+    .map((attempt) => {
+      const entry = record(attempt) ?? {};
+      const timing = record(entry.timing);
+      return `<tr><td>${valueMarkup(entry.attempt)}</td><td>${valueMarkup(entry.model ?? entry.provider)}</td><td>${valueMarkup(entry.result ?? entry.status)}</td><td>${valueMarkup(timing?.wall_clock_ms ?? timing?.duration_ms ?? timing?.duration)}</td><td>${valueMarkup(entry.tokens)}</td></tr>`;
+    })
+    .join("")}</tbody></table>`;
+}
+
+function artifactLinks(runId: string, value: unknown): string {
+  const artifacts = arrayValue(value);
+  if (artifacts.length === 0) return '<span class="muted">-</span>';
+  return artifacts
+    .map((artifact) => {
+      const entry = record(artifact);
+      const path = text(entry?.path);
+      return path === null
+        ? valueMarkup(artifact)
+        : `<a href="${escapeHtml(artifactPageHref(runId, path))}">${escapeHtml(path)}</a>`;
+    })
+    .join(", ");
+}
+
+function collectRelatedIds(value: unknown, prefix: "U" | "D" | "G" | "F", ids: Set<string>): void {
+  if (typeof value === "string") {
+    if (new RegExp(`^${prefix}-\\d+$`).test(value)) ids.add(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectRelatedIds(entry, prefix, ids));
+    return;
+  }
+  const entry = record(value);
+  if (entry !== undefined) {
+    Object.values(entry).forEach((nested) => collectRelatedIds(nested, prefix, ids));
+  }
+}
+
+function relatedEntityMarkup(step: JsonRecord): string {
+  const sources = [
+    step.related,
+    record(step.metadata)?.related,
+    record(step.metadata)?.related_ids,
+    step.inputs,
+    step.outputs,
+    step.blocked_by,
+    step.result,
+  ];
+  const groups = (["U", "D", "G", "F"] as const).map((prefix) => {
+    const ids = new Set<string>();
+    sources.forEach((source) => collectRelatedIds(source, prefix, ids));
+    return ids.size === 0 ? null : `${prefix}: ${[...ids].sort().join(", ")}`;
+  });
+  return (
+    groups.filter((group): group is string => group !== null).join(" · ") ||
+    '<span class="muted">-</span>'
+  );
+}
+
+function renderStepDetail(runId: string, step: JsonRecord): string {
+  const id = text(step.id) ?? "-";
+  const origin = text(step.origin) ?? "unknown";
+  const trigger = text(step.trigger);
+  const skipReason = text(step.skip_reason);
+  const href = id === "-" ? "#" : apiStepHref(runId, id);
+  const annotations = [
+    `<span class="step-origin">${escapeHtml(origin)}</span>`,
+    trigger === null ? "" : `<span class="step-trigger">trigger: ${escapeHtml(trigger)}</span>`,
+    skipReason === null
+      ? ""
+      : `<span class="step-skip-reason">skip: ${escapeHtml(skipReason)}</span>`,
+  ].join(" ");
+
+  return `<details class="step-detail" data-graph-kind="step" data-step-id="${escapeHtml(id)}">
+    <summary><span class="step-summary-title"><a href="${escapeHtml(href)}">${escapeHtml(id)}</a> <span class="step-status">${escapeHtml(text(step.status) ?? "unknown")}</span></span>${annotations}</summary>
+    <dl class="facts step-facts">
+      ${fieldRow("Objective", step.objective)}
+      ${fieldRow("Agent / Skills", { agent: step.agent, skills: step.skills })}
+      ${htmlFieldRow("Dependencies", identifierLinks(runId, step.depends_on, "step"))}
+      ${fieldRow("Completion Criteria", step.completion_criteria)}
+      ${fieldRow("Status", step.status)}
+      ${htmlFieldRow("Attempts", attemptLinks(runId, step.attempts))}
+      ${htmlFieldRow("Artifacts", artifactLinks(runId, step.artifacts))}
+      ${fieldRow("Blockers", step.blocked_by)}
+      ${htmlFieldRow("Related U/D/G/F", relatedEntityMarkup(step))}
+      ${fieldRow("Origin", origin)}
+      ${fieldRow("Dynamic trigger", trigger)}
+      ${fieldRow("Skip reason", skipReason)}
+    </dl>
+    ${attemptComparison(step.attempts)}
+    <p class="muted"><a href="${escapeHtml(href)}">Open Step detail API</a></p>
+  </details>`;
+}
+
+function renderExecutionGraph(runId: string, graph: MonitorGraph): string {
+  const nodes = graph.nodes
+    .map((node) => record(node))
+    .filter((node): node is JsonRecord => node !== undefined);
+  const edges = graph.edges
+    .map((edge) => record(edge))
+    .filter((edge): edge is JsonRecord => edge !== undefined);
+  const gates = graph.gates
+    .map((gate) => record(gate))
+    .filter((gate): gate is JsonRecord => gate !== undefined);
+  const warnings = graph.warnings ?? [];
+  return `<section class="panel" id="execution-graph" data-section="execution-graph" aria-labelledby="execution-graph-heading">
+    <div class="section-heading"><div><p class="eyebrow">Steps and dependencies</p><h3 id="execution-graph-heading">Execution graph</h3></div><span class="muted">Graph revision ${escapeHtml(jsonText(graph.graph_revision))}</span></div>
+    <p class="muted">Nodes are Steps. Edges use <code>depends_on</code>. Gates are annotations, not graph nodes.</p>
+    ${warnings.map((warning) => `<p class="warning">${escapeHtml(warning)}</p>`).join("")}
+    <div class="step-graph" aria-label="Step graph">${nodes.length === 0 ? '<p class="empty">No Steps indexed for this Run.</p>' : nodes.map((node) => renderStepDetail(runId, node)).join("")}</div>
+    <section class="graph-edges" aria-labelledby="graph-edges-heading"><h4 id="graph-edges-heading">depends_on edges</h4>${edges.length === 0 ? '<p class="muted">No dependency edges.</p>' : `<ul>${edges.map((edge) => `<li><a href="${escapeHtml(apiStepHref(runId, text(edge.source) ?? ""))}">${escapeHtml(text(edge.source) ?? "-")}</a> → <a href="${escapeHtml(apiStepHref(runId, text(edge.target) ?? ""))}">${escapeHtml(text(edge.target) ?? "-")}</a></li>`).join("")}</ul>`}</section>
+    <section class="gate-annotations" aria-labelledby="gate-annotations-heading"><h4 id="gate-annotations-heading">Gate annotations</h4>${gates.length === 0 ? '<p class="muted">No Gate annotations.</p>' : `<ul>${gates.map((gate) => `<li data-graph-kind="gate-annotation"><span class="gate-diamond" aria-hidden="true">◇</span><strong>${escapeHtml(text(gate.id) ?? "Gate")}</strong> <span>${escapeHtml(text(gate.type) ?? "unknown")}</span> <span class="muted">${escapeHtml(text(gate.status) ?? "unknown")}</span></li>`).join("")}</ul>`}</section>
+  </section>`;
+}
+
+function renderArtifactBody(selected: MonitorArtifactView): string {
+  return `<section class="artifact-content" data-section="artifact-body" aria-labelledby="artifact-body-heading"><h4 id="artifact-body-heading">Loaded Markdown body</h4><p class="muted">Displayed as escaped raw Markdown; HTML in an Artifact is not executed.</p>${fieldRow("Front matter", selected.content.front_matter)}<pre class="artifact-body"><code>${escapeHtml(selected.content.body)}</code></pre></section>`;
+}
+
+function renderArtifacts(
+  runId: string,
+  artifacts: readonly JsonRecord[],
+  selected: MonitorArtifactView | undefined,
+): string {
+  const selectedPath = text(selected?.artifact.path);
+  return `<section class="panel" id="artifact-viewer" data-section="artifact-viewer" aria-labelledby="artifact-viewer-heading">
+    <div class="section-heading"><div><p class="eyebrow">Lazy content view</p><h3 id="artifact-viewer-heading">Artifact Viewer</h3></div><span class="muted">Metadata and Handoff Summary load before body</span></div>
+    <div class="artifact-list">${
+      artifacts.length === 0
+        ? '<p class="empty">No Artifacts indexed for this Run.</p>'
+        : artifacts
+            .map((artifact) => {
+              const path = text(artifact.path);
+              const isSelected = path !== null && path === selectedPath;
+              const bodyLink = path === null ? "#" : artifactPageHref(runId, path);
+              const apiLink = path === null ? "#" : artifactApiHref(runId, path);
+              return `<article class="artifact-card${isSelected ? " artifact-card-selected" : ""}" data-artifact-path="${escapeHtml(path ?? "")}"><h4>${escapeHtml(path ?? "Artifact")}</h4><dl class="facts artifact-facts">${fieldRow("Type", artifact.type)}${fieldRow("Status", artifact.status)}${fieldRow("Step", artifact.step_id)}${fieldRow("Execution", artifact.execution_id)}${fieldRow("Handoff Summary", artifact.handoff_summary)}${fieldRow("Metadata", artifact.metadata)}</dl><p><a href="${escapeHtml(bodyLink)}">Load body in viewer</a>${path === null ? "" : ` · <a href="${escapeHtml(apiLink)}">Artifact API</a>`}</p></article>`;
+            })
+            .join("")
+    }</div>
+    ${selected === undefined ? '<p class="muted">Artifact bodies are not loaded until a body link is selected.</p>' : renderArtifactBody(selected)}
+  </section>`;
+}
+
+function evidenceValue(root: JsonRecord | undefined, ...names: string[]): unknown {
+  return firstValue(...names.map((name) => root?.[name]));
+}
+
+function renderVerificationDetail(verification: unknown): string {
+  const root = record(verification);
+  return `<section class="panel evidence-detail" data-section="verification-detail" data-evidence-kind="VR" aria-labelledby="verification-detail-heading"><p class="eyebrow">VR</p><h3 id="verification-detail-heading">Verification detail</h3><dl class="facts">${fieldRow("VR result", evidenceValue(root, "result", "status") ?? verification)}${fieldRow("Strength", evidenceValue(root, "strength"))}${fieldRow("Derived freshness", evidenceValue(root, "derived_freshness", "freshness"))}${fieldRow("Basis", evidenceValue(root, "basis"))}${fieldRow("Checks", evidenceValue(root, "checks"))}${fieldRow("Limitations", evidenceValue(root, "limitations", "accepted_limitations"))}${fieldRow("Evidence refs", evidenceValue(root, "evidence_refs", "evidence"))}</dl></section>`;
+}
+
+function renderReviewDetail(review: unknown): string {
+  const root = record(review);
+  return `<section class="panel evidence-detail" data-section="review-detail" data-evidence-kind="RR" aria-labelledby="review-detail-heading"><p class="eyebrow">RR</p><h3 id="review-detail-heading">Review detail</h3><dl class="facts">${fieldRow("RR result", evidenceValue(root, "result", "status") ?? review)}${fieldRow("Freshness", evidenceValue(root, "freshness", "derived_freshness"))}${fieldRow("Basis", evidenceValue(root, "basis"))}${fieldRow("New Findings", evidenceValue(root, "new_findings", "findings"))}${fieldRow("Rechecks", evidenceValue(root, "rechecks"))}${fieldRow("Observations", evidenceValue(root, "observations"))}</dl></section>`;
+}
+
+function eventFindingId(event: MonitorEvent): string | null {
+  const data = eventData(event);
+  const finding = record(data.finding);
+  return text(data.finding_id) ?? text(data.id) ?? text(finding?.finding_id) ?? text(finding?.id);
+}
+
+function findingHistory(findingId: string | null, events: readonly MonitorEvent[]): MonitorEvent[] {
+  return events.filter((event) => {
+    const type = text(event.type) ?? "";
+    if (!type.startsWith("finding.") && !type.startsWith("review.")) return false;
+    const eventId = eventFindingId(event);
+    return eventId === findingId || (eventId === null && type.startsWith("review."));
+  });
+}
+
+function renderFindings(snapshot: JsonRecord | undefined, events: readonly MonitorEvent[]): string {
+  const findings = arrayValue(record(snapshot?.findings)?.findings);
+  const content =
+    findings.length === 0
+      ? '<p class="empty">No current Findings.</p>'
+      : findings
+          .map((value) => {
+            const finding = record(value) ?? {};
+            const id = text(finding.id);
+            const history = findingHistory(id, events);
+            return `<article class="finding-detail" data-finding-id="${escapeHtml(id ?? "")}"><h4>${escapeHtml(id ?? "Finding")}</h4><dl class="facts">${fieldRow("State", finding.state)}${fieldRow("Disposition", finding.disposition)}${fieldRow("Severity", finding.severity)}${fieldRow("Confidence", finding.confidence)}</dl><details class="finding-history"><summary>Review/Event lifecycle history (${history.length})</summary>${history.length === 0 ? '<p class="muted">No lifecycle events indexed for this Finding.</p>' : history.map(renderTimelineEvent).join("")}</details></article>`;
+          })
+          .join("");
+  const unassignedHistory =
+    findings.length === 0
+      ? events.filter((event) => {
+          const type = text(event.type) ?? "";
+          return type.startsWith("finding.") || type.startsWith("review.");
+        })
+      : [];
+  return `<section class="panel evidence-detail" data-section="finding-detail" data-evidence-kind="F" aria-labelledby="finding-detail-heading"><p class="eyebrow">F</p><h3 id="finding-detail-heading">Finding detail</h3>${content}${unassignedHistory.length === 0 ? "" : `<details class="finding-history"><summary>Review/Event lifecycle history (${unassignedHistory.length})</summary>${unassignedHistory.map(renderTimelineEvent).join("")}</details>`}</section>`;
+}
+
+function renderEvidenceDetails(
+  verification: unknown,
+  review: unknown,
+  snapshot: JsonRecord | undefined,
+  events: readonly MonitorEvent[],
+): string {
+  return `${renderVerificationDetail(verification)}${renderReviewDetail(review)}${renderFindings(snapshot, events)}`;
 }
 
 function renderOverviewFacts(
@@ -586,7 +872,9 @@ function renderTimeline(events: readonly MonitorEvent[]): string {
 }
 
 function renderSelectedRun(selected: NonNullable<MonitorPageData["selected"]>): string {
-  const { detail, events } = selected;
+  const { detail, events, artifact } = selected;
+  const graph = selected.graph;
+  const artifacts = selected.artifacts ?? [];
   const run = detail.run;
   const state = record(detail.state);
   const stateRun = record(state?.run) ?? {};
@@ -617,7 +905,10 @@ function renderSelectedRun(selected: NonNullable<MonitorPageData["selected"]>): 
     ${warnings.map((warning) => `<p class="warning">${escapeHtml(warning)}</p>`).join("")}
     <section class="panel" data-section="overview-facts" aria-labelledby="overview-facts-heading"><h3 id="overview-facts-heading">Current information</h3>${renderOverviewFacts(run, stateRun, snapshot, verification, review)}</section>
     ${renderCorrectness(run, outcome, correctness, verification, review)}
+    ${renderEvidenceDetails(verification, review, snapshot, events)}
     ${renderEfficiency(run, evaluation, metrics)}
+    ${graph === undefined ? "" : renderExecutionGraph(run.run_id, graph)}
+    ${renderArtifacts(run.run_id, artifacts, artifact)}
     ${renderTimeline(events)}
   </section>`;
 }
@@ -671,7 +962,36 @@ th { color: #536170; font-size: .78rem; white-space: nowrap; }
 code { white-space: pre-wrap; word-break: break-word; }
 .correctness { border-top: 5px solid #176235; }
 .efficiency { border-top: 5px solid #536170; }
-.timeline { border-left: 3px solid #cbd4dc; margin: 16px 0 0 8px; padding-left: 16px; }
+.step-graph { display: grid; gap: 10px; margin-top: 16px; }
+.step-detail { border: 1px solid #d8dee5; border-left: 4px solid #1257a6; border-radius: 7px; background: #fbfcfd; }
+.step-detail > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; cursor: pointer; padding: 10px 12px; }
+.step-detail[open] > summary { border-bottom: 1px solid #d8dee5; }
+.step-summary-title { display: inline-flex; align-items: baseline; gap: 8px; font-weight: 700; }
+.step-status, .step-origin, .step-trigger, .step-skip-reason { border-radius: 999px; padding: 2px 7px; background: #edf0f3; color: #48535f; font-size: .78rem; }
+.step-trigger { background: #eee8ff; color: #4a348b; }
+.step-skip-reason { background: #fff3d7; color: #754900; }
+.step-facts { padding: 0 12px 12px; }
+.step-detail > p { padding: 0 12px 10px; }
+.attempt-comparison { margin: 0 12px 14px; width: calc(100% - 24px); }
+.attempt-comparison caption { text-align: left; color: #536170; font-size: .78rem; font-weight: 700; padding: 8px 0; }
+.graph-edges, .gate-annotations { margin-top: 18px; border-top: 1px solid #e2e7ec; padding-top: 12px; }
+.graph-edges h4, .gate-annotations h4 { margin: 0 0 8px; }
+.graph-edges ul, .gate-annotations ul { margin: 0; padding-left: 22px; }
+.gate-annotations li { margin: 6px 0; }
+.gate-diamond { display: inline-block; color: #8068c7; font-size: 1.2rem; margin-right: 4px; }
+.artifact-list { display: grid; gap: 12px; margin-top: 16px; }
+.artifact-card { border: 1px solid #d8dee5; border-radius: 7px; padding: 12px; background: #fbfcfd; }
+.artifact-card-selected { border-color: #1257a6; box-shadow: 0 0 0 2px #1257a633; }
+.artifact-card h4, .finding-detail h4 { margin: 0; overflow-wrap: anywhere; }
+.artifact-facts { margin-top: 10px; }
+.artifact-content { margin-top: 20px; border-top: 2px solid #1257a6; padding-top: 14px; }
+.artifact-body { display: block; max-height: 34rem; overflow: auto; margin: 14px 0 0; border: 1px solid #d8dee5; border-radius: 7px; background: #17202a; color: #f4f6f8; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.evidence-detail { border-left: 5px solid #8068c7; }
+.evidence-detail h3 { margin-bottom: 4px; }
+.finding-detail { border-top: 1px solid #e2e7ec; margin-top: 14px; padding-top: 14px; }
+.finding-history { margin-top: 12px; }
+.finding-history > summary { cursor: pointer; font-weight: 700; }
+.timeline {  border-left: 3px solid #cbd4dc; margin: 16px 0 0 8px; padding-left: 16px; }
 .timeline-event, .timeline-tool, .timeline-group { margin: 0 0 10px; }
 .timeline-event, .timeline-tool, .timeline-group > summary { border: 1px solid #d8dee5; border-radius: 7px; background: #fbfcfd; padding: 10px 12px; }
 .timeline-event-alert { border-color: #cf3f3f; background: #fff1f1; }
