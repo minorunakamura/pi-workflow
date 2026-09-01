@@ -42,6 +42,7 @@ export type RuntimeTelemetry = JsonObject &
 
 export type RuntimeTelemetryAttachOptions = Readonly<{
   level?: TelemetryLevel;
+  debug?: JsonObject;
 }>;
 
 export type TelemetryClock = () => number;
@@ -73,6 +74,19 @@ function milliseconds(value: unknown): number | undefined {
   return number === undefined ? undefined : Math.round(number);
 }
 
+function isJsonObject(value: unknown): value is JsonObject {
+  return isRecord(value) && Object.values(value).every(isJsonValue);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return isJsonObject(value);
+}
+
+function redactedJson(value: JsonObject): JsonObject;
+function redactedJson(value: JsonValue): JsonValue;
 function redactedJson(value: JsonValue): JsonValue {
   if (typeof value === "string") return redactSecrets(value);
   if (Array.isArray(value)) return value.map(redactedJson);
@@ -82,6 +96,10 @@ function redactedJson(value: JsonValue): JsonValue {
     );
   }
   return value;
+}
+
+function redactedObject(value: unknown): JsonObject | undefined {
+  return isJsonObject(value) ? redactedJson(value) : undefined;
 }
 
 function modelValue(value: unknown): JsonValue | undefined {
@@ -335,7 +353,7 @@ export function captureRuntimeTelemetry(
   return normalizeTelemetry(result, telemetryLevel, telemetryLevel) as RuntimeTelemetry;
 }
 
-/** Adds only allowlisted telemetry fields to a result without copying prompt/tool payloads. */
+/** Adds allowlisted telemetry and debug-only diagnostics without copying prompt/tool payloads. */
 export function attachRuntimeTelemetry<T>(
   result: T,
   telemetry: RuntimeTelemetry,
@@ -346,11 +364,24 @@ export function attachRuntimeTelemetry<T>(
   if (currentRuntime !== undefined && !isRecord(currentRuntime)) return result;
 
   const runtime = (currentRuntime ?? {}) as Record<string, unknown>;
+  const mergedTelemetry = mergeTelemetry(runtime.telemetry, telemetry, options.level);
+  const telemetryLevel = options.level ?? mergedTelemetry.telemetry_level;
+  const currentDebug = redactedObject(runtime.debug);
+  const debug =
+    telemetryLevel === "debug" && (currentDebug !== undefined || options.debug !== undefined)
+      ? Object.assign(
+          {},
+          currentDebug,
+          options.debug === undefined ? undefined : redactedJson(options.debug),
+        )
+      : undefined;
+  const { debug: _discardedDebug, ...runtimeWithoutDebug } = runtime;
   return {
     ...result,
     runtime: {
-      ...runtime,
-      telemetry: mergeTelemetry(runtime.telemetry, telemetry, options.level),
+      ...runtimeWithoutDebug,
+      ...(debug === undefined ? {} : { debug }),
+      telemetry: mergedTelemetry,
     },
   } as T;
 }

@@ -56,10 +56,27 @@ describe("JSONL event log", () => {
       await appendFile(path, "not-json\n", "utf8");
       const second = await writer.append(eventDraft("step.failed"));
 
-      await expect(new JsonlEventReader(repositoryRoot).readAfter(RUN_ID, 0)).resolves.toEqual([
-        first,
-        second,
-      ]);
+      const read = await new JsonlEventReader(repositoryRoot).readAfterWithQuality(RUN_ID, 0);
+      expect(read.events).toEqual([first, second]);
+      expect(read.degraded).toBe(true);
+    });
+  });
+
+  it("marks a sequence gap as degraded while returning later valid events", async () => {
+    await withTempRepository({}, async (repositoryRoot) => {
+      const writer = new JsonlEventWriter(repositoryRoot);
+      const first = await writer.append(eventDraft());
+      const path = join(repositoryRoot, ...EVENT_LOG_PATH);
+      await appendFile(
+        path,
+        `${JSON.stringify({ ...first, event_id: "evt-000003", sequence: 3 })}\n`,
+        "utf8",
+      );
+
+      const read = await new JsonlEventReader(repositoryRoot).readAfterWithQuality(RUN_ID, 0);
+      expect(read.events).toHaveLength(2);
+      expect(read.events.map(({ sequence }) => sequence)).toEqual([1, 3]);
+      expect(read.degraded).toBe(true);
     });
   });
 });

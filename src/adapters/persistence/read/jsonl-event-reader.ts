@@ -9,6 +9,11 @@ export type JsonlEventReaderOptions = Readonly<{
   readFile?: ReadTextFile;
 }>;
 
+export type JsonlEventReadResult = Readonly<{
+  events: DomainEvent[];
+  degraded: boolean;
+}>;
+
 const RUN_ID_PATTERN = /^run-\d+$/;
 const EVENT_LOG_FILE = ["events", "events.jsonl"] as const;
 const defaultReadTextFile: ReadTextFile = (path) => nodeReadFile(path, "utf8");
@@ -44,6 +49,10 @@ export class JsonlEventReader implements EventReader {
   }
 
   async readAfter(runId: RunId, sequence: number): Promise<DomainEvent[]> {
+    return (await this.readAfterWithQuality(runId, sequence)).events;
+  }
+
+  async readAfterWithQuality(runId: RunId, sequence: number): Promise<JsonlEventReadResult> {
     validRunId(runId);
     validSequence(sequence);
 
@@ -52,12 +61,14 @@ export class JsonlEventReader implements EventReader {
       contents = await this.readTextFile(this.eventLogPath(runId));
     } catch (error) {
       if (isNotFound(error)) {
-        return [];
+        return { events: [], degraded: false };
       }
       throw error;
     }
 
     const events: DomainEvent[] = [];
+    let degraded = false;
+    let previousSequence: number | undefined;
     for (const line of contents.split(/\r?\n/)) {
       if (line.trim() === "") {
         continue;
@@ -65,15 +76,27 @@ export class JsonlEventReader implements EventReader {
 
       try {
         const event = parseDomainEvent(JSON.parse(line) as unknown);
-        if (event.run_id === runId && event.sequence > sequence) {
+        if (event.run_id !== runId) {
+          degraded = true;
+          continue;
+        }
+        if (
+          (previousSequence === undefined && event.sequence !== 1) ||
+          (previousSequence !== undefined && event.sequence !== previousSequence + 1)
+        ) {
+          degraded = true;
+        }
+        previousSequence = event.sequence;
+        if (event.sequence > sequence) {
           events.push(event);
         }
       } catch {
+        degraded = true;
         // A malformed JSONL entry is isolated from the rest of the event history.
       }
     }
 
-    return events;
+    return { events, degraded };
   }
 
   private eventLogPath(runId: RunId): string {

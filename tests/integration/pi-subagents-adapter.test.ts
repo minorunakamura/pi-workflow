@@ -21,7 +21,10 @@ import {
   type StepResultV1,
 } from "../../src/contracts/execution/agent-execution.js";
 import type { ExecutionId, RunId, StepId } from "../../src/domain/primitives/ids.js";
-import { TelemetryAgentRuntime } from "../../src/telemetry/runtime-metrics.js";
+import {
+  persistedRuntimeTelemetry,
+  TelemetryAgentRuntime,
+} from "../../src/telemetry/runtime-metrics.js";
 
 const RUN_ID = "run-001" as RunId;
 const STEP_ID = "step-001" as StepId;
@@ -227,6 +230,44 @@ describe("PiSubagentsAdapter integration", () => {
       active_wall_ms: 40,
       execution_sum_ms: 40,
     });
+  });
+
+  it("stores additional diagnostics only for debug telemetry", async () => {
+    const events = createEventBus();
+    const input = request();
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+        requestId: delegation.requestId,
+        ownerRunId: delegation.ownerRunId,
+        nodeId: delegation.nodeId,
+        status: "completed",
+        model: "provider/api_key=very-secret",
+        thinking: "high",
+        exitCode: 0,
+        launchContractDigest: "digest-001",
+        result: { kind: "structured", value: result(input) },
+      } satisfies SubagentDelegationResponse);
+    });
+
+    const actual = await new PiSubagentsAdapter(
+      { events },
+      { cwd: "/tmp/workflow", telemetryLevel: "debug" },
+    ).run(input);
+
+    expect(actual.runtime).toMatchObject({
+      telemetry: { telemetry_level: "debug" },
+      debug: {
+        status: "completed",
+        model: "provider/api_key=[REDACTED_SECRET]",
+        thinking: "high",
+        exit_code: 0,
+        launch_contract_digest: "digest-001",
+      },
+    });
+    expect(actual.runtime.debug).toHaveProperty("observation.tools_used", []);
+    expect(persistedRuntimeTelemetry(actual.runtime)).not.toHaveProperty("debug");
+    expect(JSON.stringify(actual.runtime.debug)).not.toContain("very-secret");
   });
 
   it("normalizes structured model references and rejects unconfigured actual models", async () => {

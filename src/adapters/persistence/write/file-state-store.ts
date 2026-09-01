@@ -232,6 +232,13 @@ export class FileStateStore implements StateStore {
     const nextRevision = expectedRevision + 1;
     const durableNext: WorkflowState = {
       ...next,
+      run: {
+        ...next.run,
+        telemetry: {
+          ...next.run.telemetry,
+          degraded: current.run.telemetry.degraded || next.run.telemetry.degraded,
+        },
+      },
       snapshot: {
         ...next.snapshot,
         requirement: durableRequirementSnapshot(next.snapshot.requirement),
@@ -301,8 +308,28 @@ export class FileStateStore implements StateStore {
 
       await this.renamePath(temporaryRunFile, join(runDir, "run.yaml"));
       const events = input.events ?? [];
-      if (events.length > 0) {
-        await this.eventWriter.appendBatch(events);
+      if (events.length === 0) {
+        return durableNext;
+      }
+
+      try {
+        const appended = await this.eventWriter.appendBatch(events);
+        if (appended.length !== events.length) {
+          throw new Error("Event append produced a partial batch");
+        }
+      } catch {
+        const degradedRun = {
+          ...durableNext.run,
+          telemetry: { ...durableNext.run.telemetry, degraded: true },
+        };
+        try {
+          const degradedRunFile = join(temporaryRunDir, "run.yaml");
+          await this.writeTextFile(degradedRunFile, stringify(degradedRun));
+          await this.renamePath(degradedRunFile, join(runDir, "run.yaml"));
+        } catch {
+          // State is already durable; telemetry degradation remains best-effort too.
+        }
+        return { ...durableNext, run: degradedRun };
       }
       return durableNext;
     } finally {

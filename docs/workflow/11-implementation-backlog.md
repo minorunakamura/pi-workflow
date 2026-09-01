@@ -1275,9 +1275,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] minimal/standard/debug behavior is explicit.
-- [ ] Event corruption/gap/telemetry writer failure produces degraded quality.
-- [ ] Workflow state correctness remains independent from telemetry completeness.
+- [x] minimal/standard/debug behavior is explicit.
+- [x] Event corruption/gap/telemetry writer failure produces degraded quality.
+- [x] Workflow state correctness remains independent from telemetry completeness.
 
 **Test Levels:** `INT`, `CRASH`
 

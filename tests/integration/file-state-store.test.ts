@@ -288,7 +288,7 @@ describe("FileStateStore", () => {
     });
   });
 
-  it("keeps committed state when event append fails", async () => {
+  it("keeps committed state and marks telemetry degraded when event append fails", async () => {
     const current = workflowState(1);
     const next = workflowState(2, 2);
 
@@ -306,9 +306,11 @@ describe("FileStateStore", () => {
 
       await expect(
         store.commit({ expectedRevision: 1, next, events: [eventDraft(2)] }),
-      ).rejects.toThrow("simulated event append failure");
+      ).resolves.toMatchObject({
+        run: { state_revision: 2, telemetry: { degraded: true } },
+      });
       await expect(new FileRunReader(repositoryRoot).load(RUN_ID)).resolves.toMatchObject({
-        run: { state_revision: 2 },
+        run: { state_revision: 2, telemetry: { degraded: true } },
         snapshot: { requirement: { goal: "goal-2" } },
       });
     });

@@ -4,6 +4,7 @@ import { ContractValidationError } from "../../../contracts/execution/agent-exec
 import type { RunId } from "../../../domain/primitives/ids.js";
 import type { RunYamlV1 } from "../../../contracts/state/workflow-state.js";
 import type { RunReader, StateSnapshot, WorkflowState } from "../../../ports/run-reader.js";
+import { JsonlEventReader } from "./jsonl-event-reader.js";
 import {
   DEFAULT_STATE_SCHEMA_MIGRATIONS,
   readRunYaml,
@@ -41,6 +42,7 @@ export class FileRunReader implements RunReader {
   private readonly maxAttempts: number;
   private readonly readTextFile: ReadTextFile;
   private readonly migrations: StateSchemaMigrations;
+  private readonly eventReader: JsonlEventReader;
 
   constructor(repositoryRoot: string, options: FileRunReaderOptions = {}) {
     const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -52,6 +54,9 @@ export class FileRunReader implements RunReader {
     this.maxAttempts = maxAttempts;
     this.readTextFile = options.readFile ?? defaultReadTextFile;
     this.migrations = options.migrations ?? DEFAULT_STATE_SCHEMA_MIGRATIONS;
+    this.eventReader = new JsonlEventReader(this.repositoryRoot, {
+      readFile: this.readTextFile,
+    });
   }
 
   async load(runId: RunId): Promise<WorkflowState> {
@@ -84,7 +89,14 @@ export class FileRunReader implements RunReader {
       }
 
       validateWorkflowStateConsistency(latestRun, snapshot);
-      return { run: latestRun, snapshot };
+      const telemetryDegraded = await this.eventLogDegraded(runId);
+      return {
+        run:
+          telemetryDegraded && !latestRun.telemetry.degraded
+            ? { ...latestRun, telemetry: { ...latestRun.telemetry, degraded: true } }
+            : latestRun,
+        snapshot,
+      };
     }
 
     throw new RunReaderConsistencyError(runId);
@@ -104,6 +116,14 @@ export class FileRunReader implements RunReader {
 
   private samePointer(left: RunYamlV1, right: RunYamlV1): boolean {
     return left.run_id === right.run_id && left.state_revision === right.state_revision;
+  }
+
+  private async eventLogDegraded(runId: RunId): Promise<boolean> {
+    try {
+      return (await this.eventReader.readAfterWithQuality(runId, 0)).degraded;
+    } catch {
+      return true;
+    }
   }
 }
 

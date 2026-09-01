@@ -212,7 +212,34 @@ describe("FileRunReader", () => {
       },
       async (repositoryRoot) => {
         await expect(new FileRunReader(repositoryRoot).load(RUN_ID)).resolves.toMatchObject({
-          run: { state_revision: 1 },
+          run: { state_revision: 1, telemetry: { degraded: true } },
+        });
+      },
+    );
+  });
+
+  it("marks a sequence gap as degraded without blocking state load", async () => {
+    const event = {
+      schema_version: 1,
+      event_id: "evt-000001",
+      sequence: 1,
+      type: "step.completed",
+      timestamp: "2026-08-30T03:02:10.123+09:00",
+      run_id: RUN_ID,
+      source: { component: "orchestrator" },
+      state_revision: 1,
+      data: {},
+    };
+
+    await withTempRepository(
+      {
+        ...runFile(1),
+        ...snapshotFiles(1),
+        [`${RUN_DIRECTORY}/events/events.jsonl`]: `${JSON.stringify(event)}\n${JSON.stringify({ ...event, event_id: "evt-000003", sequence: 3 })}\n`,
+      },
+      async (repositoryRoot) => {
+        await expect(new FileRunReader(repositoryRoot).load(RUN_ID)).resolves.toMatchObject({
+          run: { state_revision: 1, telemetry: { degraded: true } },
         });
       },
     );

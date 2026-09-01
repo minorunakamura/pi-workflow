@@ -13,6 +13,7 @@ import {
 import {
   parseStepResultV1,
   type AgentExecutionRequestV1,
+  type JsonObject,
   type JsonValue,
   type StepResultV1,
 } from "../../contracts/execution/agent-execution.js";
@@ -261,6 +262,30 @@ function observeUpdate(
   }
 }
 
+function debugDiagnostics(
+  response: SubagentDelegationResponse,
+  observation: ExecutionObservation,
+): JsonObject {
+  const model = "model" in response ? response.model : undefined;
+  const thinking = "thinking" in response ? response.thinking : undefined;
+  const exitCode = "exitCode" in response ? response.exitCode : undefined;
+  const launchContractDigest =
+    "launchContractDigest" in response ? response.launchContractDigest : undefined;
+  return {
+    status: response.status,
+    ...(model === undefined ? {} : { model }),
+    ...(thinking === undefined ? {} : { thinking }),
+    ...(exitCode === undefined ? {} : { exit_code: exitCode }),
+    ...(launchContractDigest === undefined ? {} : { launch_contract_digest: launchContractDigest }),
+    observation: {
+      ...(observation.toolCount === undefined ? {} : { tool_count: observation.toolCount }),
+      ...(observation.durationMs === undefined ? {} : { duration_ms: observation.durationMs }),
+      ...(observation.tokens === undefined ? {} : { tokens: observation.tokens }),
+      tools_used: [...observation.toolsUsed],
+    },
+  };
+}
+
 function runtimeUsage(
   usage: SubagentDelegationUsage | undefined,
   observation: ExecutionObservation,
@@ -335,7 +360,13 @@ export class PiSubagentsAdapter implements AgentRuntime {
         ? {}
         : { toolsUsed: [...execution.observation.toolsUsed] }),
     });
-    return attachRuntimeTelemetry(result, telemetry);
+    return attachRuntimeTelemetry(
+      result,
+      telemetry,
+      this.telemetryLevel === "debug"
+        ? { level: "debug", debug: debugDiagnostics(response, execution.observation) }
+        : {},
+    );
   }
 
   private execute(
