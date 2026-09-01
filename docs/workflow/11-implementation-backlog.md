@@ -1255,10 +1255,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] provisional/final evaluation works.
-- [ ] telemetry quality and source revision/sequence are recorded.
-- [ ] same source + evaluator version is deterministic.
-- [ ] no required scalar score/grade is produced.
+- [x] provisional/final evaluation works.
+- [x] telemetry quality and source revision/sequence are recorded.
+- [x] same source + evaluator version is deterministic.
+- [x] no required scalar score/grade is produced.
 
 **Test Levels:** `UNIT`
 
