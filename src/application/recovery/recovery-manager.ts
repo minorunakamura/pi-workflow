@@ -64,7 +64,12 @@ export function resumeRun(state: WorkflowState): WorkflowState {
   assertRunResumeAllowed(state);
   return {
     ...state,
-    run: { ...state.run, status: "running", blocked: null },
+    run: {
+      ...state.run,
+      status: "running",
+      blocked: null,
+      failure: null,
+    },
   };
 }
 

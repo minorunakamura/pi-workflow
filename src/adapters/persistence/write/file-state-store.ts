@@ -92,12 +92,12 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
-function isAlreadyExists(error: unknown): boolean {
+function isPathAlreadyExists(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    (error as { code?: unknown }).code === "EEXIST"
+    ["EEXIST", "ENOTEMPTY"].includes(String((error as { code?: unknown }).code))
   );
 }
 
@@ -272,7 +272,13 @@ export class FileStateStore implements StateStore {
       validateWorkflowStateConsistency(durableNext.run, readBackSnapshot);
       deepStrictEqual(readBackSnapshot, durableNext.snapshot);
 
-      await this.renamePath(temporarySnapshotDir, snapshotDir);
+      try {
+        await this.renamePath(temporarySnapshotDir, snapshotDir);
+      } catch (error) {
+        if (!isPathAlreadyExists(error)) throw error;
+        await this.removePath(snapshotDir);
+        await this.renamePath(temporarySnapshotDir, snapshotDir);
+      }
       snapshotFinalized = true;
       for (const entry of missingHistoryEntries) {
         await this.publishRequirementHistory(entry);
@@ -342,7 +348,7 @@ export class FileStateStore implements StateStore {
       try {
         await this.linkPath(temporaryFile, entry.path);
       } catch (error) {
-        if (!isAlreadyExists(error)) {
+        if (!isPathAlreadyExists(error)) {
           throw error;
         }
         const existing = await this.readTextFile(entry.path);

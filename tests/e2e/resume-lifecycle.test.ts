@@ -42,7 +42,8 @@ function workflowState(
       limits: { max_retries: 4 },
       counters: { retries: 2 },
       telemetry: { degraded: false },
-      outcome: null,
+      outcome:
+        status === "failed" && finalized ? { status: "failed", artifact_path: "outcome.md" } : null,
       timestamps: {},
     },
     snapshot: {
@@ -134,7 +135,7 @@ describe("ResumeLifecycle E2E", () => {
       counters: { retries: 2 },
       repository: { freshness: "fresh" },
     });
-    expect(state.run.failure).toEqual(initial.run.failure);
+    expect(state.run.failure).toBeNull();
     expect(state.run.state_revision).toBe(2);
   });
 

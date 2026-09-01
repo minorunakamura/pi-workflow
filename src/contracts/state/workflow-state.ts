@@ -470,15 +470,33 @@ export function parseRunYamlV1(input: unknown): RunYamlV1 {
 
   jsonObject(root.repository, contract, "repository");
   nullableObject(root.blocked, contract, "blocked");
-  nullableObject(root.failure, contract, "failure");
+  const failure = nullableObject(root.failure, contract, "failure");
   nullableObject(root.cancellation, contract, "cancellation");
   jsonObject(root.limits, contract, "limits");
   jsonObject(root.counters, contract, "counters");
 
   const telemetry = record(root.telemetry, contract, "telemetry");
   booleanValue(telemetry.degraded, contract, "telemetry.degraded");
-  nullableObject(root.outcome, contract, "outcome");
+  const outcome = nullableObject(root.outcome, contract, "outcome");
   jsonObject(root.timestamps, contract, "timestamps");
+
+  if (status === "failed") {
+    if (failure === null) {
+      fail(contract, "failure", "a Failure Record pointer");
+    }
+    if (typeof failure.resumable !== "boolean") {
+      fail(contract, "failure.resumable", "a boolean");
+    }
+    if (failure.resumable === finalized) {
+      fail(contract, "failure.resumable", "true only for a non-finalized failed Run");
+    }
+    if (finalized && outcome === null) {
+      fail(contract, "outcome", "an Outcome for a finalized failed Run");
+    }
+    if (!finalized && outcome !== null) {
+      fail(contract, "outcome", "null for a resumable failed Run");
+    }
+  }
 
   if (["created", "running", "blocked"].includes(status) && finalized) {
     fail(contract, "finalized", "false for a non-terminal Run status");

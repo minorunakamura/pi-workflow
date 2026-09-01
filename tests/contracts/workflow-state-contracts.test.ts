@@ -149,11 +149,40 @@ describe("workflow state contracts", () => {
       RunYamlV1Schema.parse({ ...validRunYaml(), status: "completed", finalized: true }).status,
     ).toBe("completed");
     expect(
-      RunYamlV1Schema.parse({ ...validRunYaml(), status: "failed", finalized: true }).finalized,
+      RunYamlV1Schema.parse({
+        ...validRunYaml(),
+        status: "failed",
+        finalized: true,
+        failure: { resumable: false, artifact_path: "failures/failure-001.md" },
+        outcome: { status: "failed", artifact_path: "outcome.md" },
+      }).finalized,
     ).toBe(true);
     expect(() => RunYamlV1Schema.parse({ ...validRunYaml(), status: "finalized" })).toThrow(
       /status.*created, running, blocked, completed, failed, cancelled/,
     );
+  });
+
+  it("rejects failed Runs without the required lifecycle records", () => {
+    expect(() =>
+      RunYamlV1Schema.parse({ ...validRunYaml(), status: "failed", finalized: false }),
+    ).toThrow(/failure.*Failure Record pointer/);
+    expect(() =>
+      RunYamlV1Schema.parse({
+        ...validRunYaml(),
+        status: "failed",
+        finalized: true,
+        failure: { resumable: false, artifact_path: "failures/failure-001.md" },
+      }),
+    ).toThrow(/outcome.*Outcome/);
+    expect(() =>
+      RunYamlV1Schema.parse({
+        ...validRunYaml(),
+        status: "failed",
+        finalized: false,
+        failure: { resumable: true, artifact_path: "failures/failure-001.md" },
+        outcome: { status: "failed" },
+      }),
+    ).toThrow(/outcome.*resumable failed Run/);
   });
 
   it("rejects a superseded current Plan", () => {

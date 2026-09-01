@@ -1096,9 +1096,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Resumable failed has Failure Record, no Outcome, `finalized=false`.
-- [ ] Final failed has Failure Record + Outcome + `finalized=true`.
-- [ ] Successful resume clears current failure pointer only.
+- [x] Resumable failed has Failure Record, no Outcome, `finalized=false`.
+- [x] Final failed has Failure Record + Outcome + `finalized=true`.
+- [x] Successful resume clears current failure pointer only.
 
 **Test Levels:** `E2E`, `CRASH`
 
