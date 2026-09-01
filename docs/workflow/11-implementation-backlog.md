@@ -1137,9 +1137,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] `/wf-status` is read-only.
-- [ ] `/wf-resume` follows resumability rules.
-- [ ] `/wf-cancel` follows crash-safe cancellation lifecycle.
+- [x] `/wf-status` is read-only.
+- [x] `/wf-resume` follows resumability rules.
+- [x] `/wf-cancel` follows crash-safe cancellation lifecycle.
 
 **Test Levels:** `E2E`
 

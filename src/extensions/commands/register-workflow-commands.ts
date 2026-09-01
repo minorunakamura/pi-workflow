@@ -33,7 +33,8 @@ export function registerWorkflowCommands(
       description: command.description,
       handler: async (args, context) => {
         try {
-          await handler.execute(command.command, args);
+          const output = await handler.execute(command.command, args);
+          if (output !== undefined) context.ui.notify(output, "info");
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           context.ui.notify(message, "error");
