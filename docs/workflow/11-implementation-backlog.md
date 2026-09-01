@@ -1297,9 +1297,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Valid/degraded/unreadable Run candidates are handled.
-- [ ] SQLite can be deleted and rebuilt.
-- [ ] State revision/Event sequence incremental indexing works.
+- [x] Valid/degraded/unreadable Run candidates are handled.
+- [x] SQLite can be deleted and rebuilt.
+- [x] State revision/Event sequence incremental indexing works.
 
 **Test Levels:** `INT`
 
