@@ -919,10 +919,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Formal checks distinguish passed/failed/skipped/unavailable.
-- [ ] VR result/strength/basis/evidence are finalized.
-- [ ] Verifier source mutation is detected/rejected.
-- [ ] Failed required check is not converted to success by acceptance.
+- [x] Formal checks distinguish passed/failed/skipped/unavailable.
+- [x] VR result/strength/basis/evidence are finalized.
+- [x] Verifier source mutation is detected/rejected.
+- [x] Failed required check is not converted to success by acceptance.
 
 **Test Levels:** `INT`, `E2E`, `SEC`
 
