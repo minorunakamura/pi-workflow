@@ -1399,9 +1399,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] watcher hint + periodic reconciliation recovers missed updates.
-- [ ] SSE reconnect/refetch is safe.
-- [ ] corrupt Event/missing Artifact/index error is surfaced without mutating Workflow state.
+- [x] watcher hint + periodic reconciliation recovers missed updates.
+- [x] SSE reconnect/refetch is safe.
+- [x] corrupt Event/missing Artifact/index error is surfaced without mutating Workflow state.
 
 **Test Levels:** `E2E`
 

@@ -14,7 +14,8 @@ import {
   FileRunReader,
   resolveRunRelativeArtifactPath,
 } from "../../read-model/run-store-readers.js";
-import { defaultMonitorIndexPath } from "../indexer/sqlite-run-indexer.js";
+import { defaultMonitorIndexPath, type RunIndexer } from "../indexer/sqlite-run-indexer.js";
+import { MonitorLiveUpdater, MonitorUpdateHub, type MonitorNotification } from "../live-updates.js";
 import {
   renderMonitorPage,
   type MonitorArtifactView,
@@ -39,6 +40,7 @@ export const READ_ONLY_MONITOR_ROUTES = [
   "GET /api/v1/runs/:runId/artifacts",
   "GET /api/v1/runs/:runId/artifact?path=<run-relative-path>",
   "GET /api/v1/runs/:runId/evaluation",
+  "GET /api/v1/updates (SSE)",
   "GET /api/v1/compare?run=<A>&run=<B>",
 ] as const;
 
@@ -62,12 +64,17 @@ export type MonitorApiOptions = Readonly<{
   databasePath?: string;
   runReader?: Pick<RunReader, "load">;
   artifactReader?: ArtifactReader;
+  updates?: MonitorUpdateHub;
 }>;
 
 export type MonitorServerOptions = Readonly<
   MonitorApiOptions & {
     host?: string;
     port?: number;
+    indexer?: RunIndexer;
+    liveUpdates?: boolean;
+    reconciliationIntervalMs?: number;
+    watch?: boolean;
   }
 >;
 
@@ -410,6 +417,7 @@ export class ReadOnlyMonitorApi {
   private readonly repositoryRoot: string;
   private readonly runReader: Pick<RunReader, "load">;
   private readonly artifactReader: ArtifactReader;
+  private readonly updates: MonitorUpdateHub | undefined;
   private closed = false;
 
   constructor(repositoryRoot: string, options: MonitorApiOptions = {}) {
@@ -421,6 +429,7 @@ export class ReadOnlyMonitorApi {
     this.database = new DatabaseSync(this.databasePath, { readOnly: true });
     this.runReader = options.runReader ?? new FileRunReader(this.repositoryRoot);
     this.artifactReader = options.artifactReader ?? new FileArtifactReader(this.repositoryRoot);
+    this.updates = options.updates;
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -439,6 +448,23 @@ export class ReadOnlyMonitorApi {
         sendHtml(response, 200, await this.frontend(url.searchParams));
         return;
       }
+      if (url.pathname === "/api/v1/updates") {
+        this.streamUpdates(request, response, url);
+        return;
+      }
+      if (this.wantsEventStream(request)) {
+        const segments = decodePath(url.pathname);
+        if (
+          segments[0] === "api" &&
+          segments[1] === "v1" &&
+          segments[2] === "runs" &&
+          segments.length === 5 &&
+          segments[4] === "events"
+        ) {
+          this.streamUpdates(request, response, url, validRunId(segments[3] ?? ""));
+          return;
+        }
+      }
       const body = await this.route(url);
       sendJson(response, 200, body);
     } catch (error) {
@@ -450,6 +476,98 @@ export class ReadOnlyMonitorApi {
     if (this.closed) return;
     this.closed = true;
     this.database.close();
+  }
+
+  private wantsEventStream(request: IncomingMessage): boolean {
+    const accept = request.headers.accept;
+    return (
+      typeof accept === "string" &&
+      accept
+        .split(",")
+        .some((value) => value.trim().toLowerCase().split(";", 1)[0] === "text/event-stream")
+    );
+  }
+
+  private currentUpdates(runId?: RunId): MonitorNotification[] {
+    const rows =
+      runId === undefined
+        ? this.query("SELECT * FROM runs ORDER BY run_id ASC")
+        : [this.requireRun(runId)];
+    return rows.map((row) => ({
+      type: "run-updated" as const,
+      run_id: requireRunId(row),
+      state_revision: numberValue(row.state_revision),
+      last_event_sequence: numberValue(row.last_indexed_event_sequence) ?? 0,
+      index_status: text(row.index_status) ?? "unknown",
+      error_message: text(row.error_message),
+    }));
+  }
+
+  private streamUpdates(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+    runId?: RunId,
+  ): void {
+    if (runId !== undefined) this.requireRun(runId);
+    const afterValue = url.searchParams.get("after_sequence");
+    const afterSequence =
+      afterValue === null ? undefined : integerParameter(afterValue, "after_sequence", 0);
+    const reconnecting = request.headers["last-event-id"] !== undefined;
+    let closed = false;
+    let unsubscribe = (): void => undefined;
+
+    const cleanup = (): void => {
+      if (closed) return;
+      closed = true;
+      unsubscribe();
+      request.off("close", cleanup);
+      response.off("close", cleanup);
+    };
+    const send = (notification: MonitorNotification): void => {
+      if (closed || response.destroyed) return;
+      if (
+        runId !== undefined &&
+        notification.type === "run-updated" &&
+        notification.run_id !== runId
+      ) {
+        return;
+      }
+      const id =
+        notification.type === "run-updated"
+          ? `${notification.state_revision ?? 0}-${notification.last_event_sequence}`
+          : String(Date.now());
+      try {
+        response.write(
+          `id: ${id}\nevent: ${notification.type}\ndata: ${JSON.stringify(notification)}\n\n`,
+        );
+      } catch {
+        cleanup();
+      }
+    };
+
+    response.writeHead(200, {
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    });
+    unsubscribe = this.updates?.subscribe(send) ?? (() => undefined);
+    request.once("close", cleanup);
+    response.once("close", cleanup);
+    response.write(": connected\n\n");
+
+    const current = this.currentUpdates(runId);
+    if (
+      reconnecting ||
+      (afterSequence !== undefined &&
+        current.some(
+          (notification) =>
+            notification.type === "run-updated" && notification.last_event_sequence > afterSequence,
+        ))
+    ) {
+      current.forEach(send);
+    }
   }
 
   private async route(url: URL): Promise<unknown> {
@@ -605,6 +723,10 @@ export class ReadOnlyMonitorApi {
     const evaluationRecord =
       evaluation === undefined ? undefined : storedJson(evaluation.evaluation_json);
 
+    const warnings = [
+      ...(state === undefined ? ["current state is unavailable"] : []),
+      ...(text(row.error_message) === null ? [] : [`index: ${text(row.error_message)}`]),
+    ];
     return {
       run: runSummary(row),
       state: state ?? null,
@@ -617,7 +739,7 @@ export class ReadOnlyMonitorApi {
               evaluator_version: numberValue(evaluation.evaluator_version),
               evaluation: evaluationRecord?.valid ? evaluationRecord.value : null,
             },
-      ...(state === undefined ? { warnings: ["current state is unavailable"] } : {}),
+      ...(warnings.length === 0 ? {} : { warnings }),
     };
   }
 
@@ -1027,13 +1149,36 @@ export async function startMonitorServer(
   repositoryRoot: string,
   options: MonitorServerOptions = {},
 ): Promise<Server> {
-  const server = createMonitorServer(repositoryRoot, options);
+  const liveUpdater =
+    options.liveUpdates === false
+      ? undefined
+      : new MonitorLiveUpdater(repositoryRoot, {
+          ...(options.updates === undefined ? {} : { hub: options.updates }),
+          ...(options.indexer === undefined ? {} : { indexer: options.indexer }),
+          ...(options.reconciliationIntervalMs === undefined
+            ? {}
+            : { reconciliationIntervalMs: options.reconciliationIntervalMs }),
+          ...(options.watch === undefined ? {} : { watch: options.watch }),
+        });
+  if (liveUpdater !== undefined) await liveUpdater.start();
+
+  const server = createMonitorServer(repositoryRoot, {
+    ...(options.databasePath === undefined ? {} : { databasePath: options.databasePath }),
+    ...(options.runReader === undefined ? {} : { runReader: options.runReader }),
+    ...(options.artifactReader === undefined ? {} : { artifactReader: options.artifactReader }),
+    ...((liveUpdater?.hub ?? options.updates) === undefined
+      ? {}
+      : { updates: liveUpdater?.hub ?? options.updates }),
+  });
+  if (liveUpdater !== undefined) server.once("close", () => liveUpdater.stop());
+
   const host = options.host ?? DEFAULT_MONITOR_HOST;
   const port = options.port ?? DEFAULT_MONITOR_PORT;
 
   return new Promise<Server>((resolveServer, reject) => {
     const onError = (error: Error): void => {
       server.off("error", onError);
+      liveUpdater?.stop();
       reject(error);
     };
     server.once("error", onError);

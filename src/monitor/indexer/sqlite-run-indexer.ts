@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { DomainEvent } from "../../contracts/events/event.js";
@@ -6,8 +7,10 @@ import type { RunYamlV1 } from "../../contracts/state/workflow-state.js";
 import type { RunId } from "../../domain/primitives/ids.js";
 import type { WorkflowState } from "../../ports/run-reader.js";
 import {
+  assertNoSymlinkComponents,
   FileRunReader,
   JsonlEventReader,
+  resolveRunRelativeArtifactPath,
   type ReadTextFile,
 } from "../../read-model/run-store-readers.js";
 import { RunDiscovery, type RunCandidate } from "./run-discovery.js";
@@ -19,6 +22,19 @@ export type RunIndexerOptions = Readonly<{
   databasePath?: string;
   readFile?: ReadTextFile;
   discovery?: RunDiscovery;
+}>;
+
+export type RunIndexUpdate = Readonly<{
+  run_id: string;
+  state_revision: number | null;
+  last_event_sequence: number;
+  index_status: string;
+  error_message: string | null;
+}>;
+
+export type RunIndexResult = Readonly<{
+  candidates: readonly RunCandidate[];
+  updates: readonly RunIndexUpdate[];
 }>;
 
 type SqlValue = string | number | null;
@@ -203,6 +219,40 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+const RUN_UPDATE_COLUMNS = [
+  "state_revision",
+  "last_indexed_state_revision",
+  "last_indexed_event_sequence",
+  "status",
+  "updated_at",
+  "finalized",
+  "index_status",
+  "error_message",
+] as const;
+
+function beforeChanged(before: ExistingRun, after: ExistingRun): boolean {
+  return RUN_UPDATE_COLUMNS.some((column) => before[column] !== after[column]);
+}
+
+function runIndexUpdate(row: ExistingRun): RunIndexUpdate {
+  return {
+    run_id: text(row.run_id) ?? "",
+    state_revision: rowNumber(row, "state_revision"),
+    last_event_sequence: rowNumber(row, "last_indexed_event_sequence") ?? 0,
+    index_status: text(row.index_status) ?? "unknown",
+    error_message: text(row.error_message),
+  };
+}
+
 function runTimestamp(run: RunYamlV1, name: string): string | null {
   return text(run.timestamps[name]);
 }
@@ -309,6 +359,7 @@ function artifactField(data: Row, name: string): unknown {
 
 export class RunIndexer {
   readonly databasePath: string;
+  private readonly repositoryRoot: string;
   private readonly database: DatabaseSync;
   private readonly discovery: RunDiscovery;
   private readonly runReader: FileRunReader;
@@ -316,6 +367,7 @@ export class RunIndexer {
 
   constructor(repositoryRoot: string, options: RunIndexerOptions = {}) {
     const root = resolve(repositoryRoot);
+    this.repositoryRoot = root;
     this.databasePath = resolve(root, options.databasePath ?? DEFAULT_MONITOR_INDEX_PATH.join("/"));
     this.database = prepareDatabase(this.databasePath);
     this.discovery =
@@ -332,12 +384,30 @@ export class RunIndexer {
   }
 
   async index(): Promise<RunCandidate[]> {
+    return [...(await this.indexWithUpdates()).candidates];
+  }
+
+  async indexWithUpdates(): Promise<RunIndexResult> {
     const candidates = await this.discovery.scan();
+    const updates: RunIndexUpdate[] = [];
     for (const candidate of candidates) {
+      const before = this.existingRun(candidate.runId);
       await this.indexCandidate(candidate);
+      const after = this.existingRun(candidate.runId);
+      if (after !== undefined && (before === undefined || beforeChanged(before, after))) {
+        updates.push(runIndexUpdate(after));
+      }
     }
-    this.removeMissingRuns(candidates);
-    return candidates;
+    for (const runId of this.removeMissingRuns(candidates)) {
+      updates.push({
+        run_id: runId,
+        state_revision: null,
+        last_event_sequence: 0,
+        index_status: "removed",
+        error_message: null,
+      });
+    }
+    return { candidates, updates };
   }
 
   async rebuild(): Promise<RunCandidate[]> {
@@ -347,6 +417,10 @@ export class RunIndexer {
 
   close(): void {
     this.database.close();
+  }
+
+  hasIndexedRuns(): boolean {
+    return this.database.prepare("SELECT 1 FROM runs LIMIT 1").get() !== undefined;
   }
 
   private existingRun(runId: string): ExistingRun | undefined {
@@ -391,10 +465,17 @@ export class RunIndexer {
       rowNumber(existing, "last_indexed_event_sequence") ?? 0,
       ...(eventRead?.events.map((event) => event.sequence) ?? []),
     );
+    const artifactErrors =
+      candidate.state === "valid"
+        ? await this.artifactErrors(candidate, eventRead?.events ?? [])
+        : [];
     const indexStatus =
       candidate.state === "unreadable"
         ? "unreadable"
-        : candidate.state === "degraded" || stateError !== undefined || eventError !== undefined
+        : candidate.state === "degraded" ||
+            stateError !== undefined ||
+            eventError !== undefined ||
+            artifactErrors.length > 0
           ? "degraded"
           : eventRead?.degraded === true
             ? "degraded"
@@ -404,6 +485,7 @@ export class RunIndexer {
       stateError === undefined ? undefined : `state: ${stateError}`,
       eventError === undefined ? undefined : `events: ${eventError}`,
       eventRead?.degraded === true && eventError === undefined ? "events: degraded" : undefined,
+      ...artifactErrors,
     ].filter((value): value is string => value !== undefined);
     const runError = errors.length === 0 ? null : errors.join("; ");
 
@@ -423,6 +505,42 @@ export class RunIndexer {
         this.upsertEvent(event);
       }
     });
+  }
+
+  private async artifactErrors(
+    candidate: RunCandidate,
+    events: readonly DomainEvent[],
+  ): Promise<string[]> {
+    const paths = new Set<string>();
+    for (const row of this.database
+      .prepare("SELECT path FROM artifacts WHERE run_id = ?")
+      .all(candidate.runId)) {
+      const path = text(row.path);
+      if (path !== null) paths.add(path);
+    }
+    for (const event of events) {
+      if (event.type !== "artifact.finalized") continue;
+      const path = text(artifactField(record(event.data) ?? {}, "path"));
+      if (path !== null) paths.add(path);
+    }
+
+    const errors: string[] = [];
+    for (const path of paths) {
+      try {
+        const resolved = resolveRunRelativeArtifactPath(candidate.path, path);
+        await assertNoSymlinkComponents(this.repositoryRoot, resolved.path);
+        if (!(await lstat(resolved.path)).isFile()) {
+          errors.push(`artifacts: Artifact is not a regular file: ${path}`);
+        }
+      } catch (error) {
+        errors.push(
+          isNotFound(error)
+            ? `artifacts: missing Artifact file: ${path}`
+            : `artifacts: ${errorMessage(error)}`,
+        );
+      }
+    }
+    return errors;
   }
 
   private upsertRun(
@@ -694,7 +812,7 @@ export class RunIndexer {
     }
   }
 
-  private removeMissingRuns(candidates: readonly RunCandidate[]): void {
+  private removeMissingRuns(candidates: readonly RunCandidate[]): string[] {
     const present = new Set(candidates.map((candidate) => candidate.runId));
     const indexed = this.database
       .prepare("SELECT run_id FROM runs")
@@ -702,7 +820,7 @@ export class RunIndexer {
       .map((row) => runIdValue(row.run_id))
       .filter((runId): runId is string => runId !== null);
     const missing = indexed.filter((runId) => !present.has(runId));
-    if (missing.length === 0) return;
+    if (missing.length === 0) return [];
 
     this.transaction(() => {
       for (const runId of missing) {
@@ -719,6 +837,7 @@ export class RunIndexer {
         this.database.prepare("DELETE FROM runs WHERE run_id = ?").run(runId);
       }
     });
+    return missing;
   }
 }
 

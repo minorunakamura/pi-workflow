@@ -1269,6 +1269,14 @@ code { white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 760px) { main { padding: 14px; } .section-heading, .detail-heading { display: block; } .filters { margin-top: 14px; } .filters label, .filters input, .filters select, .filters button { width: 100%; } }
 `;
 
+const LIVE_UPDATE_SCRIPT = `<script>
+(() => {
+  if (typeof EventSource === "undefined") return;
+  const stream = new EventSource("/api/v1/updates");
+  stream.addEventListener("run-updated", () => window.location.reload());
+})();
+</script>`;
+
 export function renderMonitorPage(data: MonitorPageData): string {
   return `<!doctype html>
 <html lang="en">
@@ -1285,6 +1293,7 @@ export function renderMonitorPage(data: MonitorPageData): string {
     ${data.compare === undefined ? "" : renderCompareView(data.compare)}
     ${data.selected === undefined ? "" : renderSelectedRun(data.selected)}
   </main>
+  ${LIVE_UPDATE_SCRIPT}
 </body>
 </html>`;
 }
