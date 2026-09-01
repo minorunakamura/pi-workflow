@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
-  WorkerFinalizer,
+  WorkerExecutionInterruptedError,
   WorkerExecutor,
+  WorkerFinalizer,
 } from "../../src/application/execution/worker-finalizer.js";
+import { InterruptedExecutionRecovery } from "../../src/application/recovery/interrupted-execution-recovery.js";
 import type {
   AgentExecutionRequestV1,
   StepResultV1,
@@ -303,5 +305,74 @@ describe("WorkerExecutor and WorkerFinalizer integration", () => {
       }).run({ request: input, executionStateRevision: 1 }),
     ).rejects.toMatchObject({ code: "GIT_WRITE_DENIED" });
     expect(called).toBe(false);
+  });
+
+  it("allows a read-only retry only when the repository premise remains unchanged", async () => {
+    await withTempRepository({ "src/target.txt": "before\n" }, async (repositoryRoot) => {
+      await initializeGit(repositoryRoot);
+      const repository = new GitRepositoryAdapter(repositoryRoot);
+      const before = await repository.captureSnapshot();
+      const baseRequest = request("exec-008");
+      const input = {
+        ...baseRequest,
+        identity: { ...baseRequest.identity, agentId: "scout" },
+        execution: { ...baseRequest.execution, mode: "read-only" as const },
+      };
+      const recovery = new InterruptedExecutionRecovery({ repository });
+
+      await expect(
+        recovery.recover({ request: input, before, executionStateRevision: 1 }),
+      ).resolves.toMatchObject({ kind: "retryable", diff: { changedFiles: [] } });
+
+      await writeFile(join(repositoryRoot, "src/target.txt"), "external change\n", "utf8");
+      await expect(
+        recovery.recover({ request: input, before, executionStateRevision: 1 }),
+      ).resolves.toMatchObject({
+        kind: "reconcile-required",
+        diff: { changedFiles: ["src/target.txt"] },
+      });
+    });
+  });
+
+  it("inspects an interrupted Worker and finalizes its repository mutation as partial", async () => {
+    await withTempRepository({ "src/target.txt": "before\n" }, async (repositoryRoot) => {
+      await initializeGit(repositoryRoot);
+      const input = request("exec-009");
+      let calls = 0;
+      const error = await new WorkerExecutor({
+        agentRuntime: {
+          run: async () => {
+            calls += 1;
+            await writeFile(join(repositoryRoot, "src/target.txt"), "partial\n", "utf8");
+            throw new Error("worker crashed");
+          },
+        },
+        repository: new GitRepositoryAdapter(repositoryRoot),
+        finalizer: finalizer(repositoryRoot),
+      })
+        .run({ request: input, executionStateRevision: 3 })
+        .then(
+          () => undefined,
+          (failure: unknown) => failure,
+        );
+
+      expect(error).toBeInstanceOf(WorkerExecutionInterruptedError);
+      if (!(error instanceof WorkerExecutionInterruptedError)) {
+        return;
+      }
+      expect(calls).toBe(1);
+      expect(error.recovery).toMatchObject({
+        kind: "partial",
+        diff: { changedFiles: ["src/target.txt"] },
+        finalization: { changeSet: { status: "partial", accepted: false } },
+      });
+      const artifactRef = error.recovery.finalization?.artifact;
+      expect(artifactRef).toBeDefined();
+      if (artifactRef === undefined) {
+        return;
+      }
+      const artifact = await new FileArtifactStore(repositoryRoot).read(artifactRef);
+      expect(artifact.frontMatter.artifact.status).toBe("partial");
+    });
   });
 });

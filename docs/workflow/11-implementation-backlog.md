@@ -1020,9 +1020,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Read-only interrupted execution has safe retry policy.
-- [ ] Interrupted Worker inspects/reconciles repository before any retry.
-- [ ] Partial mutation can produce partial record/recovery path.
+- [x] Read-only interrupted execution has safe retry policy.
+- [x] Interrupted Worker inspects/reconciles repository before any retry.
+- [x] Partial mutation can produce partial record/recovery path.
 
 **Test Levels:** `CRASH`
 

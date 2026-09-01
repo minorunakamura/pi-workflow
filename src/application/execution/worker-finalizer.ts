@@ -30,6 +30,10 @@ import type {
   RepositorySnapshot,
   RepositoryStatusEntry,
 } from "../../ports/repository.js";
+import {
+  InterruptedExecutionRecovery,
+  type InterruptedExecutionRecoveryResult,
+} from "../recovery/interrupted-execution-recovery.js";
 
 export type WriteScope = RepositoryScope;
 
@@ -127,6 +131,25 @@ export class WorkerFinalizationError extends Error {
   ) {
     super(`${code}: ${message}`);
     this.name = "WorkerFinalizationError";
+  }
+}
+
+export class WorkerExecutionInterruptedError extends Error {
+  readonly code = "WORKER_EXECUTION_INTERRUPTED";
+
+  constructor(
+    readonly recovery: InterruptedExecutionRecoveryResult,
+    cause: unknown,
+  ) {
+    super(
+      `Worker execution was interrupted for ${recovery.request.identity.runId}/${
+        recovery.request.identity.stepId
+      }/${recovery.request.identity.executionId}: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause },
+    );
+    this.name = "WorkerExecutionInterruptedError";
   }
 }
 
@@ -691,14 +714,33 @@ export type WorkerExecutionResult = Readonly<{
 
 /** Executes one Worker between full repository snapshots and finalizes its Change Set. */
 export class WorkerExecutor {
-  constructor(private readonly dependencies: WorkerExecutionDependencies) {}
+  private readonly interruptedExecutionRecovery: InterruptedExecutionRecovery;
+
+  constructor(private readonly dependencies: WorkerExecutionDependencies) {
+    this.interruptedExecutionRecovery = new InterruptedExecutionRecovery({
+      repository: dependencies.repository,
+      workerFinalizer: dependencies.finalizer,
+    });
+  }
 
   async run(input: WorkerExecutionInput): Promise<WorkerExecutionResult> {
     const request = validateWorkerExecutionRequest(input.request);
     const scope = effectiveWriteScope(input.writeScope, request);
     validRevision(input.executionStateRevision);
     const before = await this.dependencies.repository.captureSnapshot();
-    const result = workerResult(await this.dependencies.agentRuntime.run(request), request);
+    let rawResult: unknown;
+    try {
+      rawResult = await this.dependencies.agentRuntime.run(request);
+    } catch (error) {
+      const recovery = await this.interruptedExecutionRecovery.recover({
+        request,
+        before,
+        executionStateRevision: input.executionStateRevision,
+        writeScope: scope,
+      });
+      throw new WorkerExecutionInterruptedError(recovery, error);
+    }
+    const result = workerResult(rawResult, request);
     const after = await this.dependencies.repository.captureSnapshot();
     const diff = await this.dependencies.repository.diff(before, after);
     const finalization = await this.dependencies.finalizer.finalize({
