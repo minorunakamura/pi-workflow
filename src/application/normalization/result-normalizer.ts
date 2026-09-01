@@ -66,6 +66,11 @@ export type NormalizedCandidate<Id extends string> = ResultCandidate &
     id: Id;
   }>;
 
+export type NormalizedFindingRecheck = ResultCandidate &
+  Readonly<{
+    id: FindingId;
+  }>;
+
 export type NormalizedResultCandidates = Readonly<{
   uncertainty_candidates: readonly NormalizedCandidate<UncertaintyId>[];
   decision_requests: readonly NormalizedCandidate<DecisionId>[];
@@ -75,7 +80,7 @@ export type NormalizedResultCandidates = Readonly<{
     assumptions: readonly ResultCandidate[];
   }>;
   finding_candidates: readonly NormalizedCandidate<FindingId>[];
-  finding_rechecks: readonly ResultCandidate[];
+  finding_rechecks: readonly NormalizedFindingRecheck[];
   plan_deviations: readonly NormalizedCandidate<PlanDeviationId>[];
   skill_requests: readonly ResultCandidate[];
   execution_checks: readonly ResultCandidate[];
@@ -261,6 +266,38 @@ function identify<Id extends string>(
   return { ...candidate, id: allocateUnique(issue, used) };
 }
 
+function findingReference(
+  candidate: ResultCandidate,
+  index: number,
+  state: WorkflowState,
+): FindingId {
+  const keys = ["findingId", "finding_id"].filter((key) => Object.hasOwn(candidate, key));
+  if (keys.length !== 1) {
+    fail(
+      "REFERENCE_INVALID",
+      `finding_rechecks[${index}] must contain exactly one findingId or finding_id reference`,
+    );
+  }
+  const reference = candidate[keys[0]!];
+  if (typeof reference !== "string" || !/^F-\d+$/.test(reference)) {
+    fail("REFERENCE_INVALID", `finding_rechecks[${index}] must reference an F-<number> Finding`);
+  }
+  if (!state.snapshot.findings.findings.some(({ id }) => id === reference)) {
+    fail("REFERENCE_INVALID", `Unknown Finding reference: ${reference}`);
+  }
+  return reference as FindingId;
+}
+
+function normalizeFindingRechecks(
+  result: StepResultV1,
+  state: WorkflowState,
+): readonly NormalizedFindingRecheck[] {
+  return result.finding_rechecks.map((candidate, index) => ({
+    ...candidate,
+    id: findingReference(candidate, index, state),
+  }));
+}
+
 export function normalizeResultCandidates(
   input: Readonly<{
     result: StepResultV1;
@@ -298,7 +335,7 @@ export function normalizeResultCandidates(
     finding_candidates: result.finding_candidates.map((candidate) =>
       identify(candidate, () => allocator.issueFindingId(), used.findings),
     ),
-    finding_rechecks: result.finding_rechecks,
+    finding_rechecks: normalizeFindingRechecks(result, input.state),
     plan_deviations: result.plan_deviations.map((candidate) =>
       identify(candidate, () => allocator.issuePlanDeviationId(), used.planDeviations),
     ),

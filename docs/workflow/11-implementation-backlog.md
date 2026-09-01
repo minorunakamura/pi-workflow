@@ -941,9 +941,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] RR and F-ID candidate normalization work.
-- [ ] Rechecks can fix/dismiss/reopen the same Finding identity.
-- [ ] Reviewer source mutation is denied.
+- [x] RR and F-ID candidate normalization work.
+- [x] Rechecks can fix/dismiss/reopen the same Finding identity.
+- [x] Reviewer source mutation is denied.
 
 **Test Levels:** `INT`, `E2E`, `SEC`
 

@@ -98,6 +98,22 @@ describe("Result normalization contract", () => {
     expect(result().uncertainty_candidates[0]).not.toHaveProperty("id", "U-002");
   });
 
+  it("preserves an existing Finding identity for a recheck", () => {
+    const normalized = normalizeResultCandidates({
+      result: StepResultV1Schema.parse({
+        ...result(),
+        finding_candidates: [],
+        finding_rechecks: [{ findingId: "F-001", action: "fix" }],
+      }),
+      state: stateWithExistingIds(),
+    });
+
+    expect(normalized.finding_rechecks[0]).toMatchObject({
+      id: "F-001",
+      findingId: "F-001",
+    });
+  });
+
   it("rejects role, permission, and Artifact reference violations", async () => {
     const base = {
       result: result(),

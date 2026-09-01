@@ -359,6 +359,35 @@ function candidateArray(
   });
 }
 
+function findingRecheckArray(
+  input: unknown,
+  contract: string,
+  path: string,
+): readonly ResultCandidate[] {
+  const value = arrayValue(input, contract, path);
+  return value.map((entry, index) => {
+    const itemPath = `${path}[${index}]`;
+    const candidate = jsonObject(entry, contract, itemPath);
+    const referenceKeys = ["findingId", "finding_id"].filter((key) => key in candidate);
+    if (referenceKeys.length !== 1) {
+      fail(contract, itemPath, "exactly one findingId or finding_id Finding reference");
+    }
+    const referenceKey = referenceKeys[0]!;
+    const reference = candidate[referenceKey];
+    if (typeof reference !== "string" || !/^F-\d+$/.test(reference)) {
+      fail(contract, `${itemPath}.${referenceKey}`, "an F-<number> Finding identity");
+    }
+    for (const [key, entryValue] of Object.entries(candidate)) {
+      if (key === referenceKey) continue;
+      const stateIdPath = findAuthoritativeStateId(entryValue, `${itemPath}.${key}`);
+      if (stateIdPath) {
+        fail(contract, stateIdPath, "no authoritative State ID outside the Finding reference");
+      }
+    }
+    return candidate;
+  });
+}
+
 function requirementCandidateArray(input: unknown, path: string): readonly ResultCandidate[] {
   const candidates = candidateArray(input, RESULT_CONTRACT, path);
   return candidates.map((candidate, index) => {
@@ -491,7 +520,11 @@ export function parseStepResultV1(input: unknown): StepResultV1 {
     "execution_checks",
     "observations",
   ] as const) {
-    candidateArray(root[name], RESULT_CONTRACT, name);
+    if (name === "finding_rechecks") {
+      findingRecheckArray(root[name], RESULT_CONTRACT, name);
+    } else {
+      candidateArray(root[name], RESULT_CONTRACT, name);
+    }
   }
 
   const requirements = record(
