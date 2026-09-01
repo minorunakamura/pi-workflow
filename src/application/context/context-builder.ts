@@ -194,6 +194,7 @@ export function buildContext(input: ContextBuilderInput): ContextBuildResult {
   }
 
   const selectedEntries = available.filter(({ candidate }) => selected.has(candidate.ref));
+  const trimCount = available.filter(({ candidate }) => !selected.has(candidate.ref)).length;
   const pack: Record<string, JsonValue> = {};
   const artifactRefs: string[] = [];
   const seenArtifactRefs = new Set<string>();
@@ -215,6 +216,7 @@ export function buildContext(input: ContextBuilderInput): ContextBuildResult {
     artifactRefs,
     decisionRefs: uniqueRefs(input.decisionRefs ?? []),
     uncertaintyRefs: uniqueRefs(input.uncertaintyRefs ?? []),
+    trim_count: trimCount,
     inclusionMode: Object.fromEntries(
       selectedEntries.map(({ candidate }) => [candidate.ref, candidate.priority]),
     ),

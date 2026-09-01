@@ -6,6 +6,7 @@ import {
   SUBAGENT_DELEGATION_CANCEL_EVENT,
   SUBAGENT_DELEGATION_REQUEST_EVENT,
   SUBAGENT_DELEGATION_RESPONSE_EVENT,
+  SUBAGENT_DELEGATION_UPDATE_EVENT,
   type SubagentDelegationRequest,
   type SubagentDelegationResponse,
 } from "pi-subagents/delegation";
@@ -20,6 +21,7 @@ import {
   type StepResultV1,
 } from "../../src/contracts/execution/agent-execution.js";
 import type { ExecutionId, RunId, StepId } from "../../src/domain/primitives/ids.js";
+import { TelemetryAgentRuntime } from "../../src/telemetry/runtime-metrics.js";
 
 const RUN_ID = "run-001" as RunId;
 const STEP_ID = "step-001" as StepId;
@@ -111,8 +113,120 @@ describe("PiSubagentsAdapter integration", () => {
       result: { kind: "structured", schema: STEP_RESULT_SCHEMA },
     });
     expect(requests[0]).not.toHaveProperty("workflowScript");
-    expect(actual).toEqual(expected);
-    expect(StepResultV1Schema.parse(actual)).toEqual(expected);
+    expect(actual).toMatchObject(expected);
+    expect(actual.runtime).toMatchObject({
+      telemetry: {
+        telemetry_level: "standard",
+        model_requested: "test-model",
+        model_actual: "test-model",
+        tools_selected: [],
+        skills_selected: [],
+      },
+    });
+    expect(StepResultV1Schema.parse(actual)).toEqual(actual);
+  });
+
+  it("captures provider usage and actual Tool observations without payloads", async () => {
+    const events = createEventBus();
+    const input = {
+      ...request(),
+      skills: { required: [{ id: "tdd", version: "1" }], optional: [] },
+      tools: { resolved: ["read"], policy: {} },
+      context: {
+        pack: { requirement: "selected context" },
+        manifest: { estimatedTokenSize: 17, trim_count: 2 },
+        artifactRefs: [],
+      },
+    } satisfies AgentExecutionRequestV1;
+
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      events.emit(SUBAGENT_DELEGATION_UPDATE_EVENT, {
+        requestId: delegation.requestId,
+        ownerRunId: delegation.ownerRunId,
+        nodeId: delegation.nodeId,
+        currentTool: "read",
+        currentToolArgs: "password=do-not-persist",
+        recentOutput: "full tool result must not be persisted",
+        recentTools: [{ tool: "read", args: "token=do-not-persist" }],
+        toolCount: 1,
+        durationMs: 42,
+        tokens: 15,
+      });
+      events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+        requestId: delegation.requestId,
+        ownerRunId: delegation.ownerRunId,
+        nodeId: delegation.nodeId,
+        status: "completed",
+        model: "provider/api_key=very-secret",
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 2,
+          cacheWrite: 0,
+          cost: 0.12,
+          turns: 1,
+          toolCalls: 1,
+          durationMs: 42,
+        },
+        result: { kind: "structured", value: result(input) },
+      } satisfies SubagentDelegationResponse);
+    });
+
+    const actual = await new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input);
+    const telemetry = actual.runtime.telemetry;
+
+    expect(telemetry).toMatchObject({
+      telemetry_level: "standard",
+      wall_clock_ms: expect.any(Number),
+      active_wall_ms: expect.any(Number),
+      input_tokens: 10,
+      output_tokens: 5,
+      tokens: 15,
+      cached_input_tokens: 2,
+      cost: 0.12,
+      execution_sum_ms: 42,
+      tool_calls: 1,
+      pack_tokens_estimated_total: 17,
+      pack_tokens_estimated_peak: 17,
+      trim_count: 2,
+      model_requested: "test-model",
+      model_actual: "provider/api_key=[REDACTED_SECRET]",
+      tools_selected: ["read"],
+      tools_used: ["read"],
+      skills_selected: [{ id: "tdd", version: "1" }],
+    });
+    expect(telemetry).not.toHaveProperty("prompt");
+    expect(telemetry).not.toHaveProperty("tool_result");
+    expect(JSON.stringify(telemetry)).not.toContain("do-not-persist");
+    expect(JSON.stringify(telemetry)).not.toContain("very-secret");
+    expect(JSON.stringify(telemetry)).not.toContain("full tool result");
+  });
+
+  it("keeps minimal telemetry aggregate-only", async () => {
+    const input = {
+      ...request(),
+      skills: { required: [{ id: "tdd", version: "1" }], optional: [] },
+      tools: { resolved: ["read"], policy: {} },
+      context: {
+        pack: { prompt: "must not be copied" },
+        manifest: { estimatedTokenSize: 99 },
+        artifactRefs: [],
+      },
+    } satisfies AgentExecutionRequestV1;
+    const ticks = [100, 140];
+    const runtime = new TelemetryAgentRuntime(
+      { run: async () => result(input) },
+      { level: "minimal", now: () => ticks.shift() ?? 140 },
+    );
+
+    const actual = (await runtime.run(input)) as StepResultV1;
+    expect(actual.runtime.telemetry).toEqual({
+      telemetry_level: "minimal",
+      wall_clock_ms: 40,
+      active_wall_ms: 40,
+      execution_sum_ms: 40,
+    });
   });
 
   it("normalizes structured model references and rejects unconfigured actual models", async () => {

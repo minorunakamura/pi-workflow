@@ -1218,9 +1218,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Timing/tokens/context/model/tool/skill measurements are captured where available.
-- [ ] Standard telemetry does not persist full prompts/tool results.
-- [ ] Secret redaction is applied.
+- [x] Timing/tokens/context/model/tool/skill measurements are captured where available.
+- [x] Standard telemetry does not persist full prompts/tool results.
+- [x] Secret redaction is applied.
 
 **Test Levels:** `INT`
 

@@ -313,6 +313,17 @@ describe("Orchestrator persistence integration", () => {
       expect(events.map(({ type }) => type)).not.toEqual(
         expect.arrayContaining(["step.ready", "run.finalized"]),
       );
+      const execution = events.find(({ type }) => type === "execution.completed");
+      expect(execution?.data).toMatchObject({
+        telemetry: {
+          telemetry_level: "standard",
+          model_requested: "test",
+          model_actual: "test",
+          tools_selected: [],
+          skills_selected: [],
+        },
+      });
+      expect(JSON.stringify(execution?.data)).not.toContain("objective");
     });
   });
 

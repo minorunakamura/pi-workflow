@@ -52,6 +52,7 @@ describe("buildContext", () => {
       artifactRefs: [],
       decisionRefs: ["D-001"],
       uncertaintyRefs: ["U-001"],
+      trim_count: 1,
       estimatedTokenSize: 4,
     });
     expect(result.manifest.inclusionMode).toEqual({
@@ -72,6 +73,7 @@ describe("buildContext", () => {
       artifactRefs: [],
       decisionRefs: [],
       uncertaintyRefs: [],
+      trim_count: 0,
       estimatedTokenSize: 0,
     });
     expect(JSON.stringify(result)).not.toContain("conversation");

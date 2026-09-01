@@ -36,6 +36,7 @@ import type {
 import { createIdAllocator } from "../../domain/primitives/ids.js";
 import type { NormalizedCandidate } from "../normalization/result-normalizer.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
+import { TelemetryAgentRuntime, type TelemetryLevel } from "../../telemetry/runtime-metrics.js";
 import type { ArtifactRef, ArtifactStore } from "../../ports/artifact-store.js";
 import type {
   RepositoryAdapter,
@@ -617,6 +618,7 @@ export class ReviewerFinalizer {
 
 export type ReviewerExecutionDependencies = Readonly<{
   agentRuntime: AgentRuntime;
+  telemetryLevel?: TelemetryLevel;
   repository: RepositoryAdapter;
   finalizer: Pick<ReviewerFinalizer, "finalize">;
 }>;
@@ -640,13 +642,20 @@ export type ReviewerExecutionResult = Readonly<{
 
 /** Executes one read-only Reviewer between repository snapshots. */
 export class ReviewerExecutor {
-  constructor(private readonly dependencies: ReviewerExecutionDependencies) {}
+  private readonly agentRuntime: AgentRuntime;
+
+  constructor(private readonly dependencies: ReviewerExecutionDependencies) {
+    this.agentRuntime = new TelemetryAgentRuntime(
+      dependencies.agentRuntime,
+      dependencies.telemetryLevel === undefined ? {} : { level: dependencies.telemetryLevel },
+    );
+  }
 
   async run(input: ReviewerExecutionInput): Promise<ReviewerExecutionResult> {
     const request = validateReviewerExecutionRequest(input.request);
     validRevision(input.executionStateRevision);
     const before = await this.dependencies.repository.captureSnapshot();
-    const result = reviewerResult(await this.dependencies.agentRuntime.run(request), request);
+    const result = reviewerResult(await this.agentRuntime.run(request), request);
     const after = await this.dependencies.repository.captureSnapshot();
     const diff = await this.dependencies.repository.diff(before, after);
     const finalization = await this.dependencies.finalizer.finalize({

@@ -3,9 +3,12 @@ import {
   SUBAGENT_DELEGATION_CANCEL_EVENT,
   SUBAGENT_DELEGATION_REQUEST_EVENT,
   SUBAGENT_DELEGATION_RESPONSE_EVENT,
+  SUBAGENT_DELEGATION_UPDATE_EVENT,
   type SubagentDelegationRequest,
   type SubagentDelegationResponse,
   type SubagentDelegationThinking,
+  type SubagentDelegationUpdate,
+  type SubagentDelegationUsage,
 } from "pi-subagents/delegation";
 import {
   parseStepResultV1,
@@ -14,14 +17,33 @@ import {
   type StepResultV1,
 } from "../../contracts/execution/agent-execution.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
+import {
+  attachRuntimeTelemetry,
+  captureRuntimeTelemetry,
+  type RuntimeTelemetryUsage,
+  type TelemetryLevel,
+} from "../../telemetry/runtime-metrics.js";
 
 const MAX_DELEGATION_TIMEOUT_MS = 2_147_483_647;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 type PiEventBus = ExtensionAPI["events"];
 
+type ExecutionObservation = Readonly<{
+  toolCount?: number;
+  durationMs?: number;
+  tokens?: number;
+  toolsUsed: ReadonlySet<string>;
+}>;
+
+type AgentRuntimeExecution = Readonly<{
+  response: SubagentDelegationResponse;
+  observation: ExecutionObservation;
+}>;
+
 export type PiSubagentsAdapterOptions = Readonly<{
   cwd?: string;
+  telemetryLevel?: TelemetryLevel;
 }>;
 
 const resultArraySchema = { type: "array" } as const;
@@ -204,6 +226,67 @@ function isResponseFor(
   );
 }
 
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function observeUpdate(
+  payload: SubagentDelegationUpdate,
+  observation: {
+    toolCount?: number;
+    durationMs?: number;
+    tokens?: number;
+    toolsUsed: Set<string>;
+  },
+): void {
+  const toolCount = nonNegativeNumber(payload.toolCount);
+  if (toolCount !== undefined) {
+    observation.toolCount = Math.max(observation.toolCount ?? 0, toolCount);
+  }
+  const durationMs = nonNegativeNumber(payload.durationMs);
+  if (durationMs !== undefined) {
+    observation.durationMs = Math.max(observation.durationMs ?? 0, durationMs);
+  }
+  const tokens = nonNegativeNumber(payload.tokens);
+  if (tokens !== undefined) {
+    observation.tokens = Math.max(observation.tokens ?? 0, tokens);
+  }
+  if (typeof payload.currentTool === "string" && payload.currentTool.trim().length > 0) {
+    observation.toolsUsed.add(payload.currentTool.trim());
+  }
+  for (const tool of Array.isArray(payload.recentTools) ? payload.recentTools : []) {
+    if (isRecord(tool) && typeof tool.tool === "string" && tool.tool.trim().length > 0) {
+      observation.toolsUsed.add(tool.tool.trim());
+    }
+  }
+}
+
+function runtimeUsage(
+  usage: SubagentDelegationUsage | undefined,
+  observation: ExecutionObservation,
+): RuntimeTelemetryUsage | undefined {
+  if (usage === undefined) {
+    return observation.durationMs === undefined &&
+      observation.toolCount === undefined &&
+      observation.tokens === undefined
+      ? undefined
+      : {
+          ...(observation.durationMs === undefined ? {} : { executionMs: observation.durationMs }),
+          ...(observation.toolCount === undefined ? {} : { toolCalls: observation.toolCount }),
+          ...(observation.tokens === undefined ? {} : { totalTokens: observation.tokens }),
+        };
+  }
+  return {
+    inputTokens: usage.input,
+    outputTokens: usage.output,
+    totalTokens: usage.input + usage.output,
+    cachedInputTokens: usage.cacheRead,
+    cost: usage.cost,
+    executionMs: usage.durationMs,
+    toolCalls: Math.max(usage.toolCalls, observation.toolCount ?? 0),
+  };
+}
+
 function abortError(): Error {
   const error = new Error("PiSubagents Agent Execution was aborted");
   error.name = "AbortError";
@@ -213,6 +296,7 @@ function abortError(): Error {
 export class PiSubagentsAdapter implements AgentRuntime {
   private readonly events: PiEventBus;
   private readonly cwd: string;
+  private readonly telemetryLevel: TelemetryLevel | undefined;
 
   constructor(pi: Pick<ExtensionAPI, "events">, options: PiSubagentsAdapterOptions = {}) {
     const cwd = options.cwd ?? process.cwd();
@@ -221,13 +305,16 @@ export class PiSubagentsAdapter implements AgentRuntime {
     }
     this.events = pi.events;
     this.cwd = cwd;
+    this.telemetryLevel = options.telemetryLevel;
   }
 
   async run(
     request: AgentExecutionRequestV1,
     signal: AbortSignal = new AbortController().signal,
   ): Promise<StepResultV1> {
-    const response = await this.execute(request, signal);
+    const started = performance.now();
+    const execution = await this.execute(request, signal);
+    const response = execution.response;
     if (response.status !== "completed") {
       throw new Error(
         `PiSubagents Agent Execution ${response.status}: ${response.error ?? "no error details"}`,
@@ -236,33 +323,48 @@ export class PiSubagentsAdapter implements AgentRuntime {
     if (response.result?.kind !== "structured") {
       throw new Error("PiSubagents Agent Execution did not return a structured StepResultV1");
     }
-    return parseStepResultV1(response.result.value);
+    const result = parseStepResultV1(response.result.value);
+    const wallClockMs = Math.max(0, Math.round(performance.now() - started));
+    const usage = runtimeUsage(response.usage, execution.observation);
+    const telemetry = captureRuntimeTelemetry(request, {
+      ...(this.telemetryLevel === undefined ? {} : { level: this.telemetryLevel }),
+      wallClockMs,
+      ...(response.model === undefined ? {} : { model: response.model }),
+      ...(usage === undefined ? {} : { usage }),
+      ...(execution.observation.toolsUsed.size === 0
+        ? {}
+        : { toolsUsed: [...execution.observation.toolsUsed] }),
+    });
+    return attachRuntimeTelemetry(result, telemetry);
   }
 
   private execute(
     request: AgentExecutionRequestV1,
     signal: AbortSignal,
-  ): Promise<SubagentDelegationResponse> {
+  ): Promise<AgentRuntimeExecution> {
     const delegationRequest = createDelegationRequest(request, this.cwd);
 
     if (signal.aborted) {
       return Promise.reject(abortError());
     }
 
-    return new Promise<SubagentDelegationResponse>((resolve, reject) => {
+    const observation = { toolsUsed: new Set<string>() };
+    return new Promise<AgentRuntimeExecution>((resolve, reject) => {
       let sent = false;
       let settled = false;
-      let unsubscribe: (() => void) | undefined;
+      let unsubscribeResponse: (() => void) | undefined;
+      let unsubscribeUpdate: (() => void) | undefined;
 
       const cleanup = (): void => {
-        unsubscribe?.();
+        unsubscribeResponse?.();
+        unsubscribeUpdate?.();
         signal.removeEventListener("abort", onAbort);
       };
       const resolveResponse = (response: SubagentDelegationResponse): void => {
         if (settled) return;
         settled = true;
         cleanup();
-        resolve(response);
+        resolve({ response, observation });
       };
       const rejectExecution = (error: Error): void => {
         if (settled) return;
@@ -275,6 +377,17 @@ export class PiSubagentsAdapter implements AgentRuntime {
           resolveResponse(payload);
         }
       };
+      const onUpdate = (payload: unknown): void => {
+        if (
+          !isRecord(payload) ||
+          payload.requestId !== delegationRequest.requestId ||
+          payload.ownerRunId !== delegationRequest.ownerRunId ||
+          payload.nodeId !== delegationRequest.nodeId
+        ) {
+          return;
+        }
+        observeUpdate(payload as unknown as SubagentDelegationUpdate, observation);
+      };
       const onAbort = (): void => {
         if (sent) {
           this.events.emit(SUBAGENT_DELEGATION_CANCEL_EVENT, {
@@ -286,7 +399,8 @@ export class PiSubagentsAdapter implements AgentRuntime {
         rejectExecution(abortError());
       };
 
-      unsubscribe = this.events.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, onResponse);
+      unsubscribeResponse = this.events.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, onResponse);
+      unsubscribeUpdate = this.events.on(SUBAGENT_DELEGATION_UPDATE_EVENT, onUpdate);
       signal.addEventListener("abort", onAbort, { once: true });
       try {
         sent = true;

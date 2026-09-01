@@ -21,6 +21,7 @@ import type {
 } from "../../domain/primitives/ids.js";
 import { createIdAllocator } from "../../domain/primitives/ids.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
+import { TelemetryAgentRuntime, type TelemetryLevel } from "../../telemetry/runtime-metrics.js";
 import type { ArtifactRef, ArtifactStore } from "../../ports/artifact-store.js";
 import type {
   RepositoryAdapter,
@@ -694,6 +695,7 @@ export class WorkerFinalizer {
 
 export type WorkerExecutionDependencies = Readonly<{
   agentRuntime: AgentRuntime;
+  telemetryLevel?: TelemetryLevel;
   repository: RepositoryAdapter;
   finalizer: Pick<WorkerFinalizer, "finalize">;
 }>;
@@ -715,9 +717,14 @@ export type WorkerExecutionResult = Readonly<{
 
 /** Executes one Worker between full repository snapshots and finalizes its Change Set. */
 export class WorkerExecutor {
+  private readonly agentRuntime: AgentRuntime;
   private readonly interruptedExecutionRecovery: InterruptedExecutionRecovery;
 
   constructor(private readonly dependencies: WorkerExecutionDependencies) {
+    this.agentRuntime = new TelemetryAgentRuntime(
+      dependencies.agentRuntime,
+      dependencies.telemetryLevel === undefined ? {} : { level: dependencies.telemetryLevel },
+    );
     this.interruptedExecutionRecovery = new InterruptedExecutionRecovery({
       repository: dependencies.repository,
       workerFinalizer: dependencies.finalizer,
@@ -731,7 +738,7 @@ export class WorkerExecutor {
     const before = await this.dependencies.repository.captureSnapshot();
     let rawResult: unknown;
     try {
-      rawResult = await this.dependencies.agentRuntime.run(request, input.signal);
+      rawResult = await this.agentRuntime.run(request, input.signal);
     } catch (error) {
       const recovery = await this.interruptedExecutionRecovery.recover({
         request,

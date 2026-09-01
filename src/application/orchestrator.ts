@@ -19,6 +19,7 @@ import {
 } from "./normalization/result-normalizer.js";
 import type { CompletionEvaluation } from "../evaluation/completion-evaluator.js";
 import type { AgentRuntime } from "../ports/agent-runtime.js";
+import { TelemetryAgentRuntime, type TelemetryLevel } from "../telemetry/runtime-metrics.js";
 import type { ArtifactReader } from "../ports/artifact-store.js";
 import type { RunReader, WorkflowState } from "../ports/run-reader.js";
 import type { StateStore } from "../ports/state-store.js";
@@ -103,6 +104,7 @@ export type OrchestratorDependencies = Readonly<{
   stateStore: StateStore;
   runReader?: RunReader;
   agentRuntime: AgentRuntime;
+  telemetryLevel?: TelemetryLevel;
   buildRequest: OrchestratorRequestBuilder;
   completion: OrchestratorCompletionPhase;
   schedule: OrchestratorSchedulePhase;
@@ -324,6 +326,7 @@ function applyD3Response(
 }
 
 export class Orchestrator {
+  private readonly agentRuntime: AgentRuntime;
   private readonly runReader: RunReader;
   private readonly recover: OrchestratorStatePhase;
   private readonly reconcile: OrchestratorStatePhase;
@@ -341,6 +344,10 @@ export class Orchestrator {
   private readonly maxIterations: number;
 
   constructor(private readonly dependencies: OrchestratorDependencies) {
+    this.agentRuntime = new TelemetryAgentRuntime(
+      dependencies.agentRuntime,
+      dependencies.telemetryLevel === undefined ? {} : { level: dependencies.telemetryLevel },
+    );
     const maxIterations = dependencies.maxIterations ?? DEFAULT_MAX_ITERATIONS;
     if (!Number.isSafeInteger(maxIterations) || maxIterations < 1) {
       throw new RangeError("maxIterations must be a positive safe integer");
@@ -535,10 +542,7 @@ export class Orchestrator {
           };
         }
 
-        const untrustedResult = await this.dependencies.agentRuntime.run(
-          request,
-          controller.signal,
-        );
+        const untrustedResult = await this.agentRuntime.run(request, controller.signal);
         if (controller.signal.aborted || this.isCancellationRequested(runId, state)) {
           return {
             kind: "idle",

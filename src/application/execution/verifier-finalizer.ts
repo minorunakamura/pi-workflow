@@ -20,6 +20,7 @@ import type {
 } from "../../domain/primitives/ids.js";
 import { createIdAllocator } from "../../domain/primitives/ids.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
+import { TelemetryAgentRuntime, type TelemetryLevel } from "../../telemetry/runtime-metrics.js";
 import type { ArtifactRef, ArtifactStore } from "../../ports/artifact-store.js";
 import type {
   RepositoryAdapter,
@@ -548,6 +549,7 @@ export class VerifierFinalizer {
 
 export type VerifierExecutionDependencies = Readonly<{
   agentRuntime: AgentRuntime;
+  telemetryLevel?: TelemetryLevel;
   repository: RepositoryAdapter;
   finalizer: Pick<VerifierFinalizer, "finalize">;
 }>;
@@ -571,13 +573,20 @@ export type VerifierExecutionResult = Readonly<{
 
 /** Executes one read-only Verifier between repository snapshots. */
 export class VerifierExecutor {
-  constructor(private readonly dependencies: VerifierExecutionDependencies) {}
+  private readonly agentRuntime: AgentRuntime;
+
+  constructor(private readonly dependencies: VerifierExecutionDependencies) {
+    this.agentRuntime = new TelemetryAgentRuntime(
+      dependencies.agentRuntime,
+      dependencies.telemetryLevel === undefined ? {} : { level: dependencies.telemetryLevel },
+    );
+  }
 
   async run(input: VerifierExecutionInput): Promise<VerifierExecutionResult> {
     const request = validateVerifierExecutionRequest(input.request);
     validateRevision(input.executionStateRevision);
     const before = await this.dependencies.repository.captureSnapshot();
-    const rawResult = await this.dependencies.agentRuntime.run(request);
+    const rawResult = await this.agentRuntime.run(request);
     const after = await this.dependencies.repository.captureSnapshot();
     const diff = await this.dependencies.repository.diff(before, after);
     const result = verifierResult(rawResult, request);

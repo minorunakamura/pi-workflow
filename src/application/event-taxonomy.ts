@@ -4,6 +4,7 @@ import type { ResultNormalizationResult } from "./normalization/result-normalize
 import type { SchedulerStep } from "../domain/scheduling/scheduler.js";
 import type { WorkflowState } from "../ports/run-reader.js";
 import type { CompletionEvaluation } from "../evaluation/completion-evaluator.js";
+import { persistedRuntimeTelemetry } from "../telemetry/runtime-metrics.js";
 
 export type WorkflowEventInput = Readonly<{
   before: WorkflowState;
@@ -327,9 +328,15 @@ function emitExecutionEvents(
       : result.outcome === "blocked"
         ? "blocked"
         : "failed";
+  const telemetry = persistedRuntimeTelemetry(result.runtime);
   events(
     `execution.${terminal}`,
-    { step_id: step.id, execution_id: result.identity.executionId, outcome: result.outcome },
+    {
+      step_id: step.id,
+      execution_id: result.identity.executionId,
+      outcome: result.outcome,
+      ...(telemetry === undefined ? {} : { telemetry }),
+    },
     correlationId,
     "execution",
     { type: "agent", id: step.agent },
