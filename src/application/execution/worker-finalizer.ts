@@ -702,6 +702,7 @@ export type WorkerExecutionInput = Readonly<{
   request: AgentExecutionRequestV1;
   writeScope?: WriteScope;
   executionStateRevision: number;
+  signal?: AbortSignal;
 }>;
 
 export type WorkerExecutionResult = Readonly<{
@@ -730,7 +731,7 @@ export class WorkerExecutor {
     const before = await this.dependencies.repository.captureSnapshot();
     let rawResult: unknown;
     try {
-      rawResult = await this.dependencies.agentRuntime.run(request);
+      rawResult = await this.dependencies.agentRuntime.run(request, input.signal);
     } catch (error) {
       const recovery = await this.interruptedExecutionRecovery.recover({
         request,

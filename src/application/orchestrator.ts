@@ -21,6 +21,10 @@ import type {
   SchedulerStep,
 } from "../domain/scheduling/scheduler.js";
 import { FixReverifyRereviewRouter } from "./fix-reverify-rereview.js";
+import type {
+  CancellationCoordinator,
+  CancellationExecution,
+} from "./recovery/cancellation-lifecycle.js";
 import { withNextRevision } from "./state-revision.js";
 
 const DEFAULT_MAX_ITERATIONS = 1_000;
@@ -106,6 +110,7 @@ export type OrchestratorDependencies = Readonly<{
   idAllocator?: IdAllocator;
   events?: OrchestratorEventFactory;
   fixCycle?: Pick<FixReverifyRereviewRouter, "guardCompletion" | "route"> | false;
+  cancellation?: Pick<CancellationCoordinator, "isRequested" | "register">;
   maxIterations?: number;
 }>;
 
@@ -149,6 +154,9 @@ export class Orchestrator {
     | Pick<FixReverifyRereviewRouter, "guardCompletion" | "route">
     | undefined;
   private readonly idAllocator: IdAllocator;
+  private readonly cancellation:
+    | Pick<CancellationCoordinator, "isRequested" | "register">
+    | undefined;
   private readonly maxIterations: number;
 
   constructor(private readonly dependencies: OrchestratorDependencies) {
@@ -165,6 +173,7 @@ export class Orchestrator {
     this.finalize = dependencies.finalize ?? noFinalization;
     this.events = dependencies.events ?? noEvents;
     this.idAllocator = dependencies.idAllocator ?? createIdAllocator();
+    this.cancellation = dependencies.cancellation;
     this.fixCycle =
       dependencies.fixCycle === false
         ? undefined
@@ -184,6 +193,15 @@ export class Orchestrator {
       state = await this.recover(state);
       state = await this.reconcile(state);
       state = await this.trigger(state);
+
+      if (this.isCancellationRequested(runId, state)) {
+        return {
+          kind: "idle",
+          state,
+          iterations: iteration,
+          reason: "RUN_TERMINAL",
+        };
+      }
 
       const evaluatedCompletion = await this.dependencies.completion(state);
       const completion = this.fixCycle
@@ -207,6 +225,14 @@ export class Orchestrator {
       }
 
       if (completion.eligible) {
+        if (this.isCancellationRequested(runId, state)) {
+          return {
+            kind: "idle",
+            state,
+            iterations: iteration,
+            reason: "RUN_TERMINAL",
+          };
+        }
         const finalized = await this.finalize({
           state,
           completion,
@@ -218,16 +244,44 @@ export class Orchestrator {
           ...finalized,
           run: { ...finalized.run, status: "completed" as const, finalized: true },
         };
-        const committed = await this.commit({
-          before: loaded,
-          candidate: terminal,
-          completion,
-          result: null,
-          step: null,
-          normalized: null,
-          iteration,
-        });
+        if (this.isCancellationRequested(runId, terminal)) {
+          return {
+            kind: "idle",
+            state: terminal,
+            iterations: iteration,
+            reason: "RUN_TERMINAL",
+          };
+        }
+        let committed: WorkflowState;
+        try {
+          committed = await this.commit({
+            before: loaded,
+            candidate: terminal,
+            completion,
+            result: null,
+            step: null,
+            normalized: null,
+            iteration,
+          });
+        } catch (error) {
+          if (!this.isCancellationRequested(runId, state)) throw error;
+          return {
+            kind: "idle",
+            state: await this.runReader.load(runId),
+            iterations: iteration,
+            reason: "RUN_TERMINAL",
+          };
+        }
         return { kind: "completed", state: committed, iterations: iteration };
+      }
+
+      if (this.isCancellationRequested(runId, state)) {
+        return {
+          kind: "idle",
+          state,
+          iterations: iteration,
+          reason: "RUN_TERMINAL",
+        };
       }
 
       const scheduled = await this.dependencies.schedule(state);
@@ -244,55 +298,102 @@ export class Orchestrator {
       const request = await this.dependencies.buildRequest({ state, step, iteration });
       this.assertRequestIdentity(request, runId, step);
 
-      const untrustedResult = await this.dependencies.agentRuntime.run(request);
-      const normalized = await normalizeStepResult(
-        { result: untrustedResult, request, state, step },
-        {
-          resultValidator: this.dependencies.validateResult,
-          validateRole: this.dependencies.validateRole,
-          validateReferences: this.dependencies.validateReferences,
-          validatePermissions: this.dependencies.validatePermissions,
-          postconditions: this.postconditions,
-          allocator: this.idAllocator,
-          artifactReader: this.dependencies.artifactReader,
-          maxArtifactBytes: this.dependencies.maxArtifactBytes,
-        },
-      );
-      state = normalized.state;
-      if (this.dependencies.validateArtifacts !== undefined) {
-        await this.dependencies.validateArtifacts({
-          state,
+      let settleExecution!: () => void;
+      const settled = new Promise<void>((resolve) => {
+        settleExecution = resolve;
+      });
+      const controller = new AbortController();
+      const activeExecution: CancellationExecution = {
+        request,
+        controller,
+        settled,
+      };
+      const unregister = this.cancellation?.register(activeExecution);
+
+      try {
+        if (controller.signal.aborted || this.isCancellationRequested(runId, state)) {
+          return {
+            kind: "idle",
+            state: await this.runReader.load(runId),
+            iterations: iteration,
+            reason: "RUN_TERMINAL",
+          };
+        }
+
+        const untrustedResult = await this.dependencies.agentRuntime.run(
           request,
-          result: normalized.result,
-          step,
-          artifacts: normalized.artifacts,
-          normalization: normalized,
-        });
-      }
-      state = await this.finalize({
-        state,
-        completion,
-        result: normalized.result,
-        step,
-        normalized,
-      });
-      if (this.fixCycle !== undefined) {
-        const recovery = this.fixCycle.route({
+          controller.signal,
+        );
+        if (controller.signal.aborted || this.isCancellationRequested(runId, state)) {
+          return {
+            kind: "idle",
+            state: await this.runReader.load(runId),
+            iterations: iteration,
+            reason: "RUN_TERMINAL",
+          };
+        }
+        const normalized = await normalizeStepResult(
+          { result: untrustedResult, request, state, step },
+          {
+            resultValidator: this.dependencies.validateResult,
+            validateRole: this.dependencies.validateRole,
+            validateReferences: this.dependencies.validateReferences,
+            validatePermissions: this.dependencies.validatePermissions,
+            postconditions: this.postconditions,
+            allocator: this.idAllocator,
+            artifactReader: this.dependencies.artifactReader,
+            maxArtifactBytes: this.dependencies.maxArtifactBytes,
+          },
+        );
+        state = normalized.state;
+        if (this.dependencies.validateArtifacts !== undefined) {
+          await this.dependencies.validateArtifacts({
+            state,
+            request,
+            result: normalized.result,
+            step,
+            artifacts: normalized.artifacts,
+            normalization: normalized,
+          });
+        }
+        state = await this.finalize({
           state,
-          step,
+          completion,
           result: normalized.result,
+          step,
+          normalized,
         });
-        state = recovery.state;
+        if (this.fixCycle !== undefined) {
+          const recovery = this.fixCycle.route({
+            state,
+            step,
+            result: normalized.result,
+          });
+          state = recovery.state;
+        }
+        await this.commit({
+          before: loaded,
+          candidate: state,
+          completion,
+          result: normalized.result,
+          step,
+          normalized,
+          iteration,
+        });
+      } catch (error) {
+        if (controller.signal.aborted || this.isCancellationRequested(runId, state)) {
+          return {
+            kind: "idle",
+            state: await this.runReader.load(runId),
+            iterations: iteration,
+            reason: "RUN_TERMINAL",
+          };
+        }
+        throw error;
+      } finally {
+        settleExecution();
+        unregister?.();
       }
-      await this.commit({
-        before: loaded,
-        candidate: state,
-        completion,
-        result: normalized.result,
-        step,
-        normalized,
-        iteration,
-      });
     }
 
     throw new OrchestratorIterationLimitError(runId, this.maxIterations);
@@ -322,6 +423,10 @@ export class Orchestrator {
       next,
       events,
     });
+  }
+
+  private isCancellationRequested(runId: RunId, state: WorkflowState): boolean {
+    return state.run.cancellation !== null || this.cancellation?.isRequested(runId) === true;
   }
 
   private assertRequestIdentity(

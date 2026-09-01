@@ -2,5 +2,5 @@ import type { AgentExecutionRequestV1 } from "../contracts/execution/agent-execu
 
 /** Agent output crosses a trust boundary and is validated by the Orchestrator. */
 export interface AgentRuntime {
-  run(request: AgentExecutionRequestV1): Promise<unknown>;
+  run(request: AgentExecutionRequestV1, signal?: AbortSignal): Promise<unknown>;
 }

@@ -1075,10 +1075,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] cancellation intent is persisted before abort.
-- [ ] no new dispatch occurs after intent.
-- [ ] Worker mutation is reconciled, not rolled back blindly.
-- [ ] cancelled Run becomes finalized with Outcome.
+- [x] cancellation intent is persisted before abort.
+- [x] no new dispatch occurs after intent.
+- [x] Worker mutation is reconciled, not rolled back blindly.
+- [x] cancelled Run becomes finalized with Outcome.
 
 **Test Levels:** `CRASH`, `E2E`
 
