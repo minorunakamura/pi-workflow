@@ -1236,8 +1236,8 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Retry/replan/fix/blocked/VR/RR/Finding metrics are deterministic.
-- [ ] Missing telemetry remains null/unavailable rather than zero.
+- [x] Retry/replan/fix/blocked/VR/RR/Finding metrics are deterministic.
+- [x] Missing telemetry remains null/unavailable rather than zero.
 
 **Test Levels:** `UNIT`
 
