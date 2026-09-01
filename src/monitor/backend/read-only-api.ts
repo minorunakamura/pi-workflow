@@ -50,6 +50,14 @@ type StoredJson = Readonly<{
   value: unknown;
 }>;
 
+type MonitorComparability = Readonly<{
+  same_request_requirement: boolean | null;
+  same_repository_baseline: boolean | null;
+  same_workflow_config: boolean | null;
+  same_model: boolean | null;
+  telemetry_comparable: boolean | null;
+}>;
+
 export type MonitorApiOptions = Readonly<{
   databasePath?: string;
   runReader?: Pick<RunReader, "load">;
@@ -279,15 +287,64 @@ function numericLeaves(value: unknown, prefix = ""): Record<string, number> {
   return result;
 }
 
+function telemetryComparability(left: MonitorRunSummary, right: MonitorRunSummary): boolean | null {
+  if (left.telemetry_quality === null || right.telemetry_quality === null) return null;
+  if (left.telemetry_quality !== "healthy" || right.telemetry_quality !== "healthy") return false;
+  if (left.telemetry_level === null || right.telemetry_level === null) return null;
+  return left.telemetry_level === right.telemetry_level;
+}
+
+function comparisonWarnings(comparability: MonitorComparability): readonly string[] {
+  const warnings: string[] = [];
+  if (comparability.same_request_requirement !== true) {
+    warnings.push(
+      comparability.same_request_requirement === false
+        ? "different request/requirement fingerprint"
+        : "request/requirement fingerprint unavailable",
+    );
+  }
+  if (comparability.same_repository_baseline !== true) {
+    warnings.push(
+      comparability.same_repository_baseline === false
+        ? "different repository baseline"
+        : "repository baseline unavailable",
+    );
+  }
+  if (comparability.same_workflow_config !== true) {
+    warnings.push(
+      comparability.same_workflow_config === false
+        ? "different workflow/config version"
+        : "workflow/config version unavailable",
+    );
+  }
+  if (comparability.same_model !== true) {
+    warnings.push(
+      comparability.same_model === false
+        ? "different model/provider/thinking"
+        : "model/provider/thinking unavailable",
+    );
+  }
+  if (comparability.telemetry_comparable !== true) {
+    warnings.push(
+      comparability.telemetry_comparable === false
+        ? "different telemetry level/quality"
+        : "telemetry quality unavailable",
+    );
+  }
+  return warnings;
+}
+
 function metricDeltas(
   left: unknown,
   right: unknown,
+  telemetryIsComparable: boolean,
 ): Record<string, Readonly<{ absolute: number; percentage?: number }>> {
   const leftLeaves = numericLeaves(left);
   const rightLeaves = numericLeaves(right);
   const deltas: Record<string, Readonly<{ absolute: number; percentage?: number }>> = {};
 
   for (const key of Object.keys(leftLeaves)) {
+    if (key.startsWith("telemetry.") && !telemetryIsComparable) continue;
     const leftValue = leftLeaves[key];
     const rightValue = rightLeaves[key];
     if (leftValue === undefined || rightValue === undefined) continue;
@@ -437,12 +494,18 @@ export class ReadOnlyMonitorApi {
     const list = this.listRuns(listSearch) as Readonly<{
       runs: readonly MonitorRunSummary[];
     }>;
+    const compareRunIds = search.getAll("compare");
+    const comparison =
+      compareRunIds.length === 0
+        ? undefined
+        : (this.compare(compareRunIds) as MonitorPageData["compare"]);
     const page: MonitorPageData = {
       runs: list.runs,
       filters: {
         ...(search.get("search") === null ? {} : { search: search.get("search") ?? "" }),
         ...(search.get("status") === null ? {} : { status: search.get("status") ?? "" }),
       },
+      ...(comparison === undefined ? {} : { compare: comparison }),
     };
 
     const selectedRunId = search.get("run");
@@ -895,38 +958,49 @@ export class ReadOnlyMonitorApi {
     const rightModels = this.models(rightId, rightComparison);
     const leftMetrics = isRecord(leftEvaluation) ? (leftEvaluation.metrics ?? null) : null;
     const rightMetrics = isRecord(rightEvaluation) ? (rightEvaluation.metrics ?? null) : null;
+    const comparability: MonitorComparability = {
+      same_request_requirement:
+        leftSummary.request_id === null ||
+        rightSummary.request_id === null ||
+        leftSummary.request_type === null ||
+        rightSummary.request_type === null
+          ? null
+          : leftSummary.request_id === rightSummary.request_id &&
+            leftSummary.request_type === rightSummary.request_type,
+      same_repository_baseline: equalityIfKnown(
+        leftSummary.baseline_head,
+        rightSummary.baseline_head,
+      ),
+      same_workflow_config: equalityIfKnown(
+        leftComparison?.workflow_version ?? leftSummary.current_playbook,
+        rightComparison?.workflow_version ?? rightSummary.current_playbook,
+      ),
+      same_model: equalityIfKnown(leftModels, rightModels),
+      telemetry_comparable: telemetryComparability(leftSummary, rightSummary),
+    };
 
     return {
       runs: [leftSummary, rightSummary],
-      comparability: {
-        same_request_requirement:
-          leftSummary.request_id === rightSummary.request_id &&
-          leftSummary.request_type === rightSummary.request_type,
-        same_repository_baseline: equalityIfKnown(
-          leftSummary.baseline_head,
-          rightSummary.baseline_head,
-        ),
-        same_workflow_config: equalityIfKnown(
-          leftComparison?.workflow_version ?? leftSummary.current_playbook,
-          rightComparison?.workflow_version ?? rightSummary.current_playbook,
-        ),
-        same_model: equalityIfKnown(leftModels, rightModels),
-        telemetry_comparable:
-          leftSummary.telemetry_quality === "healthy" &&
-          rightSummary.telemetry_quality === "healthy" &&
-          leftSummary.telemetry_level !== null &&
-          rightSummary.telemetry_level !== null,
+      comparability,
+      warnings: comparisonWarnings(comparability),
+      evaluations: {
+        [leftId]: leftEvaluation,
+        [rightId]: rightEvaluation,
       },
       metrics: {
         [leftId]: leftMetrics,
         [rightId]: rightMetrics,
       },
-      deltas: metricDeltas(leftMetrics, rightMetrics),
+      deltas: metricDeltas(leftMetrics, rightMetrics, comparability.telemetry_comparable === true),
     };
   }
 
   private models(runId: RunId, comparison: Row | undefined): unknown {
-    if (comparison?.model_provider_usage !== undefined) return comparison.model_provider_usage;
+    if (Array.isArray(comparison?.model_provider_usage)) {
+      return comparison.model_provider_usage.length === 0
+        ? undefined
+        : comparison.model_provider_usage;
+    }
     const models = this.query(
       "SELECT provider, model FROM executions WHERE run_id = ? AND (provider IS NOT NULL OR model IS NOT NULL) ORDER BY execution_id ASC",
       runId,

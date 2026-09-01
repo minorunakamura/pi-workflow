@@ -1377,10 +1377,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Two Runs can be compared with comparability warnings.
-- [ ] null/degraded metrics are not treated as zero/reliable.
-- [ ] Outcome/risks appear before efficiency.
-- [ ] no automatic winner/scalar score is required.
+- [x] Two Runs can be compared with comparability warnings.
+- [x] null/degraded metrics are not treated as zero/reliable.
+- [x] Outcome/risks appear before efficiency.
+- [x] no automatic winner/scalar score is required.
 
 **Test Levels:** `E2E`
 

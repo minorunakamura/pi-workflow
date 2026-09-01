@@ -309,15 +309,48 @@ describe("monitoring Run overview and timeline", () => {
           1,
           JSON.stringify({
             correctness: {
-              outcome: { request_satisfied: true },
+              outcome: { request_satisfied: true, accepted_risks: ["run-005 risk"] },
               verification: { result: "passed", limitations: ["fixture limitation"] },
               review: { result: "clean" },
+            },
+            comparison: {
+              model_provider_usage: [{ provider: "test", model: "model-a" }],
             },
             efficiency: {
               telemetry: { tokens: 42 },
               orchestration: { steps: 1 },
             },
-            metrics: { telemetry: { tokens: 42 } },
+            metrics: {
+              telemetry: { tokens: 42, wall_clock_ms: 100, tool_calls: 1 },
+              orchestration: { executions_count: 1 },
+            },
+          }),
+        );
+      database
+        .prepare("UPDATE runs SET telemetry_quality = ?, telemetry_level = ? WHERE run_id = ?")
+        .run("degraded", "debug", "run-006");
+      database
+        .prepare(
+          "INSERT INTO evaluations (run_id, state_revision, last_event_sequence, evaluator_version, evaluation_json) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          "run-006",
+          1,
+          9,
+          1,
+          JSON.stringify({
+            correctness: {
+              outcome: { request_satisfied: false, accepted_limitations: ["run-006 limitation"] },
+              verification: { result: "incomplete" },
+              review: { result: "pending" },
+            },
+            comparison: {
+              model_provider_usage: [{ provider: "test", model: "model-b" }],
+            },
+            metrics: {
+              telemetry: { tokens: null, wall_clock_ms: null, tool_calls: null },
+              orchestration: { executions_count: 2 },
+            },
           }),
         );
       database.close();
@@ -391,6 +424,28 @@ describe("monitoring Run overview and timeline", () => {
           "&lt;script&gt;alert(&quot;artifact-xss&quot;)&lt;/script&gt;",
         );
         expect(loadedArtifact.body).not.toContain('<script>alert("artifact-xss")</script>');
+
+        const comparison = await getText(port, "/?compare=run-005&compare=run-006");
+        expect(comparison.status).toBe(200);
+        const outcomePosition = comparison.body.indexOf('data-section="compare-outcome"');
+        const risksPosition = comparison.body.indexOf('data-section="compare-risks"');
+        const compareEfficiencyPosition = comparison.body.indexOf(
+          'data-section="compare-efficiency"',
+        );
+        expect(outcomePosition).toBeGreaterThan(-1);
+        expect(risksPosition).toBeGreaterThan(outcomePosition);
+        expect(compareEfficiencyPosition).toBeGreaterThan(risksPosition);
+        expect(comparison.body).toContain('data-section="compare-view"');
+        expect(comparison.body).toContain("different request/requirement fingerprint");
+        expect(comparison.body).toContain("different model/provider/thinking");
+        expect(comparison.body).toContain("different telemetry level/quality");
+        expect(comparison.body).toContain("telemetry comparable?");
+        expect(comparison.body).toContain("Not reliably comparable");
+        expect(comparison.body).toContain("Delta (B - A)");
+        expect(comparison.body).toContain("run-005 risk");
+        expect(comparison.body).toContain("run-006 limitation");
+        expect(comparison.body).not.toContain("Winner");
+        expect(comparison.body).not.toContain("Score");
 
         const recoverable = await getText(port, "/?run=run-003");
         expect(recoverable.body).toContain("Recovery available: this Run can be resumed.");

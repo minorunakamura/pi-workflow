@@ -62,12 +62,28 @@ type MonitorRunDetail = Readonly<{
   warnings?: readonly string[];
 }>;
 
+type MonitorComparison = Readonly<{
+  runs: readonly MonitorRunSummary[];
+  comparability: Readonly<{
+    same_request_requirement: boolean | null;
+    same_repository_baseline: boolean | null;
+    same_workflow_config: boolean | null;
+    same_model: boolean | null;
+    telemetry_comparable: boolean | null;
+  }>;
+  warnings?: readonly string[];
+  evaluations?: Readonly<Record<string, unknown>>;
+  metrics: Readonly<Record<string, unknown>>;
+  deltas: Readonly<Record<string, Readonly<{ absolute: number; percentage?: number }>>>;
+}>;
+
 export type MonitorPageData = Readonly<{
   runs: readonly MonitorRunSummary[];
   filters?: Readonly<{
     search?: string;
     status?: string;
   }>;
+  compare?: MonitorComparison;
   selected?: Readonly<{
     detail: MonitorRunDetail;
     events: readonly MonitorEvent[];
@@ -301,6 +317,7 @@ function renderRunList(data: MonitorPageData): string {
   const status = data.filters?.status ?? "";
   const rows = [...data.runs].sort(sortRuns);
   const selectedId = data.selected?.detail.run.run_id;
+  const comparisonIds = data.compare?.runs.map((run) => run.run_id) ?? [];
 
   return `<section class="panel" id="run-list" data-section="run-list" aria-labelledby="run-list-heading">
     <div class="section-heading">
@@ -321,6 +338,12 @@ function renderRunList(data: MonitorPageData): string {
         <button type="submit">Filter</button>
       </form>
     </div>
+    <form class="compare-form" method="get" action="/">
+      <strong>Compare Runs</strong>
+      <label>Run A <select name="compare" required><option value="">Select a Run</option>${rows.map((run) => option(run.run_id, `${run.run_id} · ${requestLabel(run)}`, comparisonIds[0] ?? "")).join("")}</select></label>
+      <label>Run B <select name="compare" required><option value="">Select a Run</option>${rows.map((run) => option(run.run_id, `${run.run_id} · ${requestLabel(run)}`, comparisonIds[1] ?? "")).join("")}</select></label>
+      <button type="submit">Compare</button>
+    </form>
     ${renderLifecycleLegend()}
     <div class="table-scroll">
       <table>
@@ -871,6 +894,226 @@ function renderTimeline(events: readonly MonitorEvent[]): string {
   </section>`;
 }
 
+function comparisonEvaluation(
+  comparison: MonitorComparison,
+  runId: string,
+): JsonRecord | undefined {
+  return record(comparison.evaluations?.[runId]);
+}
+
+function comparisonCorrectness(evaluation: JsonRecord | undefined): JsonRecord | undefined {
+  const dimensions = record(evaluation?.dimensions);
+  return record(dimensions?.correctness) ?? record(evaluation?.correctness);
+}
+
+function comparisonOutcome(evaluation: JsonRecord | undefined): unknown {
+  const correctness = comparisonCorrectness(evaluation);
+  return firstValue(correctness?.outcome, evaluation?.outcome);
+}
+
+function comparisonVerification(evaluation: JsonRecord | undefined): unknown {
+  const correctness = comparisonCorrectness(evaluation);
+  return firstValue(
+    correctness?.verification,
+    evaluation?.verification,
+    record(evaluation?.metrics)?.verification,
+  );
+}
+
+function comparisonReview(evaluation: JsonRecord | undefined): unknown {
+  const correctness = comparisonCorrectness(evaluation);
+  return firstValue(correctness?.review, evaluation?.review, record(evaluation?.metrics)?.review);
+}
+
+function comparisonRisks(evaluation: JsonRecord | undefined): unknown {
+  const correctness = comparisonCorrectness(evaluation);
+  const outcome = record(comparisonOutcome(evaluation));
+  const verification = record(comparisonVerification(evaluation));
+  const review = record(comparisonReview(evaluation));
+  return firstValue(
+    outcome?.accepted_risks,
+    outcome?.accepted_limitations,
+    correctness?.accepted_risks,
+    correctness?.accepted_limitations,
+    verification?.limitations,
+    verification?.accepted_limitations,
+    review?.risks,
+    review?.accepted_limitations,
+    evaluation?.risks,
+    evaluation?.limitations,
+  );
+}
+
+function comparisonEvidenceValue(value: unknown): string {
+  return value === null || value === undefined
+    ? '<span class="muted">Unavailable</span>'
+    : valueMarkup(value);
+}
+
+function renderComparisonTable(
+  leftRunId: string,
+  rightRunId: string,
+  rows: readonly (readonly [string, unknown, unknown])[],
+): string {
+  return `<div class="table-scroll"><table class="compare-table"><thead><tr><th scope="col">Evidence</th><th scope="col">${escapeHtml(leftRunId)}</th><th scope="col">${escapeHtml(rightRunId)}</th></tr></thead><tbody>${rows
+    .map(
+      ([label, left, right]) =>
+        `<tr><th scope="row">${escapeHtml(label)}</th><td>${comparisonEvidenceValue(left)}</td><td>${comparisonEvidenceValue(right)}</td></tr>`,
+    )
+    .join("")}</tbody></table></div>`;
+}
+
+function renderComparisonOutcome(
+  comparison: MonitorComparison,
+  leftRunId: string,
+  rightRunId: string,
+): string {
+  const left = comparisonEvaluation(comparison, leftRunId);
+  const right = comparisonEvaluation(comparison, rightRunId);
+  return `<section class="panel compare-evidence" data-section="compare-outcome" aria-labelledby="compare-outcome-heading"><p class="eyebrow">Outcome first</p><h3 id="compare-outcome-heading">Outcome / correctness evidence</h3>${renderComparisonTable(
+    leftRunId,
+    rightRunId,
+    [
+      ["Outcome", comparisonOutcome(left), comparisonOutcome(right)],
+      [
+        "request_satisfied",
+        record(comparisonOutcome(left))?.request_satisfied,
+        record(comparisonOutcome(right))?.request_satisfied,
+      ],
+      ["Verification", comparisonVerification(left), comparisonVerification(right)],
+      ["Review", comparisonReview(left), comparisonReview(right)],
+    ],
+  )}</section>`;
+}
+
+function renderComparisonRisks(
+  comparison: MonitorComparison,
+  leftRunId: string,
+  rightRunId: string,
+): string {
+  const left = comparisonEvaluation(comparison, leftRunId);
+  const right = comparisonEvaluation(comparison, rightRunId);
+  return `<section class="panel compare-evidence" data-section="compare-risks" aria-labelledby="compare-risks-heading"><p class="eyebrow">Limitations remain visible</p><h3 id="compare-risks-heading">Risks / limitations</h3>${renderComparisonTable(leftRunId, rightRunId, [["Accepted risks / limitations", comparisonRisks(left), comparisonRisks(right)]])}</section>`;
+}
+
+function metricLeaves(value: unknown, prefix = ""): Record<string, unknown> {
+  if (value === undefined) return {};
+  if (value === null || typeof value !== "object") {
+    return prefix.length === 0 ? {} : { [prefix]: value };
+  }
+  if (Array.isArray(value)) return prefix.length === 0 ? {} : { [prefix]: value };
+
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    Object.assign(result, metricLeaves(entry, prefix.length === 0 ? key : `${prefix}.${key}`));
+  }
+  return result;
+}
+
+function compareMetricReliable(
+  comparison: MonitorComparison,
+  path: string,
+  value: unknown,
+): boolean {
+  return (
+    value !== null &&
+    value !== undefined &&
+    !(path.startsWith("telemetry.") && comparison.comparability.telemetry_comparable !== true)
+  );
+}
+
+function compareMetricValue(comparison: MonitorComparison, path: string, value: unknown): string {
+  if (!compareMetricReliable(comparison, path, value)) {
+    return '<span class="unreliable">Not reliably comparable</span>';
+  }
+  return valueMarkup(value);
+}
+
+function compareDeltaValue(
+  comparison: MonitorComparison,
+  path: string,
+  leftValue: unknown,
+  rightValue: unknown,
+): string {
+  const delta = comparison.deltas[path];
+  if (
+    delta === undefined ||
+    !compareMetricReliable(comparison, path, leftValue) ||
+    !compareMetricReliable(comparison, path, rightValue)
+  ) {
+    return '<span class="unreliable">Not reliably comparable</span>';
+  }
+  const percentage = delta.percentage === undefined ? "" : ` (${jsonText(delta.percentage)}%)`;
+  return `<code>${escapeHtml(`${jsonText(delta.absolute)}${percentage}`)}</code>`;
+}
+
+function metricGroup(
+  comparison: MonitorComparison,
+  leftRunId: string,
+  rightRunId: string,
+  heading: string,
+  section: string,
+  include: (path: string) => boolean,
+): string {
+  const leftMetrics = record(comparison.metrics[leftRunId]);
+  const rightMetrics = record(comparison.metrics[rightRunId]);
+  const leftLeaves = metricLeaves(leftMetrics);
+  const rightLeaves = metricLeaves(rightMetrics);
+  const paths = [...new Set([...Object.keys(leftLeaves), ...Object.keys(rightLeaves)])]
+    .filter(include)
+    .sort();
+  const body =
+    paths.length === 0
+      ? '<p class="muted">Metrics unavailable; <span class="unreliable">Not reliably comparable</span>.</p>'
+      : `<div class="table-scroll"><table class="compare-table metric-table"><thead><tr><th scope="col">Metric</th><th scope="col">${escapeHtml(leftRunId)}</th><th scope="col">${escapeHtml(rightRunId)}</th><th scope="col">Delta (B - A)</th></tr></thead><tbody>${paths
+          .map((path) => {
+            const leftValue = leftLeaves[path];
+            const rightValue = rightLeaves[path];
+            return `<tr><th scope="row">${escapeHtml(path)}</th><td>${compareMetricValue(comparison, path, leftValue)}</td><td>${compareMetricValue(comparison, path, rightValue)}</td><td>${compareDeltaValue(comparison, path, leftValue, rightValue)}</td></tr>`;
+          })
+          .join("")}</tbody></table></div>`;
+  return `<section class="compare-metric-group" data-section="${escapeHtml(section)}" aria-labelledby="${escapeHtml(section)}-heading"><h4 id="${escapeHtml(section)}-heading">${escapeHtml(heading)}</h4>${body}</section>`;
+}
+
+function renderComparisonEfficiency(
+  comparison: MonitorComparison,
+  leftRunId: string,
+  rightRunId: string,
+): string {
+  const contextFields =
+    /(?:tokens|pack_tokens_estimated_total|pack_tokens_estimated_peak|trim_count|budget_exceeded_count|required_context_missing_count)$/;
+  const timeFields =
+    /(?:wall_clock_ms|active_wall_ms|blocked_ms|execution_sum_ms|tool_sum_ms|tool_calls)$/;
+  return `<section class="panel compare-efficiency" data-section="compare-efficiency" aria-labelledby="compare-efficiency-heading"><p class="eyebrow">Evidence before efficiency</p><h3 id="compare-efficiency-heading">Efficiency and execution metrics</h3>${metricGroup(comparison, leftRunId, rightRunId, "Orchestration", "compare-orchestration", (path) => path.startsWith("orchestration."))}${metricGroup(comparison, leftRunId, rightRunId, "Context / tokens", "compare-context", (path) => path.startsWith("telemetry.") && contextFields.test(path))}${metricGroup(comparison, leftRunId, rightRunId, "Time / tool usage", "compare-time-tools", (path) => path.startsWith("telemetry.") && timeFields.test(path))}</section>`;
+}
+
+function renderCompareView(comparison: MonitorComparison): string {
+  const [left, right] = comparison.runs;
+  if (left === undefined || right === undefined) {
+    return '<section class="panel compare-view" data-section="compare-view"><h2>Compare View</h2><p class="warning">Comparison is unavailable.</p></section>';
+  }
+  const statuses: readonly (readonly [string, boolean | null])[] = [
+    ["same request/requirement?", comparison.comparability.same_request_requirement],
+    ["same repository baseline?", comparison.comparability.same_repository_baseline],
+    ["same workflow/config?", comparison.comparability.same_workflow_config],
+    ["same model?", comparison.comparability.same_model],
+    ["telemetry comparable?", comparison.comparability.telemetry_comparable],
+  ];
+  const warnings = comparison.warnings ?? [];
+  const warningMarkup =
+    warnings.length === 0
+      ? '<p class="muted">No comparability warnings.</p>'
+      : `<ul class="compare-warnings">${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`;
+  const comparabilityTable = `<div class="table-scroll"><table class="compare-table"><thead><tr><th scope="col">Comparability</th><th scope="col">Result</th></tr></thead><tbody>${statuses
+    .map(([label, value]) => {
+      const result = value === true ? "same" : value === false ? "different" : "unavailable";
+      return `<tr><th scope="row">${escapeHtml(label)}</th><td><span class="compare-status compare-status-${result}">${result}</span></td></tr>`;
+    })
+    .join("")}</tbody></table></div>`;
+
+  return `<section class="compare-view" data-section="compare-view" aria-labelledby="compare-view-heading"><div class="detail-heading"><div><p class="eyebrow">Side-by-side evidence</p><h2 id="compare-view-heading">Compare View</h2></div><span class="muted">${escapeHtml(left.run_id)} vs ${escapeHtml(right.run_id)}</span></div><section class="panel" data-section="comparability" aria-labelledby="comparability-heading"><h3 id="comparability-heading">Comparability</h3>${warningMarkup}${comparabilityTable}</section>${renderComparisonOutcome(comparison, left.run_id, right.run_id)}${renderComparisonRisks(comparison, left.run_id, right.run_id)}${renderComparisonEfficiency(comparison, left.run_id, right.run_id)}</section>`;
+}
+
 function renderSelectedRun(selected: NonNullable<MonitorPageData["selected"]>): string {
   const { detail, events, artifact } = selected;
   const graph = selected.graph;
@@ -928,6 +1171,19 @@ main { max-width: 1440px; margin: 0 auto; padding: 24px; }
 .eyebrow { margin: 0 0 4px; color: #637282; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 .filters label { display: grid; gap: 4px; color: #536170; font-size: .8rem; }
+.compare-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 16px 0; padding-top: 16px; border-top: 1px solid #e2e7ec; }
+.compare-form label { display: grid; gap: 4px; color: #536170; font-size: .8rem; }
+.compare-form select { min-width: 220px; }
+.compare-view { max-width: 1200px; margin: 0 auto; }
+.compare-view .panel { margin-bottom: 16px; }
+.compare-warnings { margin: 12px 0; padding-left: 22px; color: #851d1d; }
+.compare-status { font-weight: 700; }
+.compare-status-same { color: #176235; }
+.compare-status-different, .compare-status-unavailable, .unreliable { color: #9a5700; }
+.compare-table { min-width: 600px; }
+.compare-table th[scope="row"] { width: 24%; }
+.compare-metric-group { margin-top: 20px; }
+.compare-metric-group h4 { margin: 0 0 8px; }
 input, select, button { border: 1px solid #b8c2cc; border-radius: 6px; padding: 7px 9px; background: #fff; color: inherit; font: inherit; }
 button { cursor: pointer; background: #1257a6; border-color: #1257a6; color: #fff; font-weight: 700; }
 .lifecycle-legend { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 16px 0; padding: 0; }
@@ -1026,6 +1282,7 @@ export function renderMonitorPage(data: MonitorPageData): string {
   <header class="site-header"><h1>Workflow Monitor</h1><p>Read-only Run monitoring</p></header>
   <main>
     ${renderRunList(data)}
+    ${data.compare === undefined ? "" : renderCompareView(data.compare)}
     ${data.selected === undefined ? "" : renderSelectedRun(data.selected)}
   </main>
 </body>
