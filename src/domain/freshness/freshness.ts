@@ -17,6 +17,37 @@ export type ChangeSetRelevanceStatus = (typeof CHANGE_SET_RELEVANCE_STATUSES)[nu
 export const FRESHNESS_STATUSES = ["fresh", "stale", "unknown"] as const;
 export type FreshnessStatus = (typeof FRESHNESS_STATUSES)[number];
 
+export const REPOSITORY_DRIFT_CLASSIFICATIONS = [
+  "clean",
+  "unrelated",
+  "relevant",
+  "critical",
+  "unknown",
+] as const;
+export type RepositoryDriftClassification = (typeof REPOSITORY_DRIFT_CLASSIFICATIONS)[number];
+export type RepositoryDriftPathClassification = Exclude<RepositoryDriftClassification, "clean">;
+
+export const REPOSITORY_DRIFT_RESOLUTIONS = ["clear", "unresolved", "reconciled"] as const;
+export type RepositoryDriftResolution = (typeof REPOSITORY_DRIFT_RESOLUTIONS)[number];
+
+export type RepositoryDriftPath = Readonly<{
+  path: string;
+  classification: RepositoryDriftPathClassification;
+}>;
+
+export type RepositoryDriftEvaluationInput = Readonly<{
+  paths: readonly RepositoryDriftPath[];
+  controlPlaneChanged?: boolean;
+  unknownChange?: boolean;
+  resolution?: RepositoryDriftResolution;
+}>;
+
+export type RepositoryDriftEvaluation = Readonly<{
+  classification: RepositoryDriftClassification;
+  resolution: RepositoryDriftResolution;
+  blocking: boolean;
+}>;
+
 /** An absent rule result is ambiguous and must not be treated as false. */
 export type RuleResult = boolean | undefined;
 
@@ -46,6 +77,50 @@ function resolveRules<T extends string>(
 
   const matches = rules.filter(([, result]) => result === true).map(([status]) => status);
   return matches.length === 1 ? matches[0]! : "unknown";
+}
+
+function highestDriftClassification(
+  paths: readonly RepositoryDriftPath[],
+): RepositoryDriftClassification {
+  for (const classification of ["critical", "unknown", "relevant", "unrelated"] as const) {
+    if (paths.some((path) => path.classification === classification)) {
+      return classification;
+    }
+  }
+  return "clean";
+}
+
+export function isRepositoryDriftBlocking(
+  classification: RepositoryDriftClassification,
+  resolution: RepositoryDriftResolution,
+): boolean {
+  const clear =
+    (classification === "clean" || classification === "unrelated") && resolution === "clear";
+  const reconciled =
+    (classification === "relevant" ||
+      classification === "critical" ||
+      classification === "unknown") &&
+    resolution === "reconciled";
+  return !clear && !reconciled;
+}
+
+export function evaluateRepositoryDrift(
+  input: RepositoryDriftEvaluationInput,
+): RepositoryDriftEvaluation {
+  const classification =
+    input.controlPlaneChanged === true
+      ? "critical"
+      : input.unknownChange === true && input.paths.length === 0
+        ? "unknown"
+        : highestDriftClassification(input.paths);
+  const resolution =
+    input.resolution ??
+    (classification === "clean" || classification === "unrelated" ? "clear" : "unresolved");
+  return {
+    classification,
+    resolution,
+    blocking: isRepositoryDriftBlocking(classification, resolution),
+  };
 }
 
 export function evaluatePlanApplicability(rules: PlanApplicabilityRules): PlanApplicabilityStatus {

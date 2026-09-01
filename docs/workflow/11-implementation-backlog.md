@@ -1058,8 +1058,8 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] unrelated/relevant/critical/unknown paths behave safely.
-- [ ] relevant drift invalidates/reconciles Plan/evidence as required.
+- [x] unrelated/relevant/critical/unknown paths behave safely.
+- [x] relevant drift invalidates/reconciles Plan/evidence as required.
 
 **Test Levels:** `E2E`
 

@@ -2,7 +2,11 @@ import type { Decision } from "../domain/decisions/decision.js";
 import type { Finding } from "../domain/findings/finding.js";
 import type { StepStatus } from "../domain/graph/step-graph.js";
 import type { Uncertainty } from "../domain/uncertainty/uncertainty.js";
-import type { FreshnessStatus, PlanApplicabilityStatus } from "../domain/freshness/freshness.js";
+import {
+  isRepositoryDriftBlocking,
+  type FreshnessStatus,
+  type PlanApplicabilityStatus,
+} from "../domain/freshness/freshness.js";
 
 export const ACCEPTANCE_CRITERION_STATUSES = [
   "satisfied",
@@ -245,16 +249,7 @@ function evaluateRepository(
     return;
   }
 
-  const clear =
-    (repository.classification === "clean" || repository.classification === "unrelated") &&
-    repository.resolution === "clear";
-  const reconciled =
-    (repository.classification === "relevant" ||
-      repository.classification === "critical" ||
-      repository.classification === "unknown") &&
-    repository.resolution === "reconciled";
-
-  if (!clear && !reconciled) {
+  if (isRepositoryDriftBlocking(repository.classification, repository.resolution)) {
     addBlocker("REPOSITORY_DRIFT_UNRESOLVED");
   }
 }
