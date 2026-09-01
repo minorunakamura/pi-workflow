@@ -142,4 +142,45 @@ describe("Worker finalization E2E", () => {
       },
     );
   });
+
+  it("detects an external edit that occurs while the Worker is running", async () => {
+    await withTempRepository(
+      { "src/allowed.txt": "before\n", "outside.txt": "before\n" },
+      async (repositoryRoot) => {
+        await initializeGit(repositoryRoot);
+        const input = request("exec-008");
+        const runtime: AgentRuntime = {
+          run: async () => {
+            const externalEdit = new Promise<void>((resolve, reject) => {
+              setImmediate(() => {
+                writeFile(join(repositoryRoot, "outside.txt"), "external\n", "utf8")
+                  .then(() => resolve())
+                  .catch(reject);
+              });
+            });
+            await writeFile(join(repositoryRoot, "src/allowed.txt"), "worker\n", "utf8");
+            await externalEdit;
+            return resultFor(input);
+          },
+        };
+        const repository = new GitRepositoryAdapter(repositoryRoot);
+        const execution = await new WorkerExecutor({
+          agentRuntime: runtime,
+          repository,
+          finalizer: new WorkerFinalizer({
+            artifactStore: new FileArtifactStore(repositoryRoot),
+            repository,
+            now: () => new Date("2026-08-30T03:02:10.123Z"),
+          }),
+        }).run({ request: input, executionStateRevision: 1 });
+
+        expect(execution.diff.changedFiles).toEqual(["outside.txt", "src/allowed.txt"]);
+        expect(execution.finalization.observation.outOfScopeFiles).toEqual(["outside.txt"]);
+        expect(execution.finalization.changeSet).toMatchObject({
+          status: "partial",
+          accepted: false,
+        });
+      },
+    );
+  });
 });

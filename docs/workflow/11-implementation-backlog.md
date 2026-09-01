@@ -980,10 +980,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Pre-existing modified/untracked files are preserved.
-- [ ] Same-file overlap is conservatively attributed.
-- [ ] External edits during Worker are detected.
-- [ ] Lost hunk/scope violation/uncertain attribution blocks safe acceptance.
+- [x] Pre-existing modified/untracked files are preserved.
+- [x] Same-file overlap is conservatively attributed.
+- [x] External edits during Worker are detected.
+- [x] Lost hunk/scope violation/uncertain attribution blocks safe acceptance.
 
 **Test Levels:** `SEC`, `E2E`
 
