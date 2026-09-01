@@ -7,6 +7,7 @@ import {
   CANONICAL_EVENT_TYPES,
   DomainEventSchema,
   EventEnvelopeV1Schema,
+  validateEventDraft,
 } from "../../src/contracts/events/event.js";
 
 function validArtifact() {
@@ -84,6 +85,12 @@ describe("artifact and event contracts", () => {
       /type.*run\.created.*error\.escalated/,
     );
     expect(() => EventEnvelopeV1Schema.parse({ ...validEvent(), type: "run.finalized" })).toThrow(
+      /type.*one of/,
+    );
+    expect(() =>
+      EventEnvelopeV1Schema.parse({ ...validEvent(), type: "graph.revision-changed" }),
+    ).toThrow(/type.*one of/);
+    expect(() => validateEventDraft({ ...validEvent(), type: "step.ready" })).toThrow(
       /type.*one of/,
     );
     expect(() => EventEnvelopeV1Schema.parse({ ...validEvent(), timestamp: "2026-08-30" })).toThrow(

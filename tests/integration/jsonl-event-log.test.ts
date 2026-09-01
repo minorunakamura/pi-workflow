@@ -27,13 +27,18 @@ describe("JSONL event log", () => {
     await withTempRepository({}, async (repositoryRoot) => {
       const writer = new JsonlEventWriter(repositoryRoot);
       const first = await writer.append(eventDraft("step.started"));
-      const rest = await writer.appendBatch([eventDraft(), eventDraft("step.failed")]);
+      const rest = await writer.appendBatch([
+        eventDraft(),
+        { ...eventDraft("step.failed"), caused_by: { event_id: first.event_id } },
+      ]);
 
       expect([first, ...rest].map(({ sequence, event_id }) => ({ sequence, event_id }))).toEqual([
         { sequence: 1, event_id: "evt-000001" },
         { sequence: 2, event_id: "evt-000002" },
         { sequence: 3, event_id: "evt-000003" },
       ]);
+
+      expect(rest[1]?.caused_by).toEqual({ event_id: first.event_id });
 
       const reader = new JsonlEventReader(repositoryRoot);
       await expect(reader.readAfter(RUN_ID, 1)).resolves.toEqual(rest);

@@ -284,6 +284,11 @@ export function parseEventEnvelopeV1(input: unknown): EventEnvelopeV1 {
   return input as EventEnvelopeV1;
 }
 
+export function validateEventDraft(input: unknown): void {
+  const value = record(input, "");
+  parseEventEnvelopeV1({ ...value, event_id: "evt-0", sequence: 0 });
+}
+
 export function parseDomainEvent(input: unknown): DomainEvent {
   return parseEventEnvelopeV1(input) as DomainEvent;
 }

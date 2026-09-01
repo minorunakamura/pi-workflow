@@ -1199,9 +1199,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Canonical Event types are emitted at correct transitions.
-- [ ] Retired noisy Events are not emitted.
-- [ ] Sequence/correlation/caused_by follow contract.
+- [x] Canonical Event types are emitted at correct transitions.
+- [x] Retired noisy Events are not emitted.
+- [x] Sequence/correlation/caused_by follow contract.
 
 **Test Levels:** `CONTRACT`, `INT`
 

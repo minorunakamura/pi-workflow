@@ -2,7 +2,7 @@ import {
   type AgentExecutionRequestV1,
   type StepResultV1,
 } from "../contracts/execution/agent-execution.js";
-import type { DomainEventDraft } from "../contracts/events/event.js";
+import { validateEventDraft } from "../contracts/events/event.js";
 import {
   createIdAllocator,
   type DecisionId,
@@ -34,6 +34,11 @@ import type {
   SchedulerStep,
 } from "../domain/scheduling/scheduler.js";
 import { FixReverifyRereviewRouter } from "./fix-reverify-rereview.js";
+import {
+  createWorkflowEventFactory,
+  type WorkflowEventFactory,
+  type WorkflowEventInput,
+} from "./event-taxonomy.js";
 import type {
   CancellationCoordinator,
   CancellationExecution,
@@ -91,15 +96,8 @@ export type OrchestratorFinalizePhase = (input: {
   normalized?: ResultNormalizationResult | null;
 }) => MaybePromise<WorkflowState>;
 
-export type OrchestratorEventFactory = (input: {
-  before: WorkflowState;
-  after: WorkflowState;
-  completion: CompletionEvaluation;
-  result: StepResultV1 | null;
-  step: SchedulerStep | null;
-  normalized?: ResultNormalizationResult | null;
-  iteration: number;
-}) => MaybePromise<readonly DomainEventDraft[]>;
+export type OrchestratorEventInput = WorkflowEventInput;
+export type OrchestratorEventFactory = WorkflowEventFactory;
 
 export type OrchestratorDependencies = Readonly<{
   stateStore: StateStore;
@@ -154,7 +152,6 @@ export class OrchestratorIterationLimitError extends Error {
 const unchanged: OrchestratorStatePhase = (state) => state;
 const noPostconditions: OrchestratorPostconditionPhase = ({ state }) => state;
 const noFinalization: OrchestratorFinalizePhase = ({ state }) => state;
-const noEvents: OrchestratorEventFactory = () => [];
 const pendingDecisionCompletion: CompletionEvaluation = {
   eligible: false,
   blockers: ["DECISION_PENDING"],
@@ -355,7 +352,7 @@ export class Orchestrator {
     this.trigger = dependencies.trigger ?? unchanged;
     this.postconditions = dependencies.postconditions ?? noPostconditions;
     this.finalize = dependencies.finalize ?? noFinalization;
-    this.events = dependencies.events ?? noEvents;
+    this.events = dependencies.events ?? createWorkflowEventFactory();
     this.idAllocator = dependencies.idAllocator ?? createIdAllocator();
     this.cancellation = dependencies.cancellation;
     this.fixCycle =
@@ -693,6 +690,7 @@ export class Orchestrator {
       normalized: input.normalized,
       iteration: input.iteration,
     });
+    for (const event of events) validateEventDraft(event);
     return this.dependencies.stateStore.commit({
       expectedRevision: input.before.run.state_revision,
       next,

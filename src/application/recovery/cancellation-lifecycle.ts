@@ -221,7 +221,7 @@ function cancellationEvent(
     source: { component: "cancellation" },
     actor: { type: "user" },
     state_revision: state.run.state_revision,
-    ...(executionId === undefined ? {} : { correlation_id: executionId }),
+    correlation_id: executionId ?? state.run.run_id,
     data,
   };
 }

@@ -245,6 +245,77 @@ describe("Orchestrator persistence integration", () => {
     });
   });
 
+  it("emits canonical transition Events with correlation by default", async () => {
+    const initial = workflowState();
+
+    await withTempRepository(fixtureFor(initial), async (repositoryRoot) => {
+      const runReader = new FileRunReader(repositoryRoot);
+      const stateStore = new FileStateStore(repositoryRoot, {
+        eventWriter: new JsonlEventWriter(repositoryRoot),
+      });
+      const step = createStep({
+        id: STEP_ID,
+        type: "implementation",
+        objective: "implement",
+        agent: "worker",
+        status: "ready",
+      });
+
+      await new Orchestrator({
+        runReader,
+        stateStore,
+        agentRuntime: { run: async () => result() },
+        buildRequest: async () => request(),
+        completion: async (state) => ({
+          eligible: state.snapshot.steps.steps[0]?.status === "completed",
+          blockers:
+            state.snapshot.steps.steps[0]?.status === "completed" ? [] : ["STEP_INCOMPLETE"],
+        }),
+        schedule: async () => ({ kind: "dispatch", step }),
+        postconditions: async ({ state, result: agentResult }) => ({
+          ...state,
+          run: {
+            ...state.run,
+            current_step: {
+              id: STEP_ID,
+              execution_id: agentResult.identity.executionId,
+              status: agentResult.outcome,
+            },
+          },
+          snapshot: {
+            ...state.snapshot,
+            steps: {
+              ...state.snapshot.steps,
+              steps: state.snapshot.steps.steps.map((currentStep) => ({
+                ...currentStep,
+                status: "completed" as const,
+                result: { summary: agentResult.summary },
+              })),
+            },
+          },
+        }),
+      }).run(RUN_ID);
+
+      const events = await new JsonlEventReader(repositoryRoot).readAfter(RUN_ID, 0);
+      expect(events.map(({ type }) => type)).toEqual([
+        "step.started",
+        "execution.started",
+        "execution.completed",
+        "step.completed",
+        "run.completed",
+      ]);
+      expect(events.map(({ sequence }) => sequence)).toEqual([1, 2, 3, 4, 5]);
+      expect(
+        events.slice(0, 4).every(({ correlation_id }) => correlation_id === EXECUTION_ID),
+      ).toBe(true);
+      expect(events.at(-1)?.correlation_id).toBe(RUN_ID);
+      expect(events.every(({ caused_by }) => caused_by === undefined)).toBe(true);
+      expect(events.map(({ type }) => type)).not.toEqual(
+        expect.arrayContaining(["step.ready", "run.finalized"]),
+      );
+    });
+  });
+
   it("runs ordered result validation and rejects a completed Step without required Artifacts", async () => {
     const initial = workflowState();
 
