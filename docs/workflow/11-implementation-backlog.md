@@ -1117,9 +1117,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Six `/wf-*` start commands invoke the new runtime/use cases.
-- [ ] Commands are registered through the Pi Package Extension entry point.
-- [ ] Commands contain no Playbook orchestration logic.
+- [x] Six `/wf-*` start commands invoke the new runtime/use cases.
+- [x] Commands are registered through the Pi Package Extension entry point.
+- [x] Commands contain no Playbook orchestration logic.
 
 **Test Levels:** `E2E`
 
