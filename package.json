@@ -9,6 +9,7 @@
     "format:check": "biome format .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:story-12-05": "node scripts/story-12-05-platform-matrix.mjs",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"
   },
   "keywords": [

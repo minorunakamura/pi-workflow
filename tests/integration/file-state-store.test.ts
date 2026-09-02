@@ -111,36 +111,67 @@ function fixtureFor(state: WorkflowState): RepositoryFixture {
   };
 }
 
+function fixtureUnderDirectory(state: WorkflowState, directory: string): RepositoryFixture {
+  return Object.fromEntries(
+    Object.entries(fixtureFor(state)).map(([path, contents]) => [join(directory, path), contents]),
+  );
+}
+
 describe("FileStateStore", () => {
   it("validates and finalizes the snapshot before atomically replacing run.yaml", async () => {
     const current = workflowState(1);
     const next = workflowState(2, 2);
+    const workspaceDirectory = "workspace with spaces-日本語";
 
-    await withTempRepository(fixtureFor(current), async (repositoryRoot) => {
-      const renameCalls: Array<readonly [string, string]> = [];
-      const store = new FileStateStore(repositoryRoot, {
-        rename: async (source, destination) => {
-          renameCalls.push([source, destination]);
-          await nodeRename(source, destination);
-        },
-      });
+    await withTempRepository(
+      fixtureUnderDirectory(current, workspaceDirectory),
+      async (repositoryRoot) => {
+        const workspaceRoot = join(repositoryRoot, workspaceDirectory);
+        const renameCalls: Array<readonly [string, string]> = [];
+        const store = new FileStateStore(workspaceRoot, {
+          rename: async (source, destination) => {
+            renameCalls.push([source, destination]);
+            await nodeRename(source, destination);
+          },
+        });
 
-      const committed = await store.commit({ expectedRevision: 1, next });
+        const committed = await store.commit({ expectedRevision: 1, next });
 
-      deepStrictEqual(committed, next);
-      expect(renameCalls.map(([, destination]) => destination)).toEqual([
-        join(repositoryRoot, RUN_DIRECTORY, "state", "snapshots", "2"),
-        join(repositoryRoot, RUN_DIRECTORY, "run.yaml"),
-      ]);
-      expect(renameCalls[0]?.[0]).toContain(
-        join(repositoryRoot, RUN_DIRECTORY, "state", "snapshots", ".2.tmp-"),
-      );
-      expect(renameCalls[1]?.[0]).toContain(join(repositoryRoot, RUN_DIRECTORY, ".run-tmp-"));
-      await expect(new FileRunReader(repositoryRoot).load(RUN_ID)).resolves.toMatchObject({
-        run: { state_revision: 2 },
-        snapshot: { requirement: { goal: "goal-2" } },
-      });
-    });
+        deepStrictEqual(committed, next);
+        expect(renameCalls.map(([, destination]) => destination)).toEqual([
+          join(workspaceRoot, RUN_DIRECTORY, "state", "snapshots", "2"),
+          join(workspaceRoot, RUN_DIRECTORY, "run.yaml"),
+        ]);
+        expect(renameCalls[0]?.[0]).toContain(
+          join(workspaceRoot, RUN_DIRECTORY, "state", "snapshots", ".2.tmp-"),
+        );
+        expect(renameCalls[1]?.[0]).toContain(join(workspaceRoot, RUN_DIRECTORY, ".run-tmp-"));
+        await expect(new FileRunReader(workspaceRoot).load(RUN_ID)).resolves.toMatchObject({
+          run: { state_revision: 2 },
+          snapshot: { requirement: { goal: "goal-2" } },
+        });
+      },
+    );
+  });
+
+  it("commits through the default filesystem path under a space/Unicode workspace root", async () => {
+    const current = workflowState(1);
+    const next = workflowState(2, 2);
+    const workspaceDirectory = "workspace with spaces-日本語";
+
+    await withTempRepository(
+      fixtureUnderDirectory(current, workspaceDirectory),
+      async (repositoryRoot) => {
+        const workspaceRoot = join(repositoryRoot, workspaceDirectory);
+        await expect(
+          new FileStateStore(workspaceRoot).commit({ expectedRevision: 1, next }),
+        ).resolves.toEqual(next);
+        await expect(new FileRunReader(workspaceRoot).load(RUN_ID)).resolves.toMatchObject({
+          run: { state_revision: 2 },
+          snapshot: { requirement: { goal: "goal-2" } },
+        });
+      },
+    );
   });
 
   it("persists immutable requirement revisions without rewriting the initial request", async () => {

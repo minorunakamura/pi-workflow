@@ -40,8 +40,10 @@ ${body}`;
 
 describe("FileArtifactStore", () => {
   it("stages, validates, redacts, and atomically finalizes an Artifact", async () => {
-    await withTempRepository({}, async (repositoryRoot) => {
-      const store = new FileArtifactStore(repositoryRoot);
+    const workspaceDirectory = "workspace with spaces-日本語";
+    await withTempRepository({ [`${workspaceDirectory}/.keep`]: "" }, async (repositoryRoot) => {
+      const workspaceRoot = join(repositoryRoot, workspaceDirectory);
+      const store = new FileArtifactStore(workspaceRoot);
       const staged = await store.stage({
         runId: RUN_ID,
         executionId: EXECUTION_ID,
@@ -67,7 +69,7 @@ describe("FileArtifactStore", () => {
         body: 'api_key: [REDACTED_SECRET]\n{"password":"[REDACTED_SECRET]"}\nAuthorization: [REDACTED_SECRET]\nsummary',
       });
       await expect(
-        readFile(join(repositoryRoot, RUN_DIRECTORY, ref.path), "utf8"),
+        readFile(join(workspaceRoot, RUN_DIRECTORY, ref.path), "utf8"),
       ).resolves.toContain("[REDACTED_SECRET]");
       expect(existsSync(staged.path)).toBe(false);
     });

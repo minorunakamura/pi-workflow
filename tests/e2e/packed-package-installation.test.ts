@@ -1,6 +1,15 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -98,6 +107,16 @@ describe("packed Pi Package installation", () => {
       const artifacts = (await readdir(artifactDirectory)).filter((file) => file.endsWith(".tgz"));
       expect(artifacts).toHaveLength(1);
       const artifactPath = join(artifactDirectory, artifacts[0]!);
+      const evidenceDirectory = process.env.PI_WORKFLOW_EVIDENCE_DIR;
+      if (evidenceDirectory !== undefined) {
+        await mkdir(evidenceDirectory, { recursive: true });
+        await copyFile(artifactPath, join(evidenceDirectory, "pi-workflow.tgz"));
+        await writeFile(
+          join(evidenceDirectory, "pnpm-pack.log"),
+          `${pack.stdout}\n${pack.stderr}`,
+          "utf8",
+        );
+      }
 
       const consumerRoot = join(tempRoot, "consumer");
       await mkdir(consumerRoot);
@@ -124,6 +143,13 @@ describe("packed Pi Package installation", () => {
         ["add", "--offline", "--ignore-workspace", "--ignore-scripts", artifactPath],
         consumerRoot,
       );
+      if (evidenceDirectory !== undefined) {
+        await writeFile(
+          join(evidenceDirectory, "pnpm-install.log"),
+          `${install.stdout}\n${install.stderr}`,
+          "utf8",
+        );
+      }
       const packageRoot = await realpath(join(consumerRoot, "node_modules", "pi-workflow"));
       expect(packageRoot).not.toBe(PROJECT_ROOT);
       expect(packageRoot).toContain(join("node_modules", "pi-workflow"));
@@ -259,13 +285,13 @@ describe("packed Pi Package installation", () => {
       );
       expect((await runCommand("git", ["status", "--porcelain"], consumerRoot)).stdout).toBe("");
 
-      const evidenceDirectory = join(consumerRoot, "release-evidence");
-      await mkdir(evidenceDirectory, { recursive: true });
-      const packLogPath = join(evidenceDirectory, "pnpm-pack.log");
-      const installLogPath = join(evidenceDirectory, "pnpm-install.log");
+      const consumerEvidenceDirectory = join(consumerRoot, "release-evidence");
+      await mkdir(consumerEvidenceDirectory, { recursive: true });
+      const packLogPath = join(consumerEvidenceDirectory, "pnpm-pack.log");
+      const installLogPath = join(consumerEvidenceDirectory, "pnpm-install.log");
       await writeFile(packLogPath, `${pack.stdout}\n${pack.stderr}`, "utf8");
       await writeFile(installLogPath, `${install.stdout}\n${install.stderr}`, "utf8");
-      const evidencePath = join(evidenceDirectory, "story-13-03.json");
+      const evidencePath = join(consumerEvidenceDirectory, "story-13-03.json");
       const evidence = {
         OS: process.platform,
         "Node version": process.version,

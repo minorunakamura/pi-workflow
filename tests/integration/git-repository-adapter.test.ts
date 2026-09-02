@@ -133,6 +133,7 @@ describe("GitRepositoryAdapter", () => {
         const before = await adapter.captureSnapshot();
         await git(nestedRoot, ["mv", "--", "before name.txt", "after name-日本語.txt"]);
         const after = await adapter.captureSnapshot();
+        const diff = await adapter.diff(before, after);
 
         expect(before.root).toBe(await realpath(nestedRoot));
         expect(after.status).toEqual({
@@ -150,6 +151,17 @@ describe("GitRepositoryAdapter", () => {
         });
         expect(Object.keys(after.fingerprints)).toEqual(["after name-日本語.txt"]);
         expect(after.fingerprints["after name-日本語.txt"]).toMatch(/^[0-9a-f]{64}$/);
+        expect(diff).toMatchObject({
+          changedFiles: ["after name-日本語.txt", "before name.txt"],
+          statusChanged: true,
+          fingerprintChanged: true,
+          files: expect.arrayContaining([
+            expect.objectContaining({
+              path: "after name-日本語.txt",
+              afterStatus: expect.objectContaining({ originalPath: "before name.txt" }),
+            }),
+          ]),
+        });
       },
     );
   });

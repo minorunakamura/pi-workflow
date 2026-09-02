@@ -1,0 +1,49 @@
+name: STORY-12-05 cross-platform
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  platform-matrix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run STORY-12-05 matrix and record Evidence
+        run: node scripts/story-12-05-platform-matrix.mjs
+
+      - name: Upload STORY-12-05 Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: story-12-05-${{ matrix.os }}
+          path: release-evidence/story-12-05
+          if-no-files-found: warn

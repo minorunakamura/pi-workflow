@@ -1497,7 +1497,7 @@ spec_refs:
 **Acceptance Criteria**
 
 - [ ] macOS/Linux/Windows relevant path/rename/process/lock/Git behavior is validated on actual target OS environments.
-- [ ] Release Evidence records OS, Node/pnpm/Git versions, filesystem/environment, test command, result, and artifact/log location.
+- [x] Release Evidence records OS, Node/pnpm/Git versions, filesystem/environment, test command, result, and artifact/log location.
 - [ ] Persistence pointer replacement/crash boundaries, Run/Workspace locks and process liveness, space/Unicode paths, Git status/diff/rename, packed installation/load, and packaged Skill discovery are covered by the platform matrix.
 
 **Test Levels:** `INT`, `CRASH`
