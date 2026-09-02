@@ -404,6 +404,27 @@ Responsibilities:
 
 No separate Skill Router Agent is required.
 
+### Core Skill Implementation
+
+The semantic responsibility and procedure of each Phase 1 Core Skill are owned by `05-agents-and-skills.md`. This implementation specification defines how those authored procedures are packaged and executed; it MUST NOT invent or redefine Skill behavior that is absent from the design specification.
+
+All nine Phase 1 Core Skills MUST contain executable procedural guidance rather than metadata-only placeholders. Each authored `SKILL.md` MUST, in a form appropriate to the Skill, make the following operationally clear:
+
+- purpose/responsibility and the problem the Skill addresses;
+- applicability and relevant non-applicability boundaries;
+- inputs/evidence the procedure relies on;
+- a concrete procedure that an allowed Agent can follow;
+- expected output/evidence;
+- constraints and stopping/escalation conditions where relevant.
+
+A placeholder that only declares the Skill name/description or defers runtime behavior to a future Story does not satisfy Phase 1 implementation.
+
+Skill content MUST remain subordinate to the invoking Agent definition, Execution Request, decision authority, permissions, Write Scope, and selected Tool capabilities. A Skill MUST NOT widen Agent authority or permissions, bypass Orchestrator-owned State mutation, or create a direct user-interaction path.
+
+The normal production path MUST be able to discover, select, load, and supply the authored Skill content through `SkillCatalog` and `PromptAssembler`. Being present in the package or discoverable by metadata alone is insufficient evidence that a Core Skill is implemented.
+
+Tests SHOULD validate that all nine packaged Core Skills are non-placeholder and structurally executable, while focused integration/E2E Evidence SHOULD demonstrate that selected Skill content reaches production Agent Execution without automatically loading every allowlisted Skill.
+
 ## Model Resolver
 
 Deterministic model resolution uses effective config + Agent policy + runtime availability. It records requested/actual model and only uses configured fallbacks.
