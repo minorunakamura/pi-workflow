@@ -245,6 +245,13 @@ describe("packed Pi Package installation", () => {
           filePath.startsWith(join(packageRoot, "skills")),
         ),
       ).toBe(true);
+      for (const skill of loadedSkills.skills) {
+        const content = await readFile(skill.filePath, "utf8");
+        expect(content).toContain("## Procedure");
+        expect(content).not.toMatch(
+          /will be added|will be implemented|\bTODO\b|\bplaceholder\b|not implemented|\bTBD\b/i,
+        );
+      }
 
       const extensions = resourceLoader.getExtensions();
       expect(extensions.errors).toEqual([]);
@@ -290,6 +297,14 @@ describe("packed Pi Package installation", () => {
         "verifier",
         "reviewer",
       ]);
+      const scoutRequest = requests[0];
+      expect(scoutRequest?.skill).toEqual(["how", "why", "blast-radius"]);
+      expect(scoutRequest?.task).toContain(
+        "Resolved Workflow Prompt (assembled from the selected Skill content and execution inputs):",
+      );
+      expect(scoutRequest?.task).toContain("Selected Skill how@1.0.0");
+      expect(scoutRequest?.task).toContain("## Procedure");
+      expect(scoutRequest?.task).not.toContain("Selected Skill architect@1.0.0");
       expect(new Set(requests.map(({ cwd }) => cwd))).toEqual(
         new Set([await realpath(consumerRoot)]),
       );

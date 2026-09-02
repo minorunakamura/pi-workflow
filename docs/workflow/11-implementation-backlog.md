@@ -1701,15 +1701,15 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] All nine Phase 1 Core Skills contain implemented procedural guidance rather than metadata-only placeholders or text that defers behavior to a future Story.
-- [ ] Each `SKILL.md` implements the responsibility/procedure defined by the authoritative Skill specification without silently adding new behavior.
-- [ ] Each Skill makes its purpose/applicability, concrete procedure, expected output/evidence, and relevant constraints or stopping/escalation conditions operationally clear.
-- [ ] Skill content cannot widen the invoking Agent's permissions, authority, Write Scope, Tool access, or user-interaction capability.
-- [ ] Agent allowlists remain enforced and allowlisted Skills are not automatically loaded merely because they are permitted.
-- [ ] `SkillCatalog` discovers/resolves the implemented packaged content and `PromptAssembler` supplies only selected Skill content to Agent Execution.
-- [ ] Tests fail when any required Core Skill is missing, metadata-only, structurally incomplete, or still contains an implementation-deferred placeholder.
-- [ ] Packed-package verification proves all nine implemented Skills are included and discoverable from a clean consumer without authored `.pi/agent/skills/` copies.
-- [ ] Focused production-path integration/E2E Evidence demonstrates selected Skill content reaches Agent Execution; fake/test-only Skill injection alone is insufficient.
+- [x] All nine Phase 1 Core Skills contain implemented procedural guidance rather than metadata-only placeholders or text that defers behavior to a future Story.
+- [x] Each `SKILL.md` implements the responsibility/procedure defined by the authoritative Skill specification without silently adding new behavior.
+- [x] Each Skill makes its purpose/applicability, concrete procedure, expected output/evidence, and relevant constraints or stopping/escalation conditions operationally clear.
+- [x] Skill content cannot widen the invoking Agent's permissions, authority, Write Scope, Tool access, or user-interaction capability.
+- [x] Agent allowlists remain enforced and allowlisted Skills are not automatically loaded merely because they are permitted.
+- [x] `SkillCatalog` discovers/resolves the implemented packaged content and `PromptAssembler` supplies only selected Skill content to Agent Execution.
+- [x] Tests fail when any required Core Skill is missing, metadata-only, structurally incomplete, or still contains an implementation-deferred placeholder.
+- [x] Packed-package verification proves all nine implemented Skills are included and discoverable from a clean consumer without authored `.pi/agent/skills/` copies.
+- [x] Focused production-path integration/E2E Evidence demonstrates selected Skill content reaches Agent Execution; fake/test-only Skill injection alone is insufficient.
 
 **Test Levels:** `CONTRACT`, `INT`, `E2E`
 

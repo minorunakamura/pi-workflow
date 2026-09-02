@@ -46,6 +46,7 @@ type AgentRuntimeExecution = Readonly<{
 export type PiSubagentsAdapterOptions = Readonly<{
   cwd?: string;
   telemetryLevel?: TelemetryLevel;
+  buildPrompt?: (request: AgentExecutionRequestV1) => string;
 }>;
 
 const resultArraySchema = { type: "array" } as const;
@@ -169,10 +170,16 @@ function resolveSkills(request: AgentExecutionRequestV1): string[] {
   ];
 }
 
-function createTask(request: AgentExecutionRequestV1): string {
+function createTask(request: AgentExecutionRequestV1, prompt?: string): string {
   return [
     "Execute exactly one Workflow Agent Execution.",
     request.objective.objective,
+    ...(prompt === undefined
+      ? []
+      : [
+          "Resolved Workflow Prompt (assembled from the selected Skill content and execution inputs):",
+          prompt,
+        ]),
     "Execution request (JSON):",
     JSON.stringify(request),
     "Return only the StepResultV1 structured result and preserve the request identity.",
@@ -182,6 +189,7 @@ function createTask(request: AgentExecutionRequestV1): string {
 function createDelegationRequest(
   request: AgentExecutionRequestV1,
   cwd: string,
+  prompt?: string,
 ): SubagentDelegationRequest {
   const timeoutMs = request.execution.timeoutMs;
   if (timeoutMs > MAX_DELEGATION_TIMEOUT_MS) {
@@ -201,7 +209,7 @@ function createDelegationRequest(
     ownerRunId: request.identity.runId,
     nodeId: request.identity.stepId,
     agent: request.identity.agentId,
-    task: createTask(request),
+    task: createTask(request, prompt),
     context: "fresh",
     cwd,
     ...(model ? { model } : {}),
@@ -323,6 +331,7 @@ export class PiSubagentsAdapter implements AgentRuntime {
   private readonly events: PiEventBus;
   private readonly cwd: string;
   private readonly telemetryLevel: TelemetryLevel | undefined;
+  private readonly buildPrompt: ((request: AgentExecutionRequestV1) => string) | undefined;
 
   constructor(pi: Pick<ExtensionAPI, "events">, options: PiSubagentsAdapterOptions = {}) {
     const cwd = options.cwd ?? process.cwd();
@@ -332,6 +341,7 @@ export class PiSubagentsAdapter implements AgentRuntime {
     this.events = pi.events;
     this.cwd = cwd;
     this.telemetryLevel = options.telemetryLevel;
+    this.buildPrompt = options.buildPrompt;
   }
 
   async run(
@@ -340,7 +350,11 @@ export class PiSubagentsAdapter implements AgentRuntime {
   ): Promise<StepResultV1> {
     const validatedRequest = validateAgentExecutionRequest(request);
     const started = performance.now();
-    const execution = await this.execute(validatedRequest, signal);
+    const prompt = this.buildPrompt?.(validatedRequest);
+    if (prompt !== undefined && prompt.trim().length === 0) {
+      throw new Error("PiSubagentsAdapter assembled prompt must not be empty");
+    }
+    const execution = await this.execute(validatedRequest, signal, prompt);
     const response = execution.response;
     if (response.status !== "completed") {
       throw new Error(
@@ -374,8 +388,9 @@ export class PiSubagentsAdapter implements AgentRuntime {
   private execute(
     request: AgentExecutionRequestV1,
     signal: AbortSignal,
+    prompt?: string,
   ): Promise<AgentRuntimeExecution> {
-    const delegationRequest = createDelegationRequest(request, this.cwd);
+    const delegationRequest = createDelegationRequest(request, this.cwd, prompt);
 
     if (signal.aborted) {
       return Promise.reject(abortError());
