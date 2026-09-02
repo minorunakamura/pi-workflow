@@ -1512,10 +1512,10 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] `/wf-*` uses the new runtime after release gates pass.
-- [ ] Obsolete runtime is removed only after stabilization.
-- [ ] `workflow-tui.ts` is removed as planned.
-- [ ] Legacy session transcript migration is not introduced.
+- [x] `/wf-*` uses the new runtime after release gates pass.
+- [x] Obsolete runtime is removed only after stabilization.
+- [x] `workflow-tui.ts` is removed as planned.
+- [x] Legacy session transcript migration is not introduced.
 
 **Test Levels:** `E2E`
 
