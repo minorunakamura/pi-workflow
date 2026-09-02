@@ -1713,6 +1713,151 @@ spec_refs:
 
 **Test Levels:** `CONTRACT`, `INT`, `E2E`
 
+## STORY-13-07 — Production Orchestration Finalization and Dynamic Control Wiring
+
+**Goal:** Connect authoritative Change Set / Verification Run / Review Run / Finding / Outcome finalization and required dynamic-control paths to the installed/default production Orchestrator so a Run cannot complete from raw Agent results alone.
+
+**Priority:** P0
+
+**Dependencies:** STORY-13-01, STORY-13-02, Gate A, existing Gate B finalizer/components
+
+```yaml
+spec_refs:
+  required:
+    - 02-runtime-architecture.md#runtime-control-loop
+    - 02-runtime-architecture.md#composition-root
+    - 04-orchestration.md#dynamic-graph-mutation
+    - 04-orchestration.md#verification-and-review-fix-loop
+    - 04-orchestration.md#completion
+    - 05-agents-and-skills.md#step-result
+    - 10-implementation-specification.md#default-production-composition
+    - 10-implementation-specification.md#release-closure-integration-assertions
+```
+
+**Acceptance Criteria**
+
+- [x] The installed/default production Orchestrator sends accepted Agent results through the same schema/identity/role/reference/permission/repository-postcondition normalization required by the authoritative runtime contract.
+- [x] Worker completion finalizes an authoritative Change Set from actual repository observation; a raw `completed` Agent result cannot independently satisfy implementation completion.
+- [x] Required Verifier execution finalizes a Verification Run and required Reviewer execution finalizes a Review Run plus Finding candidates/rechecks through Orchestrator/domain normalization.
+- [x] Completion invokes `CompletionEvaluator` before terminalization and cannot succeed while a required Verification/Review result is missing/stale/failed, a blocking/fix-required Finding remains open, repository drift is unresolved, or another Completion Gate is not satisfied.
+- [x] Eligible completion finalizes `outcome.md`, commits final authoritative State, appends required Events, and reaches the defined terminal lifecycle without a test-only completion shortcut.
+- [x] Production dynamic-control wiring handles required triggers including verification failure, review finding, plan deviation, request amendment, repository drift, runtime failure, recovery, and re-plan insertion through the Orchestrator control loop.
+- [x] The Worker → Verifier → Reviewer fix/reverify/rereview path executes through the installed/default production composition when a verification failure or review finding requires a fix.
+- [x] Production-path tests fail when the CS/VR/RR/Outcome finalizer wiring or required dynamic-control hook is removed; component-only/fake-path coverage is insufficient.
+- [x] A focused installed/default E2E demonstrates Worker → Change Set → Verifier → Verification Run → Reviewer → Review Run/Findings → CompletionEvaluator → Outcome.
+
+**Test Levels:** `ARCH`, `INT`, `E2E`
+
+**Release Gate:** Gate B / Gate C production integration
+
+## STORY-13-08 — Production Repository and Capability Enforcement
+
+**Goal:** Enforce Plan Write Scope, dirty/pre-existing repository safety, drift checks, Agent permissions, and Tool capabilities through the concrete installed/default runtime rather than relying on prompt instructions or permissive repository defaults.
+
+**Priority:** P0
+
+**Dependencies:** STORY-13-07, existing repository/security adapters and finalizers
+
+```yaml
+spec_refs:
+  required:
+    - 05-agents-and-skills.md#tool-model
+    - 07-security-recovery-and-repository.md#agent-permission-enforcement
+    - 07-security-recovery-and-repository.md#write-scope
+    - 07-security-recovery-and-repository.md#repository-baseline
+    - 07-security-recovery-and-repository.md#pre-existing-changes
+    - 07-security-recovery-and-repository.md#mutation-attribution
+    - 07-security-recovery-and-repository.md#repository-drift
+    - 07-security-recovery-and-repository.md#recovery-manager
+    - 10-implementation-specification.md#release-closure-integration-assertions
+```
+
+**Acceptance Criteria**
+
+- [ ] The approved Plan Write Scope is propagated into each Worker Execution Request; production composition does not replace it with repository-wide scope unless the authoritative Plan explicitly authorizes that scope.
+- [ ] Run start records the actual repository root identity, HEAD, branch, dirty state, and pre-existing changed/untracked files; a dirty repository is never persisted as a synthetic clean baseline.
+- [ ] Worker pre/post repository observation produces mutation attribution and an actual diff check before Change Set acceptance.
+- [ ] `WRITE_SCOPE_VIOLATION`, uncertain attribution, or detected pre-existing change loss blocks acceptance according to the repository safety contract.
+- [ ] Pre-existing user changes are preserved and are not automatically reset/restored/cleaned by the workflow runtime.
+- [ ] Required repository drift checks execute on the installed/default lifecycle boundaries and unresolved relevant/critical/unknown drift blocks unsafe continuation/completion.
+- [ ] Agent mode/permissions and Tool capability policy are propagated to the concrete Pi Agent Runtime adapter as enforceable execution constraints where supported; prompt text is not the sole security boundary.
+- [ ] Read-only/verify-only Agents cannot mutate source through the normal runtime path, Worker cannot escape approved Write Scope, and normal Phase 1 execution cannot perform prohibited Git writes.
+- [ ] Security/golden-repository E2E covers dirty tree, pre-existing changes, out-of-scope mutation, drift, prohibited Agent mutation, and Tool-capability denial through the production composition.
+
+**Test Levels:** `UNIT`, `INT`, `E2E`, `CRASH`
+
+**Release Gate:** Gate B / Repository-Security / Gate C recovery safety
+
+## STORY-13-09 — Packed Production Agent Runtime Closure
+
+**Goal:** Prove that a clean-consumer packed installation can resolve all required Agent resources and execute the actual production Pi Agent Runtime bridge, independently from package-installation mechanics.
+
+**Priority:** P0
+
+**Dependencies:** STORY-13-03, STORY-13-07, STORY-13-08
+
+```yaml
+spec_refs:
+  required:
+    - 02-runtime-architecture.md#agent-runtime-boundary
+    - 05-agents-and-skills.md#agent-definitions
+    - 05-agents-and-skills.md#skill-packaging-and-discovery
+    - 10-implementation-specification.md#default-production-composition
+    - 10-implementation-specification.md#release-evidence-contract
+    - 10-implementation-specification.md#release-closure-integration-assertions
+```
+
+**Acceptance Criteria**
+
+- [ ] The distributable package contains/resolves all seven Phase 1 Agent resources required by the production registry, including `verifier`.
+- [ ] A `pnpm pack` (or repository-equivalent package artifact) is installed/loaded from a clean consumer without source-checkout resource paths, authored `.pi/agent/skills/` copies, or manually injected Agent roots.
+- [ ] The packed/default runtime resolves Worker, Verifier, and Reviewer through the production Agent registry and reaches `PiSubagentsAdapter` through the normal Composition Root.
+- [ ] Release E2E does not intercept delegation and synthesize the Agent response before the production Pi Agent Runtime bridge; the actual bridge used by installed/default operation is exercised.
+- [ ] Selected packaged Skill content still reaches Agent execution through `SkillCatalog → PromptAssembler → PiSubagentsAdapter` while Agent/Tool allowlists remain enforced.
+- [ ] A packed/default E2E demonstrates the required production chain through Worker → Verifier → Reviewer → Outcome without manual use-case injection or synthetic delegation shortcuts.
+- [ ] Packed Package Installation/Loading Evidence is reported separately from Packed Production Runtime Operation Evidence; successful install/load alone does not establish `NEW_RUNTIME_OPERATIONAL`.
+- [ ] External live LLM/provider execution is not required for every deterministic release test; any remaining live-provider coverage gap is reported separately and is not used to substitute for proof of the real Pi execution bridge.
+
+**Test Levels:** `ARCH`, `INT`, `E2E`
+
+**Release Gate:** Gate C / Packed Production Runtime / `NEW_RUNTIME_OPERATIONAL`
+
+## STORY-13-10 — Gate D Production Evaluation Projection Closure
+
+**Goal:** Connect the Monitoring indexer to deterministic metrics/evaluation so authoritative Run changes produce rebuildable provisional/final `RunEvaluationRecord` projections and Gate D is proven through the real production read path.
+
+**Priority:** P0
+
+**Dependencies:** existing telemetry/evaluation/Monitoring components, STORY-13-07
+
+```yaml
+spec_refs:
+  required:
+    - 08-observability-and-evaluation.md#run-metrics-aggregator
+    - 08-observability-and-evaluation.md#run-evaluation-record
+    - 08-observability-and-evaluation.md#telemetry-quality
+    - 09-monitoring.md#evaluation-projection
+    - 09-monitoring.md#phase-1-mvp
+    - 10-implementation-specification.md#monitoring-modules
+    - 10-implementation-specification.md#release-closure-integration-assertions
+```
+
+**Acceptance Criteria**
+
+- [ ] `RunEvaluationRecord.telemetry_quality.status` supports `healthy`, `degraded`, and `insufficient` according to the authoritative telemetry-quality rules.
+- [ ] Missing required telemetry is represented explicitly and is not silently converted to zero-valued healthy metrics.
+- [ ] On relevant State/Event changes, the Monitoring indexer invokes the deterministic metrics/evaluation path and writes/updates the `evaluations` SQLite projection.
+- [ ] A finalized Run receives a `final` evaluation for the current evaluator version; active/non-final Runs can receive a `provisional` evaluation.
+- [ ] Full Monitoring rebuild from authoritative Run directories recreates evaluation projections without relying on prior SQLite state or manually inserted evaluation records.
+- [ ] Incremental indexing updates evaluation projection consistently with indexed State/Event revisions and does not expose a mixed projection for one Run update.
+- [ ] Evaluation and Two-Run Compare read paths consume generated evaluation records and surface telemetry-quality/comparability warnings where applicable.
+- [ ] Gate D E2E proves Run discovery/index → metrics aggregation → evaluation → SQLite projection → Evaluation/Compare API through the production Monitoring composition; tests that satisfy the path only by manual evaluation INSERT are insufficient.
+- [ ] `/api/v1/health` is not required to close this Story or Phase 1 release unless `09-monitoring.md` Phase 1 MVP Required is explicitly changed to make it mandatory.
+
+**Test Levels:** `UNIT`, `INT`, `E2E`
+
+**Release Gate:** Gate D
+
 # Critical Path
 
 ```text
@@ -1738,13 +1883,21 @@ Monitoring / Compare    ← Gate D
   ↓
 Hardening / Cutover
   ↓
-Release Closure (production wiring / packed install / Gate C default path)
+Release Closure bootstrap / default path (STORY-13-01 → STORY-13-04)
   ↓
 Core Skill specification / implementation (STORY-13-05 → STORY-13-06)
   ↓
-Cross-platform re-validation (STORY-12-05)
+Production orchestration finalization / dynamic control (STORY-13-07)
   ↓
-Legacy Cutover re-validation (STORY-12-06)
+Repository / capability enforcement (STORY-13-08)
+  ↓
+Packed production Agent runtime (STORY-13-09)
+  ↓
+Gate D production evaluation projection (STORY-13-10)
+  ↓
+Cross-platform re-validation against the new RC HEAD (STORY-12-05)
+  ↓
+Legacy Cutover re-validation against the new RC HEAD (STORY-12-06)
   ↓
 Phase 1 Release
 ```
@@ -1771,10 +1924,13 @@ Runs can be indexed, observed, evaluated, and compared with telemetry quality/co
 
 Requires architecture/domain/persistence/crash/fake-E2E/real-write/recovery/security/evaluation/Monitoring hard gates to pass, plus:
 
-- Gate C passing through the installed/default production runtime path;
+- Gate B production finalization and repository/capability safety passing through the installed/default production runtime path;
+- Gate C recovery/command/dynamic-control behavior passing through the installed/default production runtime path;
 - all nine Phase 1 Core Skills having non-placeholder executable procedures defined by the authoritative Skill specification and available through the production Skill path;
 - packed Package installation/loading Evidence from a clean consumer;
-- cross-platform hardening Evidence for macOS, Linux, and Windows;
+- packed production Agent-runtime Evidence proving the actual installed/default Pi Agent Runtime bridge separately from package-installation mechanics;
+- Gate D production Monitoring projection generating rebuildable `RunEvaluationRecord` data rather than relying on manually inserted evaluation rows;
+- cross-platform hardening Evidence for macOS, Linux, and Windows against the release-candidate HEAD;
 - Legacy Cutover certification with `LEGACY_PATH_ABSENT`, `NEW_RUNTIME_OPERATIONAL`, `CUTOVER_ELIGIBLE`, and `NO_LEGACY_FALLBACK` satisfied.
 
 Release verification MUST report each required area as `PASS`, `FAIL`, `INSUFFICIENT EVIDENCE`, or `NOT ELIGIBLE` where applicable. A prior Story completion marker does not override missing Acceptance Criteria or Evidence discovered by release verification. Parallelism begins only after multiple stable Phase 1 Runs establish an evaluation baseline.

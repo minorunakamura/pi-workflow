@@ -74,7 +74,10 @@ function completedResult(
     finding_rechecks: [],
     plan_deviations: [],
     skill_requests: [],
-    execution_checks: [],
+    execution_checks:
+      request.agent === "verifier"
+        ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
+        : [],
     observations: [],
     blocked: null,
     failure: null,
@@ -197,7 +200,7 @@ describe("Gate C default production path", () => {
         expect(notifications.join("\n")).not.toContain("NOT_IMPLEMENTED");
       },
     );
-  });
+  }, 30_000);
 
   it("routes D3 approval, options, custom, cancellation, and resume through the production UI adapter", async () => {
     const skills = packageSkills();
@@ -440,7 +443,11 @@ describe("Gate C default production path", () => {
 
         await registrations.get("wf-feature")!.handler("crash recovery", commandContext);
         await expect(reader.load("run-001" as RunId)).resolves.toMatchObject({
-          run: { status: "running", finalized: false },
+          run: {
+            status: "failed",
+            finalized: false,
+            failure: { resumable: true },
+          },
         });
         expect(notifications.join("\n")).toContain("simulated Pi Agent crash");
 

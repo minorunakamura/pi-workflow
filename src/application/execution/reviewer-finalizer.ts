@@ -84,6 +84,7 @@ export type ReviewRun = Readonly<{
 export type ReviewerFinalizerInput = Readonly<{
   request: AgentExecutionRequestV1;
   result: StepResultV1;
+  normalizedFindings?: readonly NormalizedCandidate<FindingId>[];
   before: RepositorySnapshot;
   after: RepositorySnapshot;
   diff?: RepositoryDiff;
@@ -330,7 +331,35 @@ function normalizeFindingCandidates(
   result: StepResultV1,
   allocator: IdAllocator,
   used: Set<string>,
+  normalized?: readonly NormalizedCandidate<FindingId>[],
 ): readonly NormalizedCandidate<FindingId>[] {
+  if (normalized !== undefined) {
+    return normalized.map((candidate, index) => {
+      if (!/^F-\d+$/.test(candidate.id) || used.has(candidate.id)) {
+        findingError(
+          `normalized finding_candidates[${index}] has an invalid or duplicate identity`,
+        );
+      }
+      const severity = findingValue(
+        candidate.severity,
+        FINDING_SEVERITIES,
+        `finding_candidates[${index}].severity`,
+      );
+      const confidence = findingValue(
+        candidate.confidence,
+        FINDING_CONFIDENCES,
+        `finding_candidates[${index}].confidence`,
+      );
+      used.add(candidate.id);
+      createFinding({
+        id: candidate.id,
+        severity: severity as FindingSeverity,
+        confidence: confidence as FindingConfidence,
+      });
+      return candidate;
+    });
+  }
+
   return result.finding_candidates.map((candidate, index) => {
     if (Object.hasOwn(candidate, "id")) {
       findingError(`finding_candidates[${index}] must not contain an authoritative identity`);
@@ -567,7 +596,12 @@ export class ReviewerFinalizer {
       normalizeExistingFinding,
     );
     const used = new Set(existing.map(({ id }) => id));
-    const findings = normalizeFindingCandidates(result, this.idAllocator, used);
+    const findings = normalizeFindingCandidates(
+      result,
+      this.idAllocator,
+      used,
+      input.normalizedFindings,
+    );
     const rechecks = normalizeFindingRechecks(result, existing);
     const status: ArtifactStatus =
       result.outcome === "completed" && !observation.mutated ? "complete" : "partial";

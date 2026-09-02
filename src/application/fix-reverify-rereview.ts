@@ -382,18 +382,22 @@ function failedVerificationStep(
       ? current
       : undefined;
   }
-  if (input.blockers?.includes("VERIFICATION_FAILED")) {
-    const latest = state.snapshot.steps.steps.filter(({ type }) => type === "verification").at(-1);
+  if (
+    input.blockers?.includes("VERIFICATION_FAILED") ||
+    input.blockers?.includes("VERIFICATION_STALE")
+  ) {
+    const latest = state.snapshot.steps.steps
+      .filter(({ type, status }) => type === "verification" && status !== "skipped")
+      .at(-1);
     return latest === undefined ? undefined : findStep(graph, latest.id);
   }
-  const failed = state.snapshot.steps.steps.filter(
-    ({ type, status, result }) =>
-      type === "verification" &&
-      status !== "skipped" &&
-      (status === "failed" || hasVerificationFailure(result)),
-  );
-  const candidate = failed.at(-1);
-  return candidate === undefined ? undefined : findStep(graph, candidate.id);
+  const candidate = state.snapshot.steps.steps
+    .filter(({ type, status }) => type === "verification" && status !== "skipped")
+    .at(-1);
+  return candidate !== undefined &&
+    (candidate.status === "failed" || hasVerificationFailure(candidate.result))
+    ? findStep(graph, candidate.id)
+    : undefined;
 }
 
 function reviewStep(graph: StepGraph, input: FixCycleRouteInput): Step | undefined {
@@ -406,7 +410,7 @@ function reviewStep(graph: StepGraph, input: FixCycleRouteInput): Step | undefin
 function hasBlockingFinding(state: WorkflowState): boolean {
   return state.snapshot.findings.findings.some(
     ({ state: findingState, disposition }) =>
-      findingState === "open" && disposition === "fix-required",
+      findingState === "open" && (disposition === "pending" || disposition === "fix-required"),
   );
 }
 
@@ -427,7 +431,12 @@ function triggerFor(
   ) {
     return "verification failure";
   }
-  if (input.blockers?.includes("FINDING_FIX_REQUIRED") || hasBlockingFinding(state)) {
+  if (
+    input.blockers?.includes("FINDING_PENDING") ||
+    input.blockers?.includes("FINDING_FIX_REQUIRED") ||
+    input.blockers?.includes("REVIEW_STALE") ||
+    hasBlockingFinding(state)
+  ) {
     return "review finding";
   }
   return undefined;
