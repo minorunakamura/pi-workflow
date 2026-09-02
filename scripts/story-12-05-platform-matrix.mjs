@@ -29,9 +29,19 @@ const testFiles = [
 ];
 const testCommand = `pnpm test ${testFiles.join(" ")}`;
 
+function pnpmInvocation(args) {
+  return platform() === "win32"
+    ? {
+        command: process.env.ComSpec ?? "cmd.exe",
+        args: ["/d", "/s", "/c", pnpm, ...args],
+      }
+    : { command: pnpm, args: [...args] };
+}
+
 async function commandVersion(command, args) {
   try {
-    const result = await execFileAsync(command, args, {
+    const invocation = command === pnpm ? pnpmInvocation(args) : { command, args: [...args] };
+    const result = await execFileAsync(invocation.command, invocation.args, {
       cwd: projectRoot,
       encoding: "utf8",
     });
@@ -45,7 +55,8 @@ function runTests() {
   return new Promise((resolveResult) => {
     const output = [];
     let commandError;
-    const child = spawn(pnpm, ["test", ...testFiles], {
+    const invocation = pnpmInvocation(["test", ...testFiles]);
+    const child = spawn(invocation.command, invocation.args, {
       cwd: projectRoot,
       env: { ...process.env, CI: "1", PI_WORKFLOW_EVIDENCE_DIR: evidenceDirectory },
       stdio: ["ignore", "pipe", "pipe"],

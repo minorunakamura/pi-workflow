@@ -38,6 +38,15 @@ const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
 const PNPM = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
+function pnpmInvocation(args: readonly string[]): { command: string; args: string[] } {
+  return process.platform === "win32"
+    ? {
+        command: process.env.ComSpec ?? "cmd.exe",
+        args: ["/d", "/s", "/c", PNPM, ...args],
+      }
+    : { command: PNPM, args: [...args] };
+}
+
 type CommandOutput = Readonly<{
   stdout: string;
   stderr: string;
@@ -48,7 +57,8 @@ async function runCommand(
   args: readonly string[],
   cwd: string,
 ): Promise<CommandOutput> {
-  const result = await execFileAsync(command, [...args], {
+  const invocation = command === PNPM ? pnpmInvocation(args) : { command, args: [...args] };
+  const result = await execFileAsync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
     env: { ...process.env, CI: "1" },
@@ -93,7 +103,7 @@ function testUi(notifications: string[]): ExtensionUIContext {
 
 describe("packed Pi Package installation", () => {
   it("loads the artifact in a clean consumer and runs the default /wf-* path", async () => {
-    const tempRoot = await mkdtemp(join(tmpdir(), "pi-workflow-story-13-03-"));
+    const tempRoot = await mkdtemp(join(tmpdir(), "pi-workflow story-13-03-日本語-"));
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
 
     try {
@@ -140,7 +150,7 @@ describe("packed Pi Package installation", () => {
 
       const install = await runCommand(
         PNPM,
-        ["add", "--offline", "--ignore-workspace", "--ignore-scripts", artifactPath],
+        ["add", "--ignore-workspace", "--ignore-scripts", artifactPath],
         consumerRoot,
       );
       if (evidenceDirectory !== undefined) {
