@@ -1608,12 +1608,12 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] A package artifact is produced using the repository package process (for example `pnpm pack`).
-- [ ] The artifact is installed/loaded from a clean consumer context rather than referenced as the source checkout.
-- [ ] No authored `.pi/agent/skills/` copy is required and all nine packaged Skills are discovered.
-- [ ] The packed Extension binds successfully and `/wf-*` reaches the production/default runtime.
-- [ ] Pi core peer dependencies and the bundled/runtime dependency on `pi-subagents` resolve according to Package rules.
-- [ ] The test records reproducible Release Evidence.
+- [x] A package artifact is produced using the repository package process (for example `pnpm pack`).
+- [x] The artifact is installed/loaded from a clean consumer context rather than referenced as the source checkout.
+- [x] No authored `.pi/agent/skills/` copy is required and all nine packaged Skills are discovered.
+- [x] The packed Extension binds successfully and `/wf-*` reaches the production/default runtime.
+- [x] Pi core peer dependencies and the bundled/runtime dependency on `pi-subagents` resolve according to Package rules.
+- [x] The test records reproducible Release Evidence.
 
 **Test Levels:** `INT`, `E2E`
 
