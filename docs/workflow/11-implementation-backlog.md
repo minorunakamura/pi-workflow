@@ -1437,8 +1437,8 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Crash before/during Agent, during Worker, after Artifact, after State, during resume/cancel is covered.
-- [ ] Current State remains old-or-new complete, never partial mixed state.
+- [x] Crash before/during Agent, during Worker, after Artifact, after State, during resume/cancel is covered.
+- [x] Current State remains old-or-new complete, never partial mixed state.
 
 **Test Levels:** `CRASH`
 
