@@ -10,6 +10,7 @@ import {
   type SubagentDelegationUpdate,
   type SubagentDelegationUsage,
 } from "pi-subagents/delegation";
+import { registerSubagentCapabilityCeiling } from "pi-subagents/capability-ceiling";
 import {
   parseStepResultV1,
   type AgentExecutionRequestV1,
@@ -45,9 +46,22 @@ type AgentRuntimeExecution = Readonly<{
 
 export type PiSubagentsAdapterOptions = Readonly<{
   cwd?: string;
+  sessionId?: string;
   telemetryLevel?: TelemetryLevel;
   buildPrompt?: (request: AgentExecutionRequestV1) => string;
 }>;
+
+export class PiSubagentsToolCapabilityError extends Error {
+  readonly code = "TOOL_CAPABILITY_DENIED";
+
+  constructor(
+    readonly tool: string,
+    message: string,
+  ) {
+    super(`TOOL_CAPABILITY_DENIED: ${message}`);
+    this.name = "PiSubagentsToolCapabilityError";
+  }
+}
 
 const resultArraySchema = { type: "array" } as const;
 const candidateArraySchema = { type: "array", items: { type: "object" } } as const;
@@ -168,6 +182,45 @@ function resolveSkills(request: AgentExecutionRequestV1): string[] {
       ...request.skills.optional.map(({ id }) => id),
     ]),
   ];
+}
+
+function toolNames(value: unknown, label: string): Set<string> {
+  if (!Array.isArray(value)) {
+    throw new Error(`PiSubagents ${label} must be an array of Tool names`);
+  }
+  const names = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
+      throw new Error(`PiSubagents ${label}[${index}] must be a non-empty Tool name`);
+    }
+    names.add(entry.trim());
+  }
+  return names;
+}
+
+function resolvedToolNames(request: AgentExecutionRequestV1): ReadonlySet<string> {
+  const resolved = toolNames(request.tools.resolved, "tools.resolved");
+  const policy = isRecord(request.tools.policy) ? request.tools.policy : {};
+  const allow =
+    policy.allow === undefined ? undefined : toolNames(policy.allow, "tools.policy.allow");
+  const deny =
+    policy.deny === undefined ? new Set<string>() : toolNames(policy.deny, "tools.policy.deny");
+
+  for (const tool of resolved) {
+    if (allow !== undefined && !allow.has(tool)) {
+      throw new PiSubagentsToolCapabilityError(
+        tool,
+        `Tool ${tool} is not allowed by the resolved Tool policy`,
+      );
+    }
+    if (deny.has(tool)) {
+      throw new PiSubagentsToolCapabilityError(
+        tool,
+        `Tool ${tool} is denied by the resolved Tool policy`,
+      );
+    }
+  }
+  return new Set([...resolved].filter((tool) => !deny.has(tool)));
 }
 
 function createTask(request: AgentExecutionRequestV1, prompt?: string): string {
@@ -330,6 +383,7 @@ function abortError(): Error {
 export class PiSubagentsAdapter implements AgentRuntime {
   private readonly events: PiEventBus;
   private readonly cwd: string;
+  private readonly sessionId: string | undefined;
   private readonly telemetryLevel: TelemetryLevel | undefined;
   private readonly buildPrompt: ((request: AgentExecutionRequestV1) => string) | undefined;
 
@@ -340,6 +394,10 @@ export class PiSubagentsAdapter implements AgentRuntime {
     }
     this.events = pi.events;
     this.cwd = cwd;
+    if (options.sessionId !== undefined && options.sessionId.trim().length === 0) {
+      throw new Error("PiSubagentsAdapter sessionId must not be empty");
+    }
+    this.sessionId = options.sessionId;
     this.telemetryLevel = options.telemetryLevel;
     this.buildPrompt = options.buildPrompt;
   }
@@ -349,12 +407,15 @@ export class PiSubagentsAdapter implements AgentRuntime {
     signal: AbortSignal = new AbortController().signal,
   ): Promise<StepResultV1> {
     const validatedRequest = validateAgentExecutionRequest(request);
+    const allowedTools = resolvedToolNames(validatedRequest);
     const started = performance.now();
     const prompt = this.buildPrompt?.(validatedRequest);
     if (prompt !== undefined && prompt.trim().length === 0) {
       throw new Error("PiSubagentsAdapter assembled prompt must not be empty");
     }
-    const execution = await this.execute(validatedRequest, signal, prompt);
+    const execution = await this.executeWithCapabilityCeiling(validatedRequest, allowedTools, () =>
+      this.execute(validatedRequest, signal, prompt),
+    );
     const response = execution.response;
     if (response.status !== "completed") {
       throw new Error(
@@ -383,6 +444,28 @@ export class PiSubagentsAdapter implements AgentRuntime {
         ? { level: "debug", debug: debugDiagnostics(response, execution.observation) }
         : {},
     );
+  }
+
+  private async executeWithCapabilityCeiling(
+    request: AgentExecutionRequestV1,
+    allowedTools: ReadonlySet<string>,
+    execute: () => Promise<AgentRuntimeExecution>,
+  ): Promise<AgentRuntimeExecution> {
+    if (this.sessionId === undefined) return execute();
+    const capabilityCeiling = registerSubagentCapabilityCeiling({
+      sessionId: this.sessionId,
+      source: "pi-workflow",
+      ceiling: {
+        allowedAgents: [request.identity.agentId],
+        allowedTools: [...allowedTools],
+        denyExtensions: false,
+      },
+    });
+    try {
+      return await execute();
+    } finally {
+      capabilityCeiling.dispose();
+    }
   }
 
   private execute(

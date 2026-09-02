@@ -85,6 +85,15 @@ describe("Agent permission policy", () => {
   it("keeps the Worker write scope relative and denies Git writes", () => {
     expect(
       validateAgentExecutionRequest(
+        request("worker", {
+          repositoryTargets: ["./src/"],
+          git: ["status"],
+          tools: { resolved: ["write"], policy: { allow: ["write"] } },
+        }),
+      ).identity.agentId,
+    ).toBe("worker");
+    expect(
+      validateAgentExecutionRequest(
         request("worker", { repositoryTargets: ["./src/"], git: ["status"] }),
       ).identity.agentId,
     ).toBe("worker");

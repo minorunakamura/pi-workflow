@@ -9,6 +9,7 @@ import type {
 } from "../contracts/state/workflow-state.js";
 import type { RepositoryAdapter, RepositorySnapshot } from "../ports/repository.js";
 import type { RunReader, WorkflowState } from "../ports/run-reader.js";
+import type { WorkspaceLock } from "../ports/workspace-lock.js";
 import type { RunStore } from "../ports/state-store.js";
 import type { UserInteraction } from "../ports/user-interaction.js";
 import {
@@ -67,6 +68,7 @@ export type StartWorkflowUseCaseDependencies = Readonly<{
   runStore: RunStore;
   repository: RepositoryAdapter;
   orchestrator: WorkflowOrchestratorSource;
+  workspaceLock?: WorkspaceLock;
   idAllocator?: WorkflowIdAllocator;
   runIdAllocator?: RunIdAllocatorSource;
   effectiveConfig?: JsonObject;
@@ -80,6 +82,7 @@ export type StatusWorkflowUseCaseDependencies = Readonly<{
 export type ResumeWorkflowUseCaseDependencies = Readonly<{
   lifecycle: Pick<ResumeLifecycle, "resume">;
   orchestrator: WorkflowOrchestratorSource;
+  workspaceLock?: WorkspaceLock;
 }>;
 
 export type CancelWorkflowUseCaseDependencies = Readonly<{
@@ -157,8 +160,18 @@ function repositoryValue(snapshot: RepositorySnapshot): JsonObject {
 
   return {
     ...baseline,
+    baseline: snapshot.head,
+    baseline_snapshot: baseline,
+    baseline_root: snapshot.root,
+    baseline_head: snapshot.head,
+    baseline_branch: snapshot.branch,
+    baseline_dirty: snapshot.status.dirty,
+    pre_existing: {
+      changed: [...snapshot.status.changed],
+      untracked: [...snapshot.status.untracked],
+    },
     snapshot: baseline,
-    classification: "clean",
+    classification: snapshot.status.dirty ? "unrelated" : "clean",
     resolution: "clear",
   };
 }
@@ -398,50 +411,63 @@ export class StartWorkflowUseCase implements StartWorkflowContract {
     const rawRequest = requiredText(args, "Workflow request");
     playbook(command);
     const createdAt = timestamp(this.now);
-    const repository = await this.dependencies.repository.captureSnapshot();
+    const workspace =
+      this.dependencies.workspaceLock === undefined
+        ? undefined
+        : await this.dependencies.workspaceLock.acquire({ recoverStale: true });
+    let createdRunId: RunId | undefined;
 
-    for (let attempt = 0; attempt < MAX_RUN_CREATION_ATTEMPTS; attempt += 1) {
-      const runId = await this.runIdAllocator.issueRunId();
-      const initial = createInitialWorkflowState({
-        runId,
-        command,
-        goal: rawRequest,
-        repository,
-        idAllocator: this.idAllocator,
-        createdAt,
-      });
-      const effectiveConfig = this.dependencies.effectiveConfig ?? {
-        playbook: initial.run.playbook.current,
-      };
-      let created: WorkflowState;
-      try {
-        created = await this.dependencies.runStore.create({
-          initial,
-          request: args,
-          effectiveConfig: `${JSON.stringify(effectiveConfig, null, 2)}\n`,
-          events: initialEvents(initial, createdAt),
+    try {
+      const repository = await this.dependencies.repository.captureSnapshot();
+      for (let attempt = 0; attempt < MAX_RUN_CREATION_ATTEMPTS; attempt += 1) {
+        const runId = await this.runIdAllocator.issueRunId();
+        const initial = createInitialWorkflowState({
+          runId,
+          command,
+          goal: rawRequest,
+          repository,
+          idAllocator: this.idAllocator,
+          createdAt,
         });
-      } catch (error) {
-        if (!isRunAlreadyExists(error) || attempt === MAX_RUN_CREATION_ATTEMPTS - 1) {
-          throw error;
+        const effectiveConfig = this.dependencies.effectiveConfig ?? {
+          playbook: initial.run.playbook.current,
+        };
+        let created: WorkflowState;
+        try {
+          created = await this.dependencies.runStore.create({
+            initial,
+            request: args,
+            effectiveConfig: `${JSON.stringify(effectiveConfig, null, 2)}\n`,
+            events: initialEvents(initial, createdAt),
+          });
+        } catch (error) {
+          if (!isRunAlreadyExists(error) || attempt === MAX_RUN_CREATION_ATTEMPTS - 1) {
+            throw error;
+          }
+          continue;
         }
-        continue;
-      }
-      if (created.run.run_id !== runId) {
-        throw new Error(`Run Store returned a different Run ID: ${runId}`);
-      }
+        if (created.run.run_id !== runId) {
+          throw new Error(`Run Store returned a different Run ID: ${runId}`);
+        }
 
-      const startedAt = timestamp(this.now);
-      const started = withNextRevision(created, startedState(created, startedAt));
-      await this.dependencies.runStore.commit({
-        expectedRevision: created.run.state_revision,
-        next: started,
-        events: [startedEvent(started, startedAt)],
-      });
-      return runOrchestrator(this.dependencies.orchestrator, runId, userInteraction);
+        const startedAt = timestamp(this.now);
+        const started = withNextRevision(created, startedState(created, startedAt));
+        await this.dependencies.runStore.commit({
+          expectedRevision: created.run.state_revision,
+          next: started,
+          events: [startedEvent(started, startedAt)],
+        });
+        createdRunId = runId;
+        break;
+      }
+    } finally {
+      await workspace?.release();
     }
 
-    throw new Error("Unable to allocate a unique Run ID");
+    if (createdRunId === undefined) {
+      throw new Error("Unable to allocate a unique Run ID");
+    }
+    return runOrchestrator(this.dependencies.orchestrator, createdRunId, userInteraction);
   }
 }
 
@@ -457,7 +483,15 @@ export class ResumeWorkflowUseCase implements ResumeWorkflowContract {
   constructor(private readonly dependencies: ResumeWorkflowUseCaseDependencies) {}
 
   async execute(runId: RunId, userInteraction?: UserInteraction): Promise<WorkflowState> {
-    await this.dependencies.lifecycle.resume(runId);
+    const workspace =
+      this.dependencies.workspaceLock === undefined
+        ? undefined
+        : await this.dependencies.workspaceLock.acquire({ recoverStale: true });
+    try {
+      await this.dependencies.lifecycle.resume(runId);
+    } finally {
+      await workspace?.release();
+    }
     return runOrchestrator(this.dependencies.orchestrator, runId, userInteraction);
   }
 }

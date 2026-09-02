@@ -185,6 +185,46 @@ describe("PiSubagentsAdapter integration", () => {
     expect(delegated).toBe(false);
   });
 
+  it("enforces the resolved Tool allowlist at the Pi adapter boundary", async () => {
+    const events = createEventBus();
+    const input = {
+      ...request(),
+      tools: { resolved: ["read", "edit"], policy: { allow: ["read"] } },
+    } satisfies AgentExecutionRequestV1;
+    let delegated = false;
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, () => {
+      delegated = true;
+    });
+
+    await expect(
+      new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input),
+    ).rejects.toMatchObject({
+      code: "TOOL_CAPABILITY_DENIED",
+      tool: "edit",
+    });
+    expect(delegated).toBe(false);
+  });
+
+  it("rejects a resolved Tool denied by the request policy before delegation", async () => {
+    const events = createEventBus();
+    const input = {
+      ...request(),
+      tools: { resolved: ["read"], policy: { deny: ["read"] } },
+    } satisfies AgentExecutionRequestV1;
+    let delegated = false;
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, () => {
+      delegated = true;
+    });
+
+    await expect(
+      new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input),
+    ).rejects.toMatchObject({
+      code: "TOOL_CAPABILITY_DENIED",
+      tool: "read",
+    });
+    expect(delegated).toBe(false);
+  });
+
   it("captures provider usage and actual Tool observations without payloads", async () => {
     const events = createEventBus();
     const input = {

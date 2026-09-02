@@ -159,21 +159,23 @@ export class WorkerExecutionInterruptedError extends Error {
 
 const GIT_WRITE_OPERATION =
   /(?:^|[-_\s])(write|add|commit|push|merge|rebase|reset|restore|clean|branch|checkout|switch|cherry-pick|revert|tag|stash)(?:$|[-_\s])/i;
+const GIT_TOOL_WRITE_OPERATION =
+  /(?:^|[-_\s])(?:git[-_\s]*)?(add|commit|push|merge|rebase|reset|restore|clean|branch|checkout|switch|cherry-pick|revert|tag|stash)(?:$|[-_\s])/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function gitWriteToken(value: unknown): string | undefined {
-  if (typeof value === "string") return GIT_WRITE_OPERATION.test(value) ? value : undefined;
+function gitWriteToken(value: unknown, matcher: RegExp = GIT_WRITE_OPERATION): string | undefined {
+  if (typeof value === "string") return matcher.test(value) ? value : undefined;
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const token = gitWriteToken(entry);
+      const token = gitWriteToken(entry, matcher);
       if (token !== undefined) return token;
     }
   } else if (isRecord(value)) {
     for (const entry of Object.values(value)) {
-      const token = gitWriteToken(entry);
+      const token = gitWriteToken(entry, matcher);
       if (token !== undefined) return token;
     }
   }
@@ -190,7 +192,11 @@ export function assertWorkerGitWriteDenied(request: AgentExecutionRequestV1): vo
     ["tools.policy.allow", policyAllow],
   ];
   for (const [source, value] of sources) {
-    const token = gitWriteToken(value);
+    const matcher =
+      source === "permissions.git" || source === "permissions.shell"
+        ? GIT_WRITE_OPERATION
+        : GIT_TOOL_WRITE_OPERATION;
+    const token = gitWriteToken(value, matcher);
     if (token !== undefined) {
       throw new WorkerFinalizationError(
         "GIT_WRITE_DENIED",

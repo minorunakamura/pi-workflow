@@ -19,6 +19,7 @@ import workflowExtension from "../../src/extensions/workflow.js";
 import { FileArtifactStore } from "../../src/adapters/persistence/write/file-artifact-store.js";
 import { FileRunReader } from "../../src/adapters/persistence/read/file-run-reader.js";
 import { JsonlEventReader } from "../../src/adapters/persistence/read/jsonl-event-reader.js";
+import { GitRepositoryAdapter } from "../../src/adapters/repository/git-repository-adapter.js";
 import { type ExecutionId, type RunId, type StepId } from "../../src/domain/primitives/ids.js";
 import { withGoldenRepository } from "../fixtures/golden-repositories.js";
 
@@ -44,6 +45,7 @@ function result(
     recheck?: boolean;
     planDeviation?: boolean;
     requestAmendment?: boolean;
+    writeScope?: readonly string[];
   }> = {},
 ): Record<string, unknown> {
   const verificationFailed = request.agent === "verifier" && options.verificationFailed === true;
@@ -89,7 +91,8 @@ function result(
             },
           ]
         : [],
-    observations: [],
+    observations:
+      options.writeScope === undefined ? [] : [{ write_scope: [...options.writeScope] }],
     blocked: null,
     failure: verificationFailed ? { reason: "production verification failed" } : null,
     runtime: {},
@@ -247,6 +250,158 @@ describe("workflow Extension production composition", () => {
           "review.completed",
           "run.completed",
         ]),
+      );
+    });
+  });
+
+  it("propagates the approved Plan Write Scope and preserves a dirty baseline", async () => {
+    const packageSkills = loadSkillsFromDir({
+      dir: resolve(PROJECT_ROOT, "skills"),
+      source: "pi-workflow",
+    }).skills.map((skill) => ({
+      ...skill,
+      sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+        source: "pi-workflow",
+        scope: "project",
+        origin: "package",
+      }),
+    }));
+
+    await withGoldenRepository("dirty-tree", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
+      const baseline = await new GitRepositoryAdapter(repositoryRoot).captureSnapshot();
+      const events = createEventBus();
+      const requests: SubagentDelegationRequest[] = [];
+      events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+        const request = payload as SubagentDelegationRequest;
+        requests.push(request);
+        const writeScope = request.agent === "planner" ? ["src"] : undefined;
+        events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+          requestId: request.requestId,
+          ownerRunId: request.ownerRunId,
+          nodeId: request.nodeId,
+          status: "completed",
+          result: {
+            kind: "structured",
+            value: result(request, writeScope === undefined ? {} : { writeScope }),
+          },
+        } satisfies SubagentDelegationResponse);
+      });
+
+      const registrations = new Map<string, RegisteredCommand>();
+      workflowExtension({
+        registerCommand(name, options) {
+          registrations.set(name, options);
+        },
+        events,
+        getAllTools: tools,
+      });
+      const notifications: string[] = [];
+      await registrations
+        .get("wf-feature")!
+        .handler(
+          "production repository safety",
+          commandContext(repositoryRoot, packageSkills, notifications),
+        );
+
+      const state = await new FileRunReader(repositoryRoot).load("run-001" as RunId);
+      const workerRequest = requests.find(({ agent }) => agent === "worker");
+      expect(workerRequest?.task).toContain('"repositoryTargets":["src"]');
+      expect(workerRequest?.task).toContain('"resolved":["read","edit"]');
+      expect(workerRequest?.task).toContain('"allow":["read","edit"]');
+      expect(workerRequest?.task).not.toContain('"repositoryTargets":["."]');
+      expect(state.run.repository).toMatchObject({
+        classification: "unrelated",
+        baseline_root: baseline.root,
+        baseline_head: baseline.head,
+        baseline_branch: baseline.branch,
+        baseline_dirty: true,
+        pre_existing: {
+          changed: ["notes/untracked.txt", "src/target.txt"],
+          untracked: ["notes/untracked.txt"],
+        },
+        baseline: baseline.head,
+        baseline_snapshot: { status: baseline.status },
+      });
+      await expect(readFile(resolve(repositoryRoot, "src/target.txt"), "utf8")).resolves.toBe(
+        "modified in the working tree\n",
+      );
+      await expect(readFile(resolve(repositoryRoot, "notes/untracked.txt"), "utf8")).resolves.toBe(
+        "untracked working-tree file\n",
+      );
+      expect(state.run).toMatchObject({ status: "completed", finalized: true });
+    });
+  });
+
+  it("rejects an out-of-scope Worker mutation before production completion", async () => {
+    const packageSkills = loadSkillsFromDir({
+      dir: resolve(PROJECT_ROOT, "skills"),
+      source: "pi-workflow",
+    }).skills.map((skill) => ({
+      ...skill,
+      sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+        source: "pi-workflow",
+        scope: "project",
+        origin: "package",
+      }),
+    }));
+
+    await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
+      const events = createEventBus();
+      const requests: SubagentDelegationRequest[] = [];
+      let mutated = false;
+      events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+        const request = payload as SubagentDelegationRequest;
+        requests.push(request);
+        if (request.agent === "worker" && !mutated) {
+          mutated = true;
+          writeFileSync(resolve(repositoryRoot, "outside.txt"), "must be rejected\n", "utf8");
+        }
+        const writeScope = request.agent === "planner" ? ["src"] : undefined;
+        events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+          requestId: request.requestId,
+          ownerRunId: request.ownerRunId,
+          nodeId: request.nodeId,
+          status: "completed",
+          result: {
+            kind: "structured",
+            value: result(request, writeScope === undefined ? {} : { writeScope }),
+          },
+        } satisfies SubagentDelegationResponse);
+      });
+
+      const registrations = new Map<string, RegisteredCommand>();
+      workflowExtension({
+        registerCommand(name, options) {
+          registrations.set(name, options);
+        },
+        events,
+        getAllTools: tools,
+      });
+      const notifications: string[] = [];
+      await registrations
+        .get("wf-feature")!
+        .handler(
+          "production scope violation",
+          commandContext(repositoryRoot, packageSkills, notifications),
+        );
+
+      const state = await new FileRunReader(repositoryRoot).load("run-001" as RunId);
+      const worker = state.snapshot.steps.steps.find(({ agent }) => agent === "worker");
+      expect(worker?.result).toMatchObject({
+        finalization: {
+          kind: "change-set",
+          change_set: {
+            status: "partial",
+            accepted: false,
+            violations: [
+              expect.objectContaining({ code: "WRITE_SCOPE_VIOLATION", paths: ["outside.txt"] }),
+            ],
+          },
+        },
+      });
+      expect(state.run).toMatchObject({ finalized: false });
+      await expect(readFile(resolve(repositoryRoot, "outside.txt"), "utf8")).resolves.toBe(
+        "must be rejected\n",
       );
     });
   });

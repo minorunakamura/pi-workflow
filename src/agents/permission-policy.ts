@@ -29,6 +29,8 @@ export class AgentPermissionError extends Error {
 
 const WRITE_OPERATION =
   /(?:^|[-_\s])(write|edit|delete|remove|add|commit|push|merge|rebase|reset|restore|clean|branch|checkout|switch|cherry-pick|revert|tag|stash)(?:$|[-_\s])/i;
+const GIT_TOOL_WRITE_OPERATION =
+  /(?:^|[-_\s])(?:git[-_\s]*)?(add|commit|push|merge|rebase|reset|restore|clean|branch|checkout|switch|cherry-pick|revert|tag|stash)(?:$|[-_\s])/i;
 const BROAD_SHELL_PERMISSION = /^(bash|sh|zsh|fish|shell|terminal|exec|execute|command)(?:\s|$)/i;
 // ponytail: permission values are JsonValue today; typed Tool capabilities are the upgrade path beyond operation-name matching.
 const NETWORK_CAPABILITY =
@@ -150,7 +152,11 @@ function assertWorkerGitWriteDenied(request: AgentExecutionRequestV1): void {
   ];
 
   for (const [source, value] of sources) {
-    const write = matchingValue(value, WRITE_OPERATION);
+    const matcher =
+      source === "permissions.git" || source === "permissions.shell"
+        ? WRITE_OPERATION
+        : GIT_TOOL_WRITE_OPERATION;
+    const write = matchingValue(value, matcher);
     if (write !== undefined) {
       throw new AgentPermissionError(
         "GIT_WRITE_DENIED",
