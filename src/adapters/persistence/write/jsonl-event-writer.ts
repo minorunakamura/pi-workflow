@@ -11,6 +11,7 @@ import {
   type EventId,
 } from "../../../contracts/events/event.js";
 import type { RunId } from "../../../domain/primitives/ids.js";
+import { redactJson } from "../../../telemetry/redaction.js";
 import type { EventWriter } from "../../../ports/event-log.js";
 import type { ReadTextFile } from "../read/state-snapshot-files.js";
 
@@ -111,13 +112,14 @@ export class JsonlEventWriter implements EventWriter {
       appended.push(event);
     }
 
+    const persisted = appended.map((event) => parseDomainEvent(redactJson(event)));
     await this.makeDirectory(join(this.repositoryRoot, ".pi", "runs", runId, "events"));
     const separator = cursor.contents.length > 0 && !/[\r\n]$/.test(cursor.contents) ? "\n" : "";
     await this.appendTextFile(
       path,
-      `${separator}${appended.map((event) => JSON.stringify(event)).join("\n")}\n`,
+      `${separator}${persisted.map((event) => JSON.stringify(event)).join("\n")}\n`,
     );
-    return appended;
+    return persisted;
   }
 
   private async readCursor(path: string, runId: RunId): Promise<EventCursor> {

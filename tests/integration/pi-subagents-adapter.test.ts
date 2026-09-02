@@ -129,6 +129,31 @@ describe("PiSubagentsAdapter integration", () => {
     expect(StepResultV1Schema.parse(actual)).toEqual(actual);
   });
 
+  it("rejects a write-capable read-only request before delegation", async () => {
+    const events = createEventBus();
+    const input = {
+      ...request(),
+      identity: { ...request().identity, agentId: "scout" },
+      execution: { ...request().execution, mode: "read-only" as const },
+      authority: { ...request().authority, maximumDLevel: "D0" },
+      permissions: {
+        ...request().permissions,
+        filesystem: ["repository-write"],
+      },
+    } satisfies AgentExecutionRequestV1;
+    let delegated = false;
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, () => {
+      delegated = true;
+    });
+
+    await expect(
+      new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input),
+    ).rejects.toMatchObject({
+      code: "WRITE_DENIED",
+    });
+    expect(delegated).toBe(false);
+  });
+
   it("captures provider usage and actual Tool observations without payloads", async () => {
     const events = createEventBus();
     const input = {

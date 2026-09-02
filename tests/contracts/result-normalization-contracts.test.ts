@@ -137,5 +137,14 @@ describe("Result normalization contract", () => {
         }),
       }),
     ).rejects.toMatchObject({ code: "REFERENCE_INVALID" });
+    await expect(
+      validateStepResult({
+        ...base,
+        result: StepResultV1Schema.parse({
+          ...result(),
+          artifacts: [{ runId: "run-001", path: "C:escape.md", status: "complete" }],
+        }),
+      }),
+    ).rejects.toMatchObject({ code: "REFERENCE_INVALID" });
   });
 });

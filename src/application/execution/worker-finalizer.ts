@@ -1,6 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
 import {
-  AgentExecutionRequestV1Schema,
   StepResultV1Schema,
   type AgentExecutionRequestV1,
   type AgentOutcome,
@@ -21,6 +20,10 @@ import type {
 } from "../../domain/primitives/ids.js";
 import { createIdAllocator } from "../../domain/primitives/ids.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
+import {
+  AgentPermissionError,
+  validateAgentExecutionRequest,
+} from "../../agents/permission-policy.js";
 import { TelemetryAgentRuntime, type TelemetryLevel } from "../../telemetry/runtime-metrics.js";
 import type { ArtifactRef, ArtifactStore } from "../../ports/artifact-store.js";
 import type {
@@ -300,8 +303,17 @@ export function validateWorkerExecutionRequest(
 ): AgentExecutionRequestV1 {
   let validated: AgentExecutionRequestV1;
   try {
-    validated = AgentExecutionRequestV1Schema.parse(request);
+    validated = validateAgentExecutionRequest(request);
   } catch (error) {
+    if (error instanceof AgentPermissionError && error.code === "GIT_WRITE_DENIED") {
+      throw new WorkerFinalizationError("GIT_WRITE_DENIED", error.message);
+    }
+    if (
+      error instanceof AgentPermissionError &&
+      (error.code === "PATH_TRAVERSAL" || error.code === "WRITE_SCOPE_INVALID")
+    ) {
+      throw new WorkerFinalizationError("WRITE_SCOPE_INVALID", error.message);
+    }
     throw new WorkerFinalizationError(
       "WORKER_REQUEST_INVALID",
       error instanceof Error ? error.message : String(error),

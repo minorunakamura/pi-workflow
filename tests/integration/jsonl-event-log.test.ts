@@ -48,6 +48,33 @@ describe("JSONL event log", () => {
     });
   });
 
+  it("redacts secret Event data before it is persisted", async () => {
+    await withTempRepository({}, async (repositoryRoot) => {
+      const writer = new JsonlEventWriter(repositoryRoot);
+      const event = {
+        ...eventDraft(),
+        data: {
+          api_key: "event-secret",
+          authorization: "Bearer header-secret",
+          raw_header: "Authorization: Custom raw-header-secret",
+          detail: "token=tool-secret",
+        },
+      };
+
+      const persisted = await writer.append(event);
+      const contents = await readFile(join(repositoryRoot, ...EVENT_LOG_PATH), "utf8");
+
+      expect(JSON.stringify(persisted)).not.toContain("event-secret");
+      expect(JSON.stringify(persisted)).not.toContain("header-secret");
+      expect(JSON.stringify(persisted)).not.toContain("raw-header-secret");
+      expect(JSON.stringify(persisted)).not.toContain("tool-secret");
+      expect(contents).toContain("[REDACTED_SECRET]");
+      await expect(new JsonlEventReader(repositoryRoot).readAfter(RUN_ID, 0)).resolves.toEqual([
+        persisted,
+      ]);
+    });
+  });
+
   it("skips corrupt JSONL lines while reading later events", async () => {
     await withTempRepository({}, async (repositoryRoot) => {
       const writer = new JsonlEventWriter(repositoryRoot);

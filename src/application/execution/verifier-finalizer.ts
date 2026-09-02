@@ -1,6 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
 import {
-  AgentExecutionRequestV1Schema,
   StepResultV1Schema,
   type AgentExecutionRequestV1,
   type JsonObject,
@@ -20,6 +19,7 @@ import type {
 } from "../../domain/primitives/ids.js";
 import { createIdAllocator } from "../../domain/primitives/ids.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
+import { validateAgentExecutionRequest } from "../../agents/permission-policy.js";
 import { TelemetryAgentRuntime, type TelemetryLevel } from "../../telemetry/runtime-metrics.js";
 import type { ArtifactRef, ArtifactStore } from "../../ports/artifact-store.js";
 import type {
@@ -181,7 +181,7 @@ export function validateVerifierExecutionRequest(
 ): AgentExecutionRequestV1 {
   let validated: AgentExecutionRequestV1;
   try {
-    validated = AgentExecutionRequestV1Schema.parse(request);
+    validated = validateAgentExecutionRequest(request);
   } catch (error) {
     throw new VerifierFinalizationError(
       "VERIFIER_REQUEST_INVALID",

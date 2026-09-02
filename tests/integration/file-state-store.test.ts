@@ -183,6 +183,32 @@ describe("FileStateStore", () => {
     );
   });
 
+  it("redacts secret-keyed Run data before durable persistence", async () => {
+    const current = workflowState(1);
+    const next = workflowState(2, 2);
+    const nextWithSecret = {
+      ...next,
+      run: {
+        ...next.run,
+        repository: { api_key: "state-secret" },
+      },
+    } as WorkflowState;
+
+    await withTempRepository(fixtureFor(current), async (repositoryRoot) => {
+      const committed = await new FileStateStore(repositoryRoot).commit({
+        expectedRevision: 1,
+        next: nextWithSecret,
+      });
+      const runContents = await nodeReadFile(
+        join(repositoryRoot, RUN_DIRECTORY, "run.yaml"),
+        "utf8",
+      );
+
+      expect(committed.run.repository).toEqual({ api_key: "[REDACTED_SECRET]" });
+      expect(runContents).not.toContain("state-secret");
+    });
+  });
+
   it("rejects a requirement history entry that disagrees with its revision", async () => {
     const current = workflowState(1);
     const conflictingHistory = stringify({

@@ -17,6 +17,7 @@ import {
   type JsonValue,
   type StepResultV1,
 } from "../../contracts/execution/agent-execution.js";
+import { validateAgentExecutionRequest } from "../../agents/permission-policy.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
 import {
   attachRuntimeTelemetry,
@@ -337,8 +338,9 @@ export class PiSubagentsAdapter implements AgentRuntime {
     request: AgentExecutionRequestV1,
     signal: AbortSignal = new AbortController().signal,
   ): Promise<StepResultV1> {
+    const validatedRequest = validateAgentExecutionRequest(request);
     const started = performance.now();
-    const execution = await this.execute(request, signal);
+    const execution = await this.execute(validatedRequest, signal);
     const response = execution.response;
     if (response.status !== "completed") {
       throw new Error(
@@ -351,7 +353,7 @@ export class PiSubagentsAdapter implements AgentRuntime {
     const result = parseStepResultV1(response.result.value);
     const wallClockMs = Math.max(0, Math.round(performance.now() - started));
     const usage = runtimeUsage(response.usage, execution.observation);
-    const telemetry = captureRuntimeTelemetry(request, {
+    const telemetry = captureRuntimeTelemetry(validatedRequest, {
       ...(this.telemetryLevel === undefined ? {} : { level: this.telemetryLevel }),
       wallClockMs,
       ...(response.model === undefined ? {} : { model: response.model }),

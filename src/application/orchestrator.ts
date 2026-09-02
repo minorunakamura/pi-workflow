@@ -2,6 +2,7 @@ import {
   type AgentExecutionRequestV1,
   type StepResultV1,
 } from "../contracts/execution/agent-execution.js";
+import { validateAgentExecutionRequest } from "../agents/permission-policy.js";
 import { validateEventDraft } from "../contracts/events/event.js";
 import {
   createIdAllocator,
@@ -517,7 +518,9 @@ export class Orchestrator {
       }
 
       const step = scheduled.step;
-      const request = await this.dependencies.buildRequest({ state, step, iteration });
+      const request = validateAgentExecutionRequest(
+        await this.dependencies.buildRequest({ state, step, iteration }),
+      );
       this.assertRequestIdentity(request, runId, step);
 
       let settleExecution!: () => void;
@@ -713,6 +716,9 @@ export class Orchestrator {
   ): void {
     if (request.identity.runId !== runId || request.identity.stepId !== step.id) {
       throw new Error("Agent execution request identity does not match dispatched Step");
+    }
+    if (request.identity.agentId !== step.agent) {
+      throw new Error("Agent execution request role does not match dispatched Step");
     }
   }
 }

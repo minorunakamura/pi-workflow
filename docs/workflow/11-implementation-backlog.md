@@ -1456,9 +1456,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Scout/Planner/Reviewer/Verifier write restrictions are enforced.
-- [ ] Worker scope/Git rules are enforced.
-- [ ] Network/path traversal/secret persistence cases are covered.
+- [x] Scout/Planner/Reviewer/Verifier write restrictions are enforced.
+- [x] Worker scope/Git rules are enforced.
+- [x] Network/path traversal/secret persistence cases are covered.
 
 **Test Levels:** `SEC`
 

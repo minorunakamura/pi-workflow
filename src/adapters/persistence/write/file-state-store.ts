@@ -10,13 +10,16 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parse as parseYaml, stringify } from "yaml";
-import { ContractValidationError } from "../../../contracts/execution/agent-execution.js";
+import {
+  ContractValidationError,
+  type JsonValue,
+} from "../../../contracts/execution/agent-execution.js";
 import {
   RequirementSnapshotV1Schema,
   type RequirementSnapshotV1,
 } from "../../../contracts/state/workflow-state.js";
 import type { RunId } from "../../../domain/primitives/ids.js";
-import { redactSecrets } from "../../../telemetry/redaction.js";
+import { redactJson, redactSecrets } from "../../../telemetry/redaction.js";
 import { FileRunReader, validateWorkflowStateConsistency } from "../read/file-run-reader.js";
 import { FileRunLock } from "./file-run-lock.js";
 import { JsonlEventWriter } from "./jsonl-event-writer.js";
@@ -230,7 +233,7 @@ export class FileStateStore implements StateStore {
     }
 
     const nextRevision = expectedRevision + 1;
-    const durableNext: WorkflowState = {
+    const durableNext = redactJson({
       ...next,
       run: {
         ...next.run,
@@ -243,7 +246,7 @@ export class FileStateStore implements StateStore {
         ...next.snapshot,
         requirement: durableRequirementSnapshot(next.snapshot.requirement),
       },
-    };
+    } as unknown as JsonValue) as unknown as WorkflowState;
     validateRunYaml(durableNext.run);
     validateStateSnapshot(durableNext.snapshot);
     validateWorkflowStateConsistency(durableNext.run, durableNext.snapshot);

@@ -4,7 +4,7 @@ import type {
   JsonValue,
 } from "../contracts/execution/agent-execution.js";
 import type { AgentRuntime } from "../ports/agent-runtime.js";
-import { redactSecrets } from "./redaction.js";
+import { redactJson, redactSecrets } from "./redaction.js";
 
 export const TELEMETRY_LEVELS = ["minimal", "standard", "debug"] as const;
 export type TelemetryLevel = (typeof TELEMETRY_LEVELS)[number];
@@ -88,14 +88,7 @@ function isJsonValue(value: unknown): value is JsonValue {
 function redactedJson(value: JsonObject): JsonObject;
 function redactedJson(value: JsonValue): JsonValue;
 function redactedJson(value: JsonValue): JsonValue {
-  if (typeof value === "string") return redactSecrets(value);
-  if (Array.isArray(value)) return value.map(redactedJson);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [redactSecrets(key), redactedJson(entry)]),
-    );
-  }
-  return value;
+  return redactJson(value);
 }
 
 function redactedObject(value: unknown): JsonObject | undefined {

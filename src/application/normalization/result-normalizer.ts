@@ -1,4 +1,5 @@
 import { AGENT_DEFINITIONS } from "../../agents/definitions.js";
+import { validateAgentExecutionRequest } from "../../agents/permission-policy.js";
 import {
   StepResultV1Schema,
   type AgentExecutionRequestV1,
@@ -163,6 +164,7 @@ function validArtifactPath(path: string): boolean {
   return (
     !path.startsWith("/") &&
     !path.includes("\\") &&
+    !/^[A-Za-z]:/.test(path) &&
     path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
   );
 }
@@ -219,6 +221,11 @@ export async function validateStepResult(
   let result = StepResultV1Schema.parse(input.result);
   const validatedInput = { ...input, result };
   assertIdentity(validatedInput, result);
+  try {
+    validateAgentExecutionRequest(input.request);
+  } catch (error) {
+    fail("PERMISSION_VIOLATION", error instanceof Error ? error.message : String(error));
+  }
 
   if (options.resultValidator !== undefined) {
     result = StepResultV1Schema.parse(await options.resultValidator(validatedInput));

@@ -1,8 +1,8 @@
-import {
-  AgentExecutionRequestV1Schema,
-  type AgentExecutionRequestV1,
-  type JsonValue,
+import type {
+  AgentExecutionRequestV1,
+  JsonValue,
 } from "../../contracts/execution/agent-execution.js";
+import { validateAgentExecutionRequest } from "../../agents/permission-policy.js";
 import type { ModelCatalog, ModelReference } from "../../ports/model-catalog.js";
 import type {
   ToolCatalog,
@@ -283,7 +283,7 @@ export class ExecutionResolver {
     request: AgentExecutionRequestV1,
     capabilities: readonly string[],
   ): AgentExecutionRequestV1 {
-    const validated = AgentExecutionRequestV1Schema.parse(request);
+    const validated = validateAgentExecutionRequest(request);
     const model = this.modelResolver.resolve(validated.model);
     const tools = this.toolResolver.resolve(validated, capabilities);
 

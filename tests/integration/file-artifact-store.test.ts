@@ -45,7 +45,10 @@ describe("FileArtifactStore", () => {
       const staged = await store.stage({
         runId: RUN_ID,
         executionId: EXECUTION_ID,
-        contents: artifactContents("complete", "api_key: top-secret\nsummary"),
+        contents: artifactContents(
+          "complete",
+          'api_key: top-secret\n{"password":"json-secret"}\nAuthorization: Custom raw-secret\nsummary',
+        ),
       });
 
       expect(staged.status).toBe("draft");
@@ -61,7 +64,7 @@ describe("FileArtifactStore", () => {
       await expect(store.read(ref)).resolves.toMatchObject({
         ref,
         frontMatter: { artifact: { status: "complete" } },
-        body: "api_key: [REDACTED_SECRET]\nsummary",
+        body: 'api_key: [REDACTED_SECRET]\n{"password":"[REDACTED_SECRET]"}\nAuthorization: [REDACTED_SECRET]\nsummary',
       });
       await expect(
         readFile(join(repositoryRoot, RUN_DIRECTORY, ref.path), "utf8"),
