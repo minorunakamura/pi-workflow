@@ -172,4 +172,28 @@ describe("FileArtifactStore", () => {
       await expect(readFile(outsidePath, "utf8")).resolves.toBe("outside");
     });
   });
+
+  it("rejects Windows absolute and separator paths on every host", async () => {
+    const invalidPaths = [
+      "..\\outside.md",
+      "C:\\outside.md",
+      "C:/outside.md",
+      "\\\\server\\share\\outside.md",
+    ];
+
+    await withTempRepository({}, async (repositoryRoot) => {
+      const store = new FileArtifactStore(repositoryRoot);
+      for (const path of invalidPaths) {
+        const staged = await store.stage({
+          runId: RUN_ID,
+          executionId: EXECUTION_ID,
+          contents: artifactContents(),
+        });
+
+        await expect(store.finalize(staged, path)).rejects.toBeInstanceOf(
+          ArtifactPathSecurityError,
+        );
+      }
+    });
+  });
 });

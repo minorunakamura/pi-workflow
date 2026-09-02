@@ -1,5 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { realpath, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { GitRepositoryAdapter } from "../../src/adapters/repository/git-repository-adapter.js";
@@ -119,6 +120,38 @@ describe("GitRepositoryAdapter", () => {
       await expect(adapter.getBranch()).resolves.toBeNull();
       await expect(adapter.captureSnapshot()).resolves.toMatchObject({ branch: null });
     });
+  });
+
+  it("handles spaces, Unicode, and Git rename records without shell path parsing", async () => {
+    await withTempRepository(
+      { "workspace with spaces-日本語/before name.txt": "content\n" },
+      async (repositoryRoot) => {
+        const nestedRoot = join(repositoryRoot, "workspace with spaces-日本語");
+        await initializeGit(nestedRoot);
+        const adapter = new GitRepositoryAdapter(nestedRoot);
+
+        const before = await adapter.captureSnapshot();
+        await git(nestedRoot, ["mv", "--", "before name.txt", "after name-日本語.txt"]);
+        const after = await adapter.captureSnapshot();
+
+        expect(before.root).toBe(await realpath(nestedRoot));
+        expect(after.status).toEqual({
+          dirty: true,
+          changed: ["after name-日本語.txt"],
+          untracked: [],
+          entries: [
+            {
+              path: "after name-日本語.txt",
+              index: "R",
+              worktree: " ",
+              originalPath: "before name.txt",
+            },
+          ],
+        });
+        expect(Object.keys(after.fingerprints)).toEqual(["after name-日本語.txt"]);
+        expect(after.fingerprints["after name-日本語.txt"]).toMatch(/^[0-9a-f]{64}$/);
+      },
+    );
   });
 
   it("rejects scope paths outside the repository", async () => {

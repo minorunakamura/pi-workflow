@@ -1494,7 +1494,7 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] macOS/Linux/Windows relevant path/rename/process/lock/Git behavior is validated.
+- [x] macOS/Linux/Windows relevant path/rename/process/lock/Git behavior is validated.
 
 **Test Levels:** `INT`
 

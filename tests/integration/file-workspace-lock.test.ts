@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FileWorkspaceLock,
@@ -94,5 +95,29 @@ describe("FileWorkspaceLock", () => {
         JSON.stringify(replacement),
       );
     });
+  });
+
+  it("uses native paths and process liveness for roots with spaces", async () => {
+    await withTempRepository(
+      { "workspace with spaces-日本語/.keep": "" },
+      async (repositoryRoot) => {
+        const nestedRoot = join(repositoryRoot, "workspace with spaces-日本語");
+        const first = new FileWorkspaceLock(nestedRoot, {
+          owner: "owner-a",
+          host: hostname(),
+        });
+        const handle = await first.acquire();
+
+        expect(workspaceLockPath(nestedRoot)).toBe(join(nestedRoot, ".pi", "workspace.lock"));
+        await expect(
+          new FileWorkspaceLock(nestedRoot, {
+            owner: "owner-b",
+            host: hostname(),
+          }).acquire({ recoverStale: true }),
+        ).rejects.toMatchObject({ code: "WORKSPACE_LOCKED" });
+
+        await handle.release();
+      },
+    );
   });
 });

@@ -117,10 +117,10 @@ describe("FileStateStore", () => {
     const next = workflowState(2, 2);
 
     await withTempRepository(fixtureFor(current), async (repositoryRoot) => {
-      const renameTargets: string[] = [];
+      const renameCalls: Array<readonly [string, string]> = [];
       const store = new FileStateStore(repositoryRoot, {
         rename: async (source, destination) => {
-          renameTargets.push(destination);
+          renameCalls.push([source, destination]);
           await nodeRename(source, destination);
         },
       });
@@ -128,10 +128,14 @@ describe("FileStateStore", () => {
       const committed = await store.commit({ expectedRevision: 1, next });
 
       deepStrictEqual(committed, next);
-      expect(renameTargets).toEqual([
+      expect(renameCalls.map(([, destination]) => destination)).toEqual([
         join(repositoryRoot, RUN_DIRECTORY, "state", "snapshots", "2"),
         join(repositoryRoot, RUN_DIRECTORY, "run.yaml"),
       ]);
+      expect(renameCalls[0]?.[0]).toContain(
+        join(repositoryRoot, RUN_DIRECTORY, "state", "snapshots", ".2.tmp-"),
+      );
+      expect(renameCalls[1]?.[0]).toContain(join(repositoryRoot, RUN_DIRECTORY, ".run-tmp-"));
       await expect(new FileRunReader(repositoryRoot).load(RUN_ID)).resolves.toMatchObject({
         run: { state_revision: 2 },
         snapshot: { requirement: { goal: "goal-2" } },
