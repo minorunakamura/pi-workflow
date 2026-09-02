@@ -1,7 +1,11 @@
 import { resolve } from "node:path";
 import { createSyntheticSourceInfo, type Skill as PiSkill } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { CORE_SKILL_IDS, type AgentDefinition } from "../../src/agents/definitions.js";
+import {
+  AGENT_DEFINITIONS,
+  CORE_SKILL_IDS,
+  type AgentDefinition,
+} from "../../src/agents/definitions.js";
 import { SkillCatalog, type SkillResource } from "../../src/agents/skill-catalog.js";
 import { createPiPackageSkillCatalog } from "../../src/adapters/pi/skill-catalog.js";
 
@@ -177,5 +181,24 @@ describe("Skill Catalog contract", () => {
     expect(catalog.resolve("scout", [{ id: "how", version: "1.0.0" }])[0]?.content).toContain(
       "# how",
     );
+  });
+
+  it("resolves every packaged Core Skill body through the catalog", () => {
+    const packageSkills = CORE_SKILL_IDS.map(packageSkill);
+    const catalog = createPiPackageSkillCatalog({
+      getSkills: () => ({ skills: packageSkills, diagnostics: [] }),
+    });
+
+    for (const id of CORE_SKILL_IDS) {
+      const agent = AGENT_DEFINITIONS.find(({ skillAllowlist }) =>
+        skillAllowlist.some((skill) => skill === id),
+      );
+      if (agent === undefined) {
+        throw new Error(`No Agent allowlists Core Skill ${id}`);
+      }
+      const resolved = catalog.resolve(agent.id, [{ id, version: "1.0.0" }]);
+      expect(resolved).toHaveLength(1);
+      expect(resolved[0]?.content).toContain("## Procedure");
+    }
   });
 });

@@ -129,6 +129,37 @@ describe("PiSubagentsAdapter integration", () => {
     expect(StepResultV1Schema.parse(actual)).toEqual(actual);
   });
 
+  it("passes the assembled selected Skill prompt into the delegated Agent Execution", async () => {
+    const events = createEventBus();
+    const input = {
+      ...request(),
+      skills: { required: [{ id: "tdd", version: "1.0.0" }], optional: [] },
+    } satisfies AgentExecutionRequestV1;
+    const assembled = "selected Skill procedure marker";
+    const requests: SubagentDelegationRequest[] = [];
+
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      requests.push(delegation);
+      events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+        requestId: delegation.requestId,
+        ownerRunId: delegation.ownerRunId,
+        nodeId: delegation.nodeId,
+        status: "completed",
+        result: { kind: "structured", value: result(input) },
+      } satisfies SubagentDelegationResponse);
+    });
+
+    await new PiSubagentsAdapter(
+      { events },
+      { cwd: "/tmp/workflow", buildPrompt: () => assembled },
+    ).run(input);
+
+    expect(requests[0]?.task).toContain(assembled);
+    expect(requests[0]?.task).toContain("Execution request (JSON):");
+    expect(requests[0]?.skill).toEqual(["tdd"]);
+  });
+
   it("rejects a write-capable read-only request before delegation", async () => {
     const events = createEventBus();
     const input = {

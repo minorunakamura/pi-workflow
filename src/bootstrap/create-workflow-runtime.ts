@@ -53,6 +53,7 @@ import {
   createWorkflowUseCases,
   type WorkflowUseCases,
 } from "../application/workflow-use-cases.js";
+import { assemblePrompt } from "../application/prompt/prompt-assembler.js";
 import {
   selectNextStep,
   type SchedulerResult,
@@ -233,6 +234,22 @@ function createPiSkillCatalog(context: ProductionCommandContext): SkillCatalog {
   return createPiPackageSkillCatalog({
     getSkills: () => ({ skills: skills as PiSkill[], diagnostics: [] }),
   });
+}
+
+function productionPrompt(request: AgentExecutionRequestV1, skillCatalog: SkillCatalog): string {
+  const definition = AGENT_DEFINITIONS.find(({ id }) => id === request.identity.agentId);
+  if (definition === undefined) {
+    throw new Error(`Unknown Workflow Agent: ${request.identity.agentId}`);
+  }
+
+  const selected = [...request.skills.required, ...request.skills.optional];
+  const resolvedSkills = skillCatalog.resolveForAgent(definition.id, selected);
+  return assemblePrompt({
+    agentDefinition: definition,
+    executionRequest: request,
+    contextPack: request.context,
+    skillContent: resolvedSkills,
+  }).content;
 }
 
 function repositorySnapshotValue(snapshot: RepositorySnapshot): Record<string, unknown> {
@@ -715,9 +732,12 @@ async function createProductionUseCases(
 
   let piAgentRuntime: PiSubagentsAdapter | undefined;
   const agentRuntime: AgentRuntime = {
-    run: (request, signal) => {
+    run: async (request, signal) => {
+      const production = await execution();
       piAgentRuntime ??= new PiSubagentsAdapter(requirePiFacilities(pi), {
         cwd: repositoryRoot,
+        buildPrompt: (executionRequest) =>
+          productionPrompt(executionRequest, production.skillCatalog),
       } satisfies PiSubagentsAdapterOptions);
       return piAgentRuntime.run(request, signal);
     },
