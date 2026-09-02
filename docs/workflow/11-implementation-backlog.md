@@ -1475,9 +1475,9 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Resume works without chat history.
-- [ ] Main Session does not need normal repository exploration.
-- [ ] Artifact/State handoff is sufficient for subsequent Steps.
+- [x] Resume works without chat history.
+- [x] Main Session does not need normal repository exploration.
+- [x] Artifact/State handoff is sufficient for subsequent Steps.
 
 **Test Levels:** `E2E`
 
