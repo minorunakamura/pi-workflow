@@ -1671,12 +1671,12 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] `05-agents-and-skills.md` defines the responsibility of each of the nine Phase 1 Core Skills: `how`, `why`, `blast-radius`, `architect`, `tdd`, `interrogate`, `figure-it-out`, `show-me-your-work`, and `reflect`.
-- [ ] Each Skill specification defines enough procedural behavior to implement it without inventing semantics during implementation, including applicability, procedure, expected output/evidence, and relevant constraints or stopping/escalation conditions.
-- [ ] Skill responsibilities are non-overlapping enough to support deliberate selection and do not silently create a second Agent/Orchestrator role.
-- [ ] Skill behavior remains subordinate to Agent authority, permissions, decision classes, Write Scope, Tool policy, and Orchestrator-owned State mutation.
-- [ ] Agent allowlists remain consistent with the specified Skill responsibilities; any required semantic change is made in the authoritative specification before Skill implementation.
-- [ ] Phase 2/Phase 3 behavior such as arena, swarm, worktree isolation, or Operational Skills is not pulled into Phase 1 Core Skill semantics.
+- [x] `05-agents-and-skills.md` defines the responsibility of each of the nine Phase 1 Core Skills: `how`, `why`, `blast-radius`, `architect`, `tdd`, `interrogate`, `figure-it-out`, `show-me-your-work`, and `reflect`.
+- [x] Each Skill specification defines enough procedural behavior to implement it without inventing semantics during implementation, including applicability, procedure, expected output/evidence, and relevant constraints or stopping/escalation conditions.
+- [x] Skill responsibilities are non-overlapping enough to support deliberate selection and do not silently create a second Agent/Orchestrator role.
+- [x] Skill behavior remains subordinate to Agent authority, permissions, decision classes, Write Scope, Tool policy, and Orchestrator-owned State mutation.
+- [x] Agent allowlists remain consistent with the specified Skill responsibilities; any required semantic change is made in the authoritative specification before Skill implementation.
+- [x] Phase 2/Phase 3 behavior such as arena, swarm, worktree isolation, or Operational Skills is not pulled into Phase 1 Core Skill semantics.
 
 **Test Levels:** documentation/specification review prerequisite; no runtime completion claim
 
