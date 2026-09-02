@@ -18,7 +18,8 @@ import { evaluateCompletion } from "../../src/evaluation/completion-evaluator.js
 import { AGENT_DEFINITIONS, type AgentId } from "../../src/agents/definitions.js";
 import { PLAYBOOK_DEFINITIONS, type PlaybookDefinition } from "../../src/playbooks/definitions.js";
 import type { WorkflowState } from "../../src/ports/run-reader.js";
-import { withTempRepository, type RepositoryFixture } from "../fixtures/temp-repository.js";
+import { withGoldenRepository } from "../fixtures/golden-repositories.js";
+import type { RepositoryFixture } from "../fixtures/temp-repository.js";
 
 const RUN_ID = "run-001" as RunId;
 const INITIAL_STATE_REVISION = 1;
@@ -276,7 +277,7 @@ describe("six Playbook fake E2E", () => {
       const executedSteps = steps.filter(({ required }) => required);
       const initial = initialState(definition, steps);
 
-      await withTempRepository(fixtureFor(initial), async (repositoryRoot) => {
+      await withGoldenRepository(definition.id, fixtureFor(initial), async (repositoryRoot) => {
         const artifactStore = new FileArtifactStore(repositoryRoot);
         const eventWriter = new JsonlEventWriter(repositoryRoot);
         const stateStore = new FileStateStore(repositoryRoot, { eventWriter });

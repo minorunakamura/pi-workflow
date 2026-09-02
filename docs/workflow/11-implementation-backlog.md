@@ -1419,7 +1419,7 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Reproducible fixtures cover feature/bug/hotfix/chore/refactor/investigation and dirty-tree cases.
+- [x] Reproducible fixtures cover feature/bug/hotfix/chore/refactor/investigation and dirty-tree cases.
 
 **Test Levels:** `E2E`
 
