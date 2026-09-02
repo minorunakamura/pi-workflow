@@ -84,7 +84,10 @@ function completedStepResult(request: SubagentDelegationRequest): Record<string,
     finding_rechecks: [],
     plan_deviations: [],
     skill_requests: [],
-    execution_checks: [],
+    execution_checks:
+      request.agent === "verifier"
+        ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
+        : [],
     observations: [],
     blocked: null,
     failure: null,

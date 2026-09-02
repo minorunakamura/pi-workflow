@@ -90,6 +90,13 @@ export type OrchestratorPostconditionPhase = (input: {
   step: SchedulerStep;
 }) => MaybePromise<WorkflowState>;
 
+export type OrchestratorRuntimeFailurePhase = (input: {
+  state: WorkflowState;
+  request: AgentExecutionRequestV1;
+  step: SchedulerStep;
+  error: unknown;
+}) => MaybePromise<WorkflowState>;
+
 export type OrchestratorFinalizePhase = (input: {
   state: WorkflowState;
   completion: CompletionEvaluation;
@@ -110,6 +117,7 @@ export type OrchestratorDependencies = Readonly<{
   completion: OrchestratorCompletionPhase;
   schedule: OrchestratorSchedulePhase;
   postconditions?: OrchestratorPostconditionPhase;
+  runtimeFailure?: OrchestratorRuntimeFailurePhase;
   finalize?: OrchestratorFinalizePhase;
   recover?: OrchestratorStatePhase;
   reconcile?: OrchestratorStatePhase;
@@ -545,7 +553,31 @@ export class Orchestrator {
           };
         }
 
-        const untrustedResult = await this.agentRuntime.run(request, controller.signal);
+        let untrustedResult: unknown;
+        try {
+          untrustedResult = await this.agentRuntime.run(request, controller.signal);
+        } catch (error) {
+          if (controller.signal.aborted || this.isCancellationRequested(runId, state)) {
+            return {
+              kind: "idle",
+              state: await this.runReader.load(runId),
+              iterations: iteration,
+              reason: "RUN_TERMINAL",
+            };
+          }
+          const runtimeFailure = this.dependencies.runtimeFailure;
+          if (runtimeFailure === undefined) throw error;
+          const recovered = await runtimeFailure({ state, request, step, error });
+          if (recovered.run.run_id !== runId) {
+            throw new Error(`Runtime failure handler returned a different Run ID: ${runId}`);
+          }
+          return {
+            kind: "idle",
+            state: recovered,
+            iterations: iteration,
+            reason: "RECOVERABLE_BLOCKER",
+          };
+        }
         if (controller.signal.aborted || this.isCancellationRequested(runId, state)) {
           return {
             kind: "idle",

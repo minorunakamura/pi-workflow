@@ -698,6 +698,110 @@ For cross-platform validation, Phase 1 MUST execute the relevant persistence/Git
 
 Packed Package Evidence MUST exercise an artifact produced by the package process (for example `pnpm pack`) from a clean consumer context. Source-checkout resource existence or manually injected package roots do not by themselves satisfy packed-installation Evidence.
 
+### Release Closure Integration Assertions
+
+The following assertions make existing Phase 1 production-integration and release-evidence requirements mechanically explicit. They do not introduce new Agent, Skill, Playbook, or Domain semantics.
+
+#### Production Orchestration Finalization
+
+A successful Agent Execution result is not sufficient by itself to complete a production Step or Run. The installed/default production path MUST connect the same authoritative normalization, repository postconditions, Artifact finalization, Gate reconciliation, and completion logic required by the Orchestrator contract.
+
+For write workflows, the production path MUST be able to demonstrate the canonical chain as applicable:
+
+```text
+Worker Execution
+  ↓
+result normalization + repository postconditions
+  ↓
+Change Set finalization
+  ↓
+Verifier Execution
+  ↓
+Verification Run finalization
+  ↓
+Reviewer Execution
+  ↓
+Review Run / Finding normalization
+  ↓
+CompletionEvaluator
+  ↓
+Outcome finalization + terminal State commit
+```
+
+- **MUST:** A Worker `completed` result not be accepted as proof of implementation without actual repository observation and Change Set finalization.
+- **MUST:** Required Verification/Review Artifacts be finalized through the production Orchestrator path before completion eligibility is evaluated.
+- **MUST:** Open blocking/fix-required Findings, failed required verification, stale evidence, unresolved drift, or another failed Completion Gate prevent successful terminalization.
+- **MUST:** Dynamic triggers required by the orchestration specification, including verification failure, review finding, plan deviation, request amendment, repository drift, runtime failure, and recovery, reach the production Orchestrator control loop rather than existing only in fake/component compositions.
+- **MUST NOT:** Raw Agent results or test-only postcondition hooks bypass authoritative finalizers in the installed/default release path.
+
+#### Production Repository and Capability Enforcement
+
+The production Composition Root MUST carry approved repository and capability constraints through to concrete execution adapters.
+
+- **MUST:** Plan Write Scope be propagated into the Worker Execution Request and enforced against the actual post-execution diff.
+- **MUST:** Run-start repository baseline preserve the actual HEAD, branch, dirty state, and pre-existing changed/untracked files; a dirty repository MUST NOT be normalized to a clean baseline.
+- **MUST:** Pre-existing changes and mutation attribution be checked according to repository safety rules before a Worker result is accepted.
+- **MUST:** Repository drift checks required by the recovery/repository specification execute on the installed/default path at their defined lifecycle boundaries.
+- **MUST:** Agent mode, permissions, Tool capability policy, and applicable allowlists reach the concrete Pi Agent Runtime boundary as enforceable runtime constraints where the adapter supports the capability.
+- **MUST NOT:** Prompt wording be the sole enforcement mechanism for source-write, Git-write, network, or Tool capability restrictions.
+
+#### Packed Installation vs Packed Production Runtime
+
+Packed Package release evidence is evaluated in two distinct dimensions:
+
+```text
+Packed Package Installation / Loading
+Packed Production Runtime Operation
+```
+
+`Packed Package Installation / Loading` verifies package mechanics from a clean consumer: artifact production, install/load, manifest/resource resolution, Extension binding, dependency resolution, and packaged Skill/Agent discovery.
+
+`Packed Production Runtime Operation` verifies that the installed Package can reach the actual production Composition Root and Pi Agent Runtime path required by the selected workflow, including required Agent resolution such as Worker, Verifier, and Reviewer.
+
+- **MUST:** All seven Phase 1 Agent resources required by the authoritative Agent registry be packaged/resolvable through the installed/default path.
+- **MUST:** Runtime-operation Evidence exercise the real Pi adapter/Agent-execution bridge used by production composition; a test that intercepts delegation and returns a synthetic Agent response before that bridge is insufficient.
+- **MUST NOT:** Failure of packed production runtime operation be reported as failure of package installation mechanics when install/load itself is proven.
+- **MUST NOT:** Successful package installation/loading alone establish `NEW_RUNTIME_OPERATIONAL`.
+- **MAY:** External live LLM/provider calls remain few and focused. Proving the real Pi execution bridge does not require every release test to depend on a live provider.
+
+#### Gate D Production Evaluation Projection
+
+Gate D requires the production Monitoring projection path to create evaluation data from authoritative Run sources; manually pre-populating evaluation rows in tests does not prove the production path.
+
+The required projection is:
+
+```text
+Run Store / Events
+  ↓
+Monitoring indexer
+  ↓
+RunMetricsAggregator
+  ↓
+RunEvaluator
+  ↓
+RunEvaluationRecord
+  ↓
+SQLite evaluations projection
+  ↓
+Evaluation / Compare read API
+```
+
+- **MUST:** Telemetry quality support `healthy | degraded | insufficient` and represent missing required telemetry explicitly rather than silently converting it to zero-valued healthy data.
+- **MUST:** Rebuild and incremental indexing be able to derive the evaluation projection from authoritative Run sources.
+- **MUST:** A finalized Run receive a final evaluation for the current evaluator version.
+- **MUST:** Gate D Evidence demonstrate the indexer/evaluator integration instead of satisfying evaluation APIs only through manually inserted test records.
+- **NOTE:** `/api/v1/health` remains part of the Monitoring API design, but it is not independently a Phase 1 release blocker unless it is added to the `09-monitoring.md` Phase 1 MVP Required set.
+
+#### Release Evidence Classification
+
+Release verification MUST distinguish implementation failure from missing proof:
+
+- `FAIL`: direct evidence shows a required behavior is missing, incorrectly wired, or violates the authoritative specification.
+- `INSUFFICIENT EVIDENCE`: the required behavior may exist, but the required installed/default/packed/real-runtime path has not been demonstrated with acceptable Evidence.
+- `Residual Risk`: a non-blocking uncertainty or limitation outside the current mandatory release-evidence contract; it MUST NOT be used to hide a required `FAIL` or `INSUFFICIENT EVIDENCE` condition.
+
+Story completion markers in `11-implementation-backlog.md` are tracking projections only. They MUST NOT override a `FAIL` or `INSUFFICIENT EVIDENCE` result discovered against the current release-candidate HEAD.
+
 ### Legacy Cutover Certification
 
 Legacy cutover is evaluated as separate conditions rather than a single source-file absence check:

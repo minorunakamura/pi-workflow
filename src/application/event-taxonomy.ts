@@ -295,6 +295,31 @@ function emitStepGraphEvents(
   }
 }
 
+function persistedArtifactRefs(
+  state: WorkflowState,
+  stepId: string,
+): readonly Readonly<{ path: string; status: string }>[] {
+  const step = state.snapshot.steps.steps.find(({ id }) => id === stepId);
+  const values = step?.result?.artifacts;
+  if (!Array.isArray(values)) return [];
+  return values.flatMap((value) => {
+    const artifact = record(value);
+    return artifact !== undefined &&
+      typeof artifact.path === "string" &&
+      typeof artifact.status === "string"
+      ? [{ path: artifact.path, status: artifact.status }]
+      : [];
+  });
+}
+
+function persistedFinalization(
+  state: WorkflowState,
+  stepId: string,
+): Record<string, unknown> | undefined {
+  const step = state.snapshot.steps.steps.find(({ id }) => id === stepId);
+  return record(step?.result?.finalization);
+}
+
 function emitExecutionEvents(
   input: WorkflowEventInput,
   events: EventBuilder,
@@ -347,26 +372,63 @@ function emitExecutionEvents(
     correlationId,
   );
 
+  const finalization = persistedFinalization(input.after, step.id);
+  const changeSet = record(finalization?.change_set);
+  const verificationRun = record(finalization?.verification_run);
+  const reviewRun = record(finalization?.review_run);
+  if (changeSet !== undefined) {
+    events(
+      "change-set.created",
+      {
+        change_set_id: typeof changeSet.id === "string" ? changeSet.id : null,
+        status: typeof changeSet.status === "string" ? changeSet.status : null,
+        accepted: typeof changeSet.accepted === "boolean" ? changeSet.accepted : null,
+      },
+      correlationId,
+    );
+  }
   if (terminal === "completed" && step.type === "verification") {
     events(
       "verification.completed",
-      { step_id: step.id, execution_id: result.identity.executionId },
+      {
+        step_id: step.id,
+        execution_id: result.identity.executionId,
+        ...(typeof verificationRun?.id === "string"
+          ? { verification_run_id: verificationRun.id }
+          : {}),
+        ...(typeof verificationRun?.result === "string" ? { result: verificationRun.result } : {}),
+      },
       correlationId,
     );
   } else if (terminal === "completed" && step.type === "review") {
     events(
       "review.completed",
-      { step_id: step.id, execution_id: result.identity.executionId },
+      {
+        step_id: step.id,
+        execution_id: result.identity.executionId,
+        ...(typeof reviewRun?.id === "string" ? { review_run_id: reviewRun.id } : {}),
+        ...(typeof reviewRun?.result === "string" ? { result: reviewRun.result } : {}),
+      },
       correlationId,
     );
   }
 
-  const normalized = input.normalized;
-  if (normalized === undefined || normalized === null) return;
-  for (const artifact of normalized.artifacts.refs) {
+  const artifacts = new Map<string, string>();
+  for (const artifact of input.normalized?.artifacts.refs ?? []) {
+    artifacts.set(artifact.path, artifact.status);
+  }
+  for (const artifact of persistedArtifactRefs(input.after, step.id)) {
+    artifacts.set(artifact.path, artifact.status);
+  }
+  for (const [path, status] of artifacts) {
     events(
       "artifact.finalized",
-      { step_id: step.id, execution_id: result.identity.executionId, path: artifact.path },
+      {
+        step_id: step.id,
+        execution_id: result.identity.executionId,
+        path,
+        status,
+      },
       correlationId,
       "artifact-store",
       { type: "system" },
@@ -414,6 +476,24 @@ function emitRunEvents(
       correlationId,
     );
   }
+}
+
+function emitOutcomeArtifactEvent(
+  before: WorkflowState,
+  after: WorkflowState,
+  events: EventBuilder,
+  correlationId: string,
+): void {
+  const previous = text(record(before.run.outcome)?.artifact_path);
+  const current = text(record(after.run.outcome)?.artifact_path);
+  if (current === undefined || current === previous) return;
+  events(
+    "artifact.finalized",
+    { path: current, status: "complete" },
+    correlationId,
+    "artifact-store",
+    { type: "system" },
+  );
 }
 
 function emitRepositoryEvents(
@@ -494,6 +574,7 @@ function emitStateEvents(input: WorkflowEventInput, events: EventBuilder): void 
   emitGates(before, after, events, fallbackCorrelation);
   emitFindings(before, after, events, fallbackCorrelation);
   emitExecutionEvents(input, events, fallbackCorrelation);
+  emitOutcomeArtifactEvent(before, after, events, fallbackCorrelation);
   emitRunEvents(input, events, fallbackCorrelation);
   emitRepositoryEvents(before, after, events, fallbackCorrelation);
 }

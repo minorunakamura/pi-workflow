@@ -4,6 +4,7 @@ import type {
   ExtensionUIContext,
   Skill as PiSkill,
 } from "@earendil-works/pi-coding-agent";
+import { stringify as stringifyYaml } from "yaml";
 import { resolve as resolvePath } from "node:path";
 import { FileArtifactStore } from "../adapters/persistence/write/file-artifact-store.js";
 import { GitRepositoryAdapter } from "../adapters/repository/git-repository-adapter.js";
@@ -39,7 +40,16 @@ import {
   renderWorkflowResponse,
 } from "../application/workflow-command-handler.js";
 import { ExecutionResolver } from "../application/execution/model-tool-resolution.js";
-import { WorkerFinalizer } from "../application/execution/worker-finalizer.js";
+import {
+  ReviewerFinalizer,
+  type ReviewerFinalization,
+} from "../application/execution/reviewer-finalizer.js";
+import { VerifierFinalizer } from "../application/execution/verifier-finalizer.js";
+import {
+  WorkerFinalizer,
+  type WorkerFinalization,
+} from "../application/execution/worker-finalizer.js";
+import type { ResultNormalizationResult } from "../application/normalization/result-normalizer.js";
 import { Orchestrator } from "../application/orchestrator.js";
 import { buildContext, type ContextCandidate } from "../application/context/context-builder.js";
 import {
@@ -47,7 +57,9 @@ import {
   type CancellationCoordinator,
   type CancellationExecution,
 } from "../application/recovery/cancellation-lifecycle.js";
+import { FailureLifecycle } from "../application/recovery/failure-lifecycle.js";
 import { InterruptedExecutionRecovery } from "../application/recovery/interrupted-execution-recovery.js";
+import { RepositoryDriftRecovery } from "../application/recovery/repository-drift-recovery.js";
 import { ResumeLifecycle } from "../application/recovery/resume-lifecycle.js";
 import {
   createWorkflowUseCases,
@@ -59,20 +71,41 @@ import {
   type SchedulerResult,
   type SchedulerStep,
 } from "../domain/scheduling/scheduler.js";
-import { createIdAllocator, type ExecutionId, type RunId } from "../domain/primitives/ids.js";
+import {
+  createIdAllocator,
+  type ExecutionId,
+  type IdAllocator,
+  type RunId,
+  type StepId,
+} from "../domain/primitives/ids.js";
+import {
+  addDynamicStep,
+  createStep,
+  createStepGraph,
+  type Step,
+} from "../domain/graph/step-graph.js";
+import {
+  createRequirement,
+  reviseRequirement,
+  type RequirementCandidate,
+} from "../domain/requirements/requirement.js";
 import { PLAYBOOK_DEFINITIONS, type PlaybookDefinition } from "../playbooks/definitions.js";
 import type { AgentRuntime } from "../ports/agent-runtime.js";
 import type {
   JsonObject,
+  JsonValue,
   AgentExecutionRequestV1,
   StepResultV1,
 } from "../contracts/execution/agent-execution.js";
-import type { ArtifactReader, ArtifactRef } from "../ports/artifact-store.js";
-import type { RepositoryAdapter, RepositorySnapshot } from "../ports/repository.js";
+import { ArtifactFrontMatterV1Schema } from "../contracts/artifacts/artifact.js";
+import type { ArtifactReader, ArtifactRef, ArtifactStore } from "../ports/artifact-store.js";
+import { redactSecrets } from "../telemetry/redaction.js";
+import type { RepositoryAdapter, RepositoryDiff, RepositorySnapshot } from "../ports/repository.js";
 import type { ModelCatalog, ModelReference } from "../ports/model-catalog.js";
 import type { ToolCatalog, ToolDefinition } from "../ports/tool-catalog.js";
 import type { UserInteraction } from "../ports/user-interaction.js";
 import type { WorkflowState } from "../ports/run-reader.js";
+import type { StepStateV1 } from "../contracts/state/workflow-state.js";
 
 const RUN_ID_PATTERN = /^run-\d+$/;
 const COMMAND_TIMEOUT_MS = 300_000;
@@ -313,7 +346,10 @@ function schedulerStep(step: WorkflowState["snapshot"]["steps"]["steps"][number]
     status: step.status,
     blockedBy: step.blocked_by.filter((value): value is string => typeof value === "string"),
     result: step.result,
-    origin: "base",
+    origin: step.origin === "dynamic" ? "dynamic" : "base",
+    ...(typeof step.trigger === "string" ? { trigger: step.trigger } : {}),
+    ...(typeof step.skip_reason === "string" ? { skipReason: step.skip_reason } : {}),
+    ...(typeof step.obsolete === "boolean" ? { obsolete: step.obsolete } : {}),
   };
 }
 
@@ -521,12 +557,6 @@ async function buildProductionRequest(
   return execution.executionResolver.resolve(request, requestedCapabilities);
 }
 
-function completedStep(state: WorkflowState, type: SchedulerStep["type"]): boolean {
-  return state.snapshot.steps.steps.some(
-    (step) => step.type === type && step.status === "completed",
-  );
-}
-
 function enumValue<T extends string>(value: unknown, values: readonly T[]): T | undefined {
   return typeof value === "string" && values.includes(value as T) ? (value as T) : undefined;
 }
@@ -562,20 +592,46 @@ function productionCompletion(state: WorkflowState): ReturnType<typeof evaluateC
     return {
       status: step.status,
       required: definitionStep?.required !== false,
+      skipAuthorized: step.status === "skipped" || step.obsolete === true,
+      ...(typeof step.obsolete === "boolean" ? { obsolete: step.obsolete } : {}),
     };
   });
   const planApplicability = enumValue(state.run.current_plan?.applicability?.status, [
     "current",
     "compatible",
   ] as const);
-  const implementationPresent = state.snapshot.steps.steps.some(
+  const implementationSteps = state.snapshot.steps.steps.filter(
     (step) => step.type === "implementation",
   );
-  const implementationComplete = !implementationPresent || completedStep(state, "implementation");
+  const implementationPresent = implementationSteps.length > 0;
+  const implementationComplete =
+    !implementationPresent ||
+    implementationSteps.every((step) => {
+      const changeSet = resultFinalization(step, "change_set");
+      return (
+        step.status === "completed" &&
+        changeSet?.status === "complete" &&
+        changeSet.accepted === true
+      );
+    });
   const verificationRequired = definition.gatePolicy.verification === "required";
   const reviewRequired = definition.gatePolicy.review === "required";
-  const verificationPresent = completedStep(state, "verification");
-  const reviewPresent = completedStep(state, "review");
+  const verificationStep = [...state.snapshot.steps.steps]
+    .reverse()
+    .find((step) => step.type === "verification" && step.status !== "skipped");
+  const reviewStep = [...state.snapshot.steps.steps]
+    .reverse()
+    .find((step) => step.type === "review" && step.status !== "skipped");
+  const verificationRun =
+    verificationStep === undefined
+      ? undefined
+      : resultFinalization(verificationStep, "verification_run");
+  const reviewRun =
+    reviewStep === undefined ? undefined : resultFinalization(reviewStep, "review_run");
+  const verificationPresent = verificationRun !== undefined;
+  const reviewPresent = reviewRun !== undefined;
+  const verificationFreshness = finalizationFreshness(state, verificationRun);
+  const reviewFreshness = finalizationFreshness(state, reviewRun);
 
   return evaluateCompletion({
     steps: requiredSteps,
@@ -616,18 +672,23 @@ function productionCompletion(state: WorkflowState): ReturnType<typeof evaluateC
       ? {
           required: true,
           present: verificationPresent,
-          freshness: verificationPresent ? "fresh" : "unknown",
-          result: verificationPresent ? "passed" : "incomplete",
+          freshness: verificationPresent ? verificationFreshness : "unknown",
+          result:
+            enumValue(verificationRun?.result, ["passed", "failed", "incomplete"] as const) ??
+            "incomplete",
+          limitationAccepted: false,
         }
       : { required: false },
     review: reviewRequired
       ? {
           required: true,
           present: reviewPresent,
-          freshness: reviewPresent ? "fresh" : "unknown",
-          result: reviewPresent ? "clean" : "incomplete",
-          complete: reviewPresent,
-          findings: [],
+          freshness: reviewPresent ? reviewFreshness : "unknown",
+          result:
+            enumValue(reviewRun?.result, ["clean", "findings", "incomplete"] as const) ??
+            "incomplete",
+          complete: reviewRun?.status === "complete",
+          findings: state.snapshot.findings.findings,
         }
       : { required: false },
     controlState: {
@@ -652,6 +713,494 @@ function productionSchedule(state: WorkflowState): SchedulerResult {
     runComplete: state.run.status === "completed",
     runTerminal: state.run.finalized,
   });
+}
+
+const PRODUCTION_MAX_DYNAMIC_STEPS = 3;
+const CANDIDATE_DECISION_CLASSES = ["D1", "D2", "D3"] as const;
+const CANDIDATE_UNCERTAINTY_CATEGORIES = [
+  "requirement",
+  "behavior",
+  "design",
+  "external",
+  "impact",
+  "verification",
+] as const;
+
+type ProductionDynamicStepInput = Readonly<{
+  objective: string;
+  type: Step["type"];
+  agent: string;
+  dependsOn: readonly StepId[];
+  trigger: string;
+}>;
+
+type ProductionDynamicStepResult = Readonly<{
+  state: WorkflowState;
+  id?: StepId;
+  added: boolean;
+}>;
+
+function artifactValue(ref: ArtifactRef): JsonObject {
+  return { runId: ref.runId, path: ref.path, status: ref.status };
+}
+
+function resultFinalization(
+  step: WorkflowState["snapshot"]["steps"]["steps"][number],
+  key: string,
+): Record<string, unknown> | undefined {
+  const finalization = isRecord(step.result?.finalization) ? step.result.finalization : undefined;
+  const value = finalization?.[key];
+  return isRecord(value) ? value : undefined;
+}
+
+function finalizationFreshness(
+  state: WorkflowState,
+  finalization: Record<string, unknown> | undefined,
+): "fresh" | "stale" | "unknown" {
+  if (finalization === undefined) return "unknown";
+  if (finalization.freshness === "stale") return "stale";
+  if (finalization.freshness === "unknown") return "unknown";
+  const basis = isRecord(finalization.basis) ? finalization.basis : undefined;
+  if (typeof basis?.requirement_revision !== "number") return "unknown";
+  if (basis.requirement_revision !== state.snapshot.requirement.revision) return "stale";
+  const planVersion =
+    typeof state.run.current_plan?.version === "number"
+      ? state.run.current_plan.version
+      : undefined;
+  if (planVersion === undefined) return "fresh";
+  if (typeof basis.plan_version !== "number") return "unknown";
+  return basis.plan_version === planVersion ? "fresh" : "stale";
+}
+
+function resultArray(
+  step: WorkflowState["snapshot"]["steps"]["steps"][number],
+  key: string,
+): readonly unknown[] {
+  const value = step.result?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function hasRequirementCandidates(
+  step: WorkflowState["snapshot"]["steps"]["steps"][number],
+): boolean {
+  const candidates = isRecord(step.result?.requirement_candidates)
+    ? step.result.requirement_candidates
+    : undefined;
+  return (
+    (Array.isArray(candidates?.acceptance_criteria) && candidates.acceptance_criteria.length > 0) ||
+    (Array.isArray(candidates?.constraints) && candidates.constraints.length > 0) ||
+    (Array.isArray(candidates?.assumptions) && candidates.assumptions.length > 0)
+  );
+}
+
+function attachFinalization(
+  state: WorkflowState,
+  stepId: StepId,
+  artifact: ArtifactRef,
+  details: JsonObject,
+): WorkflowState {
+  let found = false;
+  const steps = state.snapshot.steps.steps.map((step) => {
+    if (step.id !== stepId) return step;
+    found = true;
+    const current = step.result ?? {};
+    const artifacts = Array.isArray(current.artifacts) ? current.artifacts : [];
+    const reference = artifactValue(artifact);
+    const alreadyReferenced = artifacts.some(
+      (value) =>
+        isRecord(value) &&
+        value.runId === reference.runId &&
+        value.path === reference.path &&
+        value.status === reference.status,
+    );
+    return {
+      ...step,
+      result: {
+        ...current,
+        artifacts: alreadyReferenced ? artifacts : [...artifacts, reference],
+        finalization: details,
+      } as JsonObject,
+    };
+  });
+  if (!found) throw new Error(`Cannot attach finalization to unknown Step ${stepId}`);
+  return { ...state, snapshot: { ...state.snapshot, steps: { ...state.snapshot.steps, steps } } };
+}
+
+function candidateWithoutIdentity(candidate: JsonObject): RequirementCandidate {
+  return Object.fromEntries(
+    Object.entries(candidate).filter(([key]) => key !== "id"),
+  ) as unknown as RequirementCandidate;
+}
+
+function candidateEnum<T extends readonly string[]>(
+  value: unknown,
+  values: T,
+  name: string,
+): T[number] {
+  if (typeof value !== "string" || !values.includes(value as T[number])) {
+    throw new Error(`${name} must be one of ${values.join(", ")}`);
+  }
+  return value as T[number];
+}
+
+function applyRequirementCandidates(
+  state: WorkflowState,
+  candidates: ResultNormalizationResult["candidates"]["requirement_candidates"],
+): WorkflowState {
+  const mutations = [
+    ...candidates.acceptance_criteria.map((candidate) => ({
+      kind: "acceptanceCriteria" as const,
+      candidate: candidateWithoutIdentity(candidate),
+    })),
+    ...candidates.constraints.map((candidate) => ({
+      kind: "constraints" as const,
+      candidate: candidateWithoutIdentity(candidate),
+    })),
+    ...candidates.assumptions.map((candidate) => ({
+      kind: "assumptions" as const,
+      candidate: candidateWithoutIdentity(candidate),
+    })),
+  ];
+  if (mutations.length === 0) return state;
+
+  const current = state.snapshot.requirement;
+  const revised = reviseRequirement(
+    createRequirement({
+      revision: current.revision,
+      acceptanceCriteria: current.acceptance_criteria as unknown as readonly {
+        id: string;
+        [key: string]: unknown;
+      }[],
+      constraints: current.constraints as unknown as readonly {
+        id: string;
+        [key: string]: unknown;
+      }[],
+      assumptions: current.assumptions,
+    }),
+    mutations,
+  );
+  const planImpact = revised.impact.planImpact;
+  const currentPlan = state.run.current_plan;
+  const nextPlan =
+    currentPlan === null || planImpact === "current"
+      ? currentPlan
+      : {
+          ...currentPlan,
+          applicability: {
+            ...currentPlan.applicability,
+            status: planImpact,
+          },
+        };
+
+  return {
+    ...state,
+    run: { ...state.run, current_plan: nextPlan },
+    snapshot: {
+      ...state.snapshot,
+      requirement: {
+        ...current,
+        revision: revised.requirement.revision,
+        acceptance_criteria: revised.requirement
+          .acceptanceCriteria as unknown as readonly JsonValue[],
+        constraints: revised.requirement.constraints as unknown as readonly JsonValue[],
+        assumptions: revised.requirement.assumptions as unknown as readonly JsonValue[],
+      },
+    },
+  };
+}
+
+function applyProductionCandidates(
+  state: WorkflowState,
+  candidates: ResultNormalizationResult["candidates"],
+): WorkflowState {
+  const uncertaintyCandidates = candidates.uncertainty_candidates.map((candidate) => ({
+    ...candidate,
+    id: candidate.id,
+    category: candidateEnum(
+      candidate.category,
+      CANDIDATE_UNCERTAINTY_CATEGORIES,
+      "Uncertainty candidate category",
+    ),
+    status: "open" as const,
+  }));
+  const decisionCandidates = candidates.decision_requests.map((candidate) => ({
+    ...candidate,
+    id: candidate.id,
+    class: candidateEnum(candidate.class, CANDIDATE_DECISION_CLASSES, "Decision candidate class"),
+    status: "pending" as const,
+  }));
+  const withCandidates = {
+    ...state,
+    snapshot: {
+      ...state.snapshot,
+      uncertainties: {
+        ...state.snapshot.uncertainties,
+        uncertainties: [...state.snapshot.uncertainties.uncertainties, ...uncertaintyCandidates],
+      },
+      decisions: {
+        ...state.snapshot.decisions,
+        decisions: [...state.snapshot.decisions.decisions, ...decisionCandidates],
+      },
+    },
+  };
+  let next = applyRequirementCandidates(withCandidates, candidates.requirement_candidates);
+  if (candidates.plan_deviations.length > 0 && next.run.current_plan !== null) {
+    next = {
+      ...next,
+      run: {
+        ...next.run,
+        current_plan: {
+          ...next.run.current_plan,
+          applicability: {
+            ...next.run.current_plan.applicability,
+            status: "replan-required",
+          },
+        },
+      },
+    };
+  }
+  return next;
+}
+
+function productionDynamicLimit(state: WorkflowState): number {
+  const value = state.run.limits.max_dynamic_steps;
+  if (value === undefined) return PRODUCTION_MAX_DYNAMIC_STEPS;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("max_dynamic_steps must be a non-negative safe integer");
+  }
+  return value;
+}
+
+function productionDomainStep(value: StepStateV1): Step {
+  return createStep({
+    id: value.id,
+    type: value.type,
+    objective: value.objective,
+    agent: value.agent,
+    skills: value.skills.filter((entry): entry is string => typeof entry === "string"),
+    inputs: value.inputs,
+    outputs: value.outputs,
+    dependsOn: value.depends_on.filter((entry): entry is StepId => typeof entry === "string"),
+    completionCriteria: value.completion_criteria.filter(
+      (entry): entry is string => typeof entry === "string",
+    ),
+    status: value.status,
+    blockedBy: value.blocked_by.filter((entry): entry is string => typeof entry === "string"),
+    result: value.result,
+    origin: value.origin === "dynamic" ? "dynamic" : "base",
+    ...(typeof value.trigger === "string" ? { trigger: value.trigger } : {}),
+    ...(typeof value.skip_reason === "string" ? { skipReason: value.skip_reason } : {}),
+    ...(typeof value.obsolete === "boolean" ? { obsolete: value.obsolete } : {}),
+  });
+}
+
+function productionStateStep(step: Step, previous: StepStateV1 | undefined): StepStateV1 {
+  return {
+    ...previous,
+    id: step.id,
+    type: step.type,
+    objective: step.objective,
+    agent: step.agent,
+    skills: previous?.skills ?? [...step.skills],
+    inputs: previous?.inputs ?? [],
+    outputs: previous?.outputs ?? [],
+    depends_on: [...step.dependsOn],
+    completion_criteria: [...step.completionCriteria],
+    status: step.status,
+    blocked_by: [...step.blockedBy],
+    result: step.result as JsonObject | null,
+    origin: step.origin,
+    ...(step.trigger === undefined ? {} : { trigger: step.trigger }),
+    ...(step.skipReason === undefined ? {} : { skip_reason: step.skipReason }),
+    ...(step.obsolete === undefined ? {} : { obsolete: step.obsolete }),
+  };
+}
+
+function syncProductionGraph(
+  state: WorkflowState,
+  graph: ReturnType<typeof createStepGraph>,
+): WorkflowState {
+  const previous = new Map(state.snapshot.steps.steps.map((step) => [step.id, step]));
+  return {
+    ...state,
+    run: { ...state.run, graph_revision: graph.graphRevision },
+    snapshot: {
+      ...state.snapshot,
+      steps: {
+        ...state.snapshot.steps,
+        graph_revision: graph.graphRevision,
+        steps: graph.steps.map((step) => productionStateStep(step, previous.get(step.id))),
+      },
+    },
+  };
+}
+
+function addProductionDynamicStep(
+  state: WorkflowState,
+  input: ProductionDynamicStepInput,
+  idAllocator: IdAllocator,
+): ProductionDynamicStepResult {
+  const graph = createStepGraph(
+    state.snapshot.steps.steps.map(productionDomainStep),
+    state.snapshot.steps.graph_revision,
+  );
+  const existing = graph.steps.find(
+    (step) =>
+      step.objective === input.objective &&
+      step.status !== "completed" &&
+      step.status !== "skipped",
+  );
+  if (existing !== undefined) return { state, id: existing.id, added: false };
+
+  const used = new Set(graph.steps.map((step) => step.id));
+  let id: StepId;
+  do {
+    id = idAllocator.issueStepId();
+  } while (used.has(id));
+  const next = addDynamicStep(
+    graph,
+    {
+      id,
+      type: input.type,
+      objective: input.objective,
+      agent: input.agent,
+      dependsOn: input.dependsOn,
+      status: "ready",
+      trigger: input.trigger,
+    },
+    productionDynamicLimit(state),
+  );
+  return { state: syncProductionGraph(state, next), id, added: true };
+}
+
+function lastCompletedStepId(state: WorkflowState): StepId | undefined {
+  return [...state.snapshot.steps.steps].reverse().find((step) => step.status === "completed")?.id;
+}
+
+function counterNumber(state: WorkflowState, key: string): number | undefined {
+  const value = state.run.counters[key];
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function markProductionTrigger(state: WorkflowState, key: string, value: number): WorkflowState {
+  return {
+    ...state,
+    run: { ...state.run, counters: { ...state.run.counters, [key]: value } },
+  };
+}
+
+function productionTrigger(state: WorkflowState, idAllocator: IdAllocator): WorkflowState {
+  const source = lastCompletedStepId(state);
+  const requirementRevision = state.snapshot.requirement.revision;
+  const amendmentSource = state.snapshot.steps.steps.find(hasRequirementCandidates);
+  if (
+    amendmentSource !== undefined &&
+    counterNumber(state, "request_amendment_handled_revision") !== requirementRevision
+  ) {
+    const analysis = addProductionDynamicStep(
+      state,
+      {
+        objective: "reanalyze amended requirement",
+        type: "analysis",
+        agent: "scout",
+        dependsOn: [amendmentSource.id],
+        trigger: "request amendment",
+      },
+      idAllocator,
+    );
+    const replan = addProductionDynamicStep(
+      analysis.state,
+      {
+        objective: "re-plan amended requirement",
+        type: "planning",
+        agent: "planner",
+        dependsOn: [analysis.id ?? amendmentSource.id],
+        trigger: "request amendment",
+      },
+      idAllocator,
+    );
+    return markProductionTrigger(
+      replan.state,
+      "request_amendment_handled_revision",
+      requirementRevision,
+    );
+  }
+
+  const deviationSource = state.snapshot.steps.steps.find(
+    (step) => resultArray(step, "plan_deviations").length > 0,
+  );
+  const deviationCount = state.snapshot.steps.steps.reduce(
+    (count, step) => count + resultArray(step, "plan_deviations").length,
+    0,
+  );
+  if (
+    deviationSource !== undefined &&
+    counterNumber(state, "plan_deviation_handled_count") !== deviationCount
+  ) {
+    const added = addProductionDynamicStep(
+      state,
+      {
+        objective: "re-plan after plan deviation",
+        type: "planning",
+        agent: "planner",
+        dependsOn: [deviationSource.id],
+        trigger: "plan deviation",
+      },
+      idAllocator,
+    );
+    return markProductionTrigger(added.state, "plan_deviation_handled_count", deviationCount);
+  }
+
+  const repository = state.run.repository;
+  if (
+    repository.resolution === "reconciled" &&
+    state.run.current_plan?.applicability?.status === "replan-required" &&
+    counterNumber(state, "repository_drift_replan_handled_revision") !== requirementRevision
+  ) {
+    const added = addProductionDynamicStep(
+      state,
+      {
+        objective: "re-plan after repository drift",
+        type: "planning",
+        agent: "planner",
+        dependsOn: source === undefined ? [] : [source],
+        trigger: "repository drift",
+      },
+      idAllocator,
+    );
+    return markProductionTrigger(
+      added.state,
+      "repository_drift_replan_handled_revision",
+      requirementRevision,
+    );
+  }
+  if (
+    (repository.classification === "relevant" ||
+      repository.classification === "critical" ||
+      repository.classification === "unknown") &&
+    repository.resolution === "unresolved"
+  ) {
+    const added = addProductionDynamicStep(
+      state,
+      {
+        objective: "reconcile repository drift",
+        type: "analysis",
+        agent: "scout",
+        dependsOn: source === undefined ? [] : [source],
+        trigger: "repository drift",
+      },
+      idAllocator,
+    );
+    if (added.added && state.run.status === "blocked") {
+      return {
+        ...added.state,
+        run: { ...added.state.run, status: "running", blocked: null },
+      };
+    }
+    return added.state;
+  }
+
+  return state;
 }
 
 function productionPostconditions(
@@ -687,7 +1236,26 @@ function productionPostconditions(
       : step;
   });
 
-  const status = stepStatus === "completed" ? "running" : stepStatus;
+  const status =
+    stepStatus === "completed" || (stepStatus === "failed" && input.step.type === "verification")
+      ? "running"
+      : stepStatus;
+  const currentPlan = input.state.run.current_plan;
+  const planVersion =
+    typeof currentPlan?.version === "number" && Number.isSafeInteger(currentPlan.version)
+      ? currentPlan.version
+      : 0;
+  const isReplan = input.step.type === "planning" && input.step.objective.startsWith("re-plan");
+  const nextPlan =
+    input.step.type !== "planning" || stepStatus !== "completed"
+      ? currentPlan
+      : {
+          ...currentPlan,
+          ...(isReplan ? { version: planVersion + 1 } : { version: planVersion || 1 }),
+          applicability: { status: "current" as const },
+        };
+  const repositoryReconciled =
+    input.step.objective === "reconcile repository drift" && stepStatus === "completed";
   return {
     ...input.state,
     run: {
@@ -699,20 +1267,316 @@ function productionPostconditions(
         status: stepStatus,
       },
       blocked: stepStatus === "blocked" ? input.result.blocked : null,
-      failure: stepStatus === "failed" ? input.result.failure : null,
-      current_plan:
-        input.step.type === "planning"
-          ? {
-              ...input.state.run.current_plan,
-              applicability: { status: "current" },
-            }
-          : input.state.run.current_plan,
+      failure: status === "failed" ? input.result.failure : null,
+      current_plan: nextPlan,
+      repository: repositoryReconciled
+        ? { ...input.state.run.repository, resolution: "reconciled" }
+        : input.state.run.repository,
     },
     snapshot: {
       ...input.state.snapshot,
       steps: { ...input.state.snapshot.steps, steps },
     },
   };
+}
+
+type ProductionExecutionSnapshot = Readonly<{
+  request: AgentExecutionRequestV1;
+  before: RepositorySnapshot;
+  executionStateRevision: number;
+}>;
+
+function executionIdValue(state: WorkflowState, idAllocator: IdAllocator): ExecutionId {
+  const value = state.run.current_step.execution_id;
+  return typeof value === "string" && /^exec-\d+$/.test(value)
+    ? (value as ExecutionId)
+    : idAllocator.issueExecutionId();
+}
+
+function stepIdValue(state: WorkflowState, idAllocator: IdAllocator): StepId {
+  const value = state.run.current_step.id;
+  return typeof value === "string" && /^step-\d+$/.test(value)
+    ? (value as StepId)
+    : idAllocator.issueStepId();
+}
+
+function completedOutcomeContents(
+  state: WorkflowState,
+  stepId: StepId,
+  executionId: ExecutionId,
+  createdAt: string,
+): string {
+  const agent =
+    typeof state.run.current_step.agent === "string"
+      ? state.run.current_step.agent
+      : "orchestrator";
+  const frontMatter = ArtifactFrontMatterV1Schema.parse({
+    schema_version: 1,
+    run_id: state.run.run_id,
+    step_id: stepId,
+    execution_id: executionId,
+    execution_state_revision: state.run.state_revision,
+    agent: { id: agent, version: 1 },
+    artifact: { type: "outcome", status: "complete" },
+    created_at: createdAt,
+    skills: [],
+  });
+  return [
+    "---",
+    stringifyYaml(frontMatter).trimEnd(),
+    "---",
+    "## Outcome",
+    "",
+    "```json",
+    redactSecrets(
+      JSON.stringify(
+        {
+          status: "completed",
+          request_satisfied: true,
+          summary: "Workflow completed",
+        },
+        null,
+        2,
+      ),
+    ),
+    "```",
+    "",
+  ].join("\n");
+}
+
+async function finalizeProductionOutcome(
+  state: WorkflowState,
+  artifactStore: ArtifactStore,
+  idAllocator: IdAllocator,
+): Promise<WorkflowState> {
+  const currentOutcome = state.run.outcome;
+  if (
+    isRecord(currentOutcome) &&
+    currentOutcome.status === "completed" &&
+    currentOutcome.artifact_path === "outcome.md"
+  ) {
+    return state;
+  }
+
+  const now = new Date();
+  const createdAt = now.toISOString();
+  const stepId = stepIdValue(state, idAllocator);
+  const executionId = executionIdValue(state, idAllocator);
+  const staged = await artifactStore.stage({
+    runId: state.run.run_id,
+    executionId,
+    contents: completedOutcomeContents(state, stepId, executionId, createdAt),
+  });
+  const artifact = await artifactStore.finalize(staged, "outcome.md");
+  if (artifact.status !== "complete") {
+    throw new Error("Completed Workflow Outcome Artifact must be finalized as complete");
+  }
+  return {
+    ...state,
+    run: {
+      ...state.run,
+      outcome: {
+        status: "completed",
+        request_satisfied: true,
+        summary: "Workflow completed",
+        artifact_path: artifact.path,
+      },
+    },
+  };
+}
+
+function applyReviewerFindings(
+  state: WorkflowState,
+  finalization: ReviewerFinalization,
+): WorkflowState {
+  const existing = [...state.snapshot.findings.findings];
+  const byId = new Map(existing.map((finding) => [finding.id, finding]));
+  for (const candidate of finalization.findings) {
+    const finding = {
+      ...candidate,
+      state: "open" as const,
+      disposition: "pending" as const,
+    } as WorkflowState["snapshot"]["findings"]["findings"][number];
+    byId.set(finding.id, finding);
+  }
+  for (const recheck of finalization.rechecks) {
+    const current = byId.get(recheck.id);
+    if (current === undefined) throw new Error(`Unknown Finding ${recheck.id}`);
+    byId.set(recheck.id, {
+      ...current,
+      state: recheck.state,
+      disposition: recheck.disposition,
+    });
+  }
+  return {
+    ...state,
+    snapshot: {
+      ...state.snapshot,
+      findings: { ...state.snapshot.findings, findings: [...byId.values()] },
+    },
+  };
+}
+
+function productionRepositoryState(
+  state: WorkflowState,
+  snapshot: RepositorySnapshot,
+  issue: boolean,
+): WorkflowState {
+  return {
+    ...state,
+    run: {
+      ...state.run,
+      repository: {
+        ...state.run.repository,
+        ...repositorySnapshotValue(snapshot),
+        ...(issue ? { classification: "relevant", resolution: "unresolved" } : {}),
+      },
+    },
+  };
+}
+
+function sourceRepositoryDiff(diff: RepositoryDiff): RepositoryDiff {
+  const files = diff.files.filter(({ path }) => path !== ".pi" && !path.startsWith(".pi/"));
+  return {
+    ...diff,
+    files,
+    changedFiles: files.map(({ path }) => path),
+    addedFiles: files.filter(({ change }) => change === "added").map(({ path }) => path),
+    modifiedFiles: files.filter(({ change }) => change === "modified").map(({ path }) => path),
+    deletedFiles: files.filter(({ change }) => change === "deleted").map(({ path }) => path),
+    statusChanged: diff.headChanged || diff.branchChanged || files.length > 0,
+    fingerprintChanged: diff.headChanged || diff.branchChanged || files.length > 0,
+  };
+}
+
+function appendChangeSetReference(
+  state: WorkflowState,
+  finalization: WorkerFinalization,
+): WorkflowState {
+  const reference = {
+    id: finalization.changeSet.id,
+    artifact_path: finalization.artifact.path,
+    status: finalization.changeSet.status,
+    accepted: finalization.changeSet.accepted,
+    changed: finalization.changeSet.changed,
+  } as JsonObject;
+  const current = state.run.current_changes.relevant_change_sets;
+  const references = current.some(
+    (value) => isRecord(value) && value.id === finalization.changeSet.id,
+  )
+    ? current
+    : [...current, reference];
+  return {
+    ...state,
+    run: {
+      ...state.run,
+      current_changes: { ...state.run.current_changes, relevant_change_sets: references },
+    },
+  };
+}
+
+async function finalizeProductionStep(
+  input: Readonly<{
+    state: WorkflowState;
+    result: StepResultV1;
+    step: SchedulerStep;
+    normalized: ResultNormalizationResult;
+    execution: ProductionExecutionSnapshot;
+    repository: RepositoryAdapter;
+    workerFinalizer: WorkerFinalizer;
+    verifierFinalizer: VerifierFinalizer;
+    reviewerFinalizer: ReviewerFinalizer;
+  }>,
+): Promise<WorkflowState> {
+  const after = await input.repository.captureSnapshot();
+  const diff = await input.repository.diff(input.execution.before, after);
+  let state = applyProductionCandidates(input.state, input.normalized.candidates);
+
+  if (input.step.type === "implementation") {
+    const finalization = await input.workerFinalizer.finalize({
+      request: input.execution.request,
+      result: input.result,
+      before: input.execution.before,
+      after,
+      diff,
+      writeScope: input.execution.request.permissions.repositoryTargets.filter(
+        (value): value is string => typeof value === "string",
+      ),
+      executionStateRevision: input.execution.executionStateRevision,
+    });
+    state = appendChangeSetReference(state, finalization);
+    state = attachFinalization(state, input.step.id, finalization.artifact, {
+      kind: "change-set",
+      change_set: finalization.changeSet as unknown as JsonObject,
+      artifact: artifactValue(finalization.artifact),
+    });
+    return productionRepositoryState(
+      state,
+      after,
+      finalization.changeSet.violations.length > 0 ||
+        finalization.changeSet.observation.attributionUncertain,
+    );
+  }
+
+  if (input.step.type === "verification") {
+    const finalization = await input.verifierFinalizer.finalize({
+      request: input.execution.request,
+      result: input.result,
+      before: input.execution.before,
+      after,
+      diff,
+      executionStateRevision: input.execution.executionStateRevision,
+      basis: {
+        requirement_revision: input.state.snapshot.requirement.revision,
+        ...(typeof input.state.run.current_plan?.version === "number"
+          ? { plan_version: input.state.run.current_plan.version }
+          : {}),
+        step_id: input.step.id,
+      },
+    });
+    state = attachFinalization(state, input.step.id, finalization.artifact, {
+      kind: "verification-run",
+      verification_run: finalization.verificationRun as unknown as JsonObject,
+      artifact: artifactValue(finalization.artifact),
+    });
+    return productionRepositoryState(state, after, finalization.verificationRun.repository.mutated);
+  }
+
+  if (input.step.type === "review") {
+    const finalization = await input.reviewerFinalizer.finalize({
+      request: input.execution.request,
+      result: input.result,
+      normalizedFindings: input.normalized.candidates.finding_candidates,
+      before: input.execution.before,
+      after,
+      diff,
+      executionStateRevision: input.execution.executionStateRevision,
+      basis: {
+        requirement_revision: input.state.snapshot.requirement.revision,
+        ...(typeof input.state.run.current_plan?.version === "number"
+          ? { plan_version: input.state.run.current_plan.version }
+          : {}),
+        step_id: input.step.id,
+      },
+      state,
+    });
+    state = applyReviewerFindings(state, finalization);
+    state = attachFinalization(state, input.step.id, finalization.artifact, {
+      kind: "review-run",
+      review_run: finalization.reviewRun as unknown as JsonObject,
+      findings: finalization.findings as unknown as readonly JsonValue[],
+      rechecks: finalization.rechecks as unknown as readonly JsonValue[],
+      artifact: artifactValue(finalization.artifact),
+    });
+    return productionRepositoryState(state, after, finalization.reviewRun.repository.mutated);
+  }
+
+  if (diff.files.length > 0 || diff.headChanged || diff.branchChanged) {
+    throw new Error(
+      `Read-only Agent ${input.execution.request.identity.agentId} mutated the repository`,
+    );
+  }
+  return productionRepositoryState(state, after, false);
 }
 
 async function createProductionUseCases(
@@ -772,10 +1636,28 @@ async function createProductionUseCases(
     artifactReader,
     idAllocator,
   });
+  const failureLifecycle = new FailureLifecycle({
+    runReader,
+    stateStore,
+    artifactStore,
+    artifactReader,
+    idAllocator,
+  });
+  const driftRepository: RepositoryAdapter = {
+    getRoot: () => repository.getRoot(),
+    getHead: () => repository.getHead(),
+    getBranch: () => repository.getBranch(),
+    captureSnapshot: (scope) => repository.captureSnapshot(scope),
+    diff: async (before, after) => sourceRepositoryDiff(await repository.diff(before, after)),
+  };
+  const driftRecovery = new RepositoryDriftRecovery({
+    repository: driftRepository,
+    artifactStore,
+  });
   const repositoryFreshness = async (state: WorkflowState): Promise<WorkflowState> => {
     const before = persistedRepositorySnapshot(state);
     const after = await repository.captureSnapshot();
-    const diff = await repository.diff(before, after);
+    const diff = await driftRepository.diff(before, after);
     if (
       diff.changedFiles.length > 0 ||
       diff.headChanged ||
@@ -798,16 +1680,32 @@ async function createProductionUseCases(
       },
     };
   };
+  const productionReconcile = async (state: WorkflowState): Promise<WorkflowState> => {
+    const before = persistedRepositorySnapshot(state);
+    const assessment = await driftRecovery.check({
+      before,
+      classifyPath: () => "unknown",
+    });
+    if (assessment.classification === "clean" && assessment.resolution === "clear") return state;
+    return productionRepositoryState(
+      driftRecovery.apply(state, assessment),
+      assessment.after,
+      false,
+    );
+  };
   const resumeLifecycle = new ResumeLifecycle({
     runReader,
     stateStore,
     recheckRepositoryAndFreshness: repositoryFreshness,
   });
-  const workerFinalizer = new WorkerFinalizer({ artifactStore, idAllocator });
+  const workerFinalizer = new WorkerFinalizer({ artifactStore, repository, idAllocator });
+  const verifierFinalizer = new VerifierFinalizer({ artifactStore, repository, idAllocator });
+  const reviewerFinalizer = new ReviewerFinalizer({ artifactStore, repository, idAllocator });
   const interruptedExecutionRecovery = new InterruptedExecutionRecovery({
     repository,
     workerFinalizer,
   });
+  const executionSnapshots = new Map<ExecutionId, ProductionExecutionSnapshot>();
   const workerSnapshots = new Map<
     ExecutionId,
     Readonly<{
@@ -827,6 +1725,9 @@ async function createProductionUseCases(
                 request: execution.request,
                 before: workerSnapshot.before,
                 executionStateRevision: workerSnapshot.executionStateRevision,
+                writeScope: execution.request.permissions.repositoryTargets.filter(
+                  (value): value is string => typeof value === "string",
+                ),
               });
             };
       const unregister = cancellation.register({
@@ -835,6 +1736,7 @@ async function createProductionUseCases(
       });
       return () => {
         workerSnapshots.delete(execution.request.identity.executionId);
+        executionSnapshots.delete(execution.request.identity.executionId);
         unregister();
       };
     },
@@ -853,9 +1755,15 @@ async function createProductionUseCases(
           artifactReader,
           idAllocator,
         );
+        const before = await repository.captureSnapshot();
+        executionSnapshots.set(request.identity.executionId, {
+          request,
+          before,
+          executionStateRevision: state.run.state_revision,
+        });
         if (request.identity.agentId === "worker") {
           workerSnapshots.set(request.identity.executionId, {
-            before: await repository.captureSnapshot(),
+            before,
             executionStateRevision: state.run.state_revision,
           });
         }
@@ -863,7 +1771,48 @@ async function createProductionUseCases(
       },
       completion: productionCompletion,
       schedule: productionSchedule,
+      reconcile: productionReconcile,
+      trigger: async (state) => productionTrigger(state, idAllocator),
       postconditions: productionPostconditions,
+      runtimeFailure: async ({ request, step, error }) => {
+        const execution = executionSnapshots.get(request.identity.executionId);
+        if (request.identity.agentId === "worker" && execution !== undefined) {
+          await interruptedExecutionRecovery.recover({
+            request,
+            before: execution.before,
+            executionStateRevision: execution.executionStateRevision,
+            writeScope: request.permissions.repositoryTargets.filter(
+              (value): value is string => typeof value === "string",
+            ),
+          });
+        }
+        return failureLifecycle.fail(request.identity.runId, {
+          resumable: true,
+          reason: `${step.objective}: ${error instanceof Error ? error.message : String(error)}`,
+          error,
+          execution: request,
+        });
+      },
+      finalize: async ({ state, result, step, normalized }) => {
+        if (result === null || step === null || normalized === undefined || normalized === null) {
+          return finalizeProductionOutcome(state, artifactStore, idAllocator);
+        }
+        const execution = executionSnapshots.get(result.identity.executionId);
+        if (execution === undefined) {
+          throw new Error(`Missing repository observation for ${result.identity.executionId}`);
+        }
+        return finalizeProductionStep({
+          state,
+          result,
+          step,
+          normalized,
+          execution,
+          repository,
+          workerFinalizer,
+          verifierFinalizer,
+          reviewerFinalizer,
+        });
+      },
       artifactReader,
       cancellation: productionCancellation,
       ...(userInteraction === undefined ? {} : { userInteraction }),
