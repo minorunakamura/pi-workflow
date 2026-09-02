@@ -48,6 +48,7 @@ import { VerifierFinalizer } from "../application/execution/verifier-finalizer.j
 import {
   WorkerFinalizer,
   type WorkerFinalization,
+  writeScopePaths,
 } from "../application/execution/worker-finalizer.js";
 import type { ResultNormalizationResult } from "../application/normalization/result-normalizer.js";
 import { Orchestrator } from "../application/orchestrator.js";
@@ -100,7 +101,12 @@ import type {
 import { ArtifactFrontMatterV1Schema } from "../contracts/artifacts/artifact.js";
 import type { ArtifactReader, ArtifactRef, ArtifactStore } from "../ports/artifact-store.js";
 import { redactSecrets } from "../telemetry/redaction.js";
-import type { RepositoryAdapter, RepositoryDiff, RepositorySnapshot } from "../ports/repository.js";
+import type {
+  RepositoryAdapter,
+  RepositoryDiff,
+  RepositoryScope,
+  RepositorySnapshot,
+} from "../ports/repository.js";
 import type { ModelCatalog, ModelReference } from "../ports/model-catalog.js";
 import type { ToolCatalog, ToolDefinition } from "../ports/tool-catalog.js";
 import type { UserInteraction } from "../ports/user-interaction.js";
@@ -118,6 +124,7 @@ const TOOL_CAPABILITIES: Readonly<Record<string, readonly string[]>> = {
   find: ["repository-read"],
   ls: ["repository-read"],
   edit: ["repository-write"],
+  write: ["repository-write"],
   bash: ["shell"],
   powershell: ["shell"],
 };
@@ -141,6 +148,7 @@ type ProductionCommandContext = Pick<
   "cwd" | "model" | "scopedModels" | "modelRegistry" | "getSystemPromptOptions"
 > &
   Readonly<{
+    sessionManager?: Readonly<{ getSessionId(): string }>;
     thinkingLevel?: string;
   }>;
 
@@ -152,6 +160,7 @@ type ProductionExecution = Readonly<{
   skillCatalog: SkillCatalog;
   modelCandidates: readonly ModelReference[];
   toolCatalog: ToolCatalog;
+  toolNames: readonly string[];
 }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -237,13 +246,21 @@ function toolCapabilities(name: string): readonly string[] {
   return TOOL_CAPABILITIES[name] ?? [];
 }
 
-function createPiToolCatalog(pi: PiRuntimeFacilities | undefined): ToolCatalog {
-  const definitions = new Map<string, ToolDefinition>();
+function createPiToolNames(pi: PiRuntimeFacilities | undefined): readonly string[] {
+  const names = new Set<string>();
   const tools = typeof pi?.getAllTools === "function" ? pi.getAllTools() : [];
-
   for (const candidate of tools) {
     if (!isRecord(candidate) || typeof candidate.name !== "string") continue;
     const name = candidate.name.trim();
+    if (name.length > 0 && toolCapabilities(name).length > 0) names.add(name);
+  }
+  return [...names];
+}
+
+function createPiToolCatalog(toolNames: readonly string[]): ToolCatalog {
+  const definitions = new Map<string, ToolDefinition>();
+
+  for (const name of toolNames) {
     const capabilities = toolCapabilities(name);
     for (const capability of capabilities) {
       if (definitions.has(capability)) continue;
@@ -481,6 +498,30 @@ function thinkingLevel(context: ProductionCommandContext): string {
   return context.thinkingLevel;
 }
 
+function planWriteScope(state: WorkflowState): readonly string[] {
+  const plan = state.run.current_plan;
+  if (!isRecord(plan)) return [];
+  const value = plan.write_scope ?? plan.writeScope;
+  return value === undefined ? [] : writeScopePaths(value as unknown as RepositoryScope);
+}
+
+function candidateWriteScope(value: unknown): unknown {
+  if (!isRecord(value)) return undefined;
+  const direct = value.write_scope ?? value.writeScope;
+  if (direct !== undefined) return direct;
+  const nested = value.plan;
+  if (!isRecord(nested)) return undefined;
+  return nested.write_scope ?? nested.writeScope;
+}
+
+function plannedWriteScope(result: StepResultV1): readonly string[] | undefined {
+  for (const candidate of [...result.observations, result.runtime]) {
+    const value = candidateWriteScope(candidate);
+    if (value !== undefined) return writeScopePaths(value as unknown as RepositoryScope);
+  }
+  return undefined;
+}
+
 async function buildProductionRequest(
   input: Readonly<{
     state: WorkflowState;
@@ -499,7 +540,11 @@ async function buildProductionRequest(
   }));
   execution.skillCatalog.resolveForAgent(definition.id, skillReferences);
 
-  const requestedCapabilities = ["repository-read"];
+  const workerScope = definition.id === "worker" ? planWriteScope(input.state) : [];
+  const requestedCapabilities = [
+    "repository-read",
+    ...(definition.id === "worker" && workerScope.length > 0 ? ["repository-write"] : []),
+  ];
   const missingCapabilities = requestedCapabilities.filter(
     (capability) => execution.toolCatalog.resolve(capability) === undefined,
   );
@@ -536,7 +581,7 @@ async function buildProductionRequest(
       shell: [],
       git: [],
       network: [],
-      repositoryTargets: ["."],
+      repositoryTargets: workerScope,
     },
     skills: { required: skillReferences, optional: [] },
     tools: { resolved: [], policy: {} },
@@ -554,7 +599,18 @@ async function buildProductionRequest(
     outputs: { expectedArtifactTypes: [], outputContract: {} },
   } as const;
 
-  return execution.executionResolver.resolve(request, requestedCapabilities);
+  const resolved = execution.executionResolver.resolve(request, requestedCapabilities);
+  const allowedToolNames = execution.toolNames.filter((name) =>
+    toolCapabilities(name).some((capability) => requestedCapabilities.includes(capability)),
+  );
+  return {
+    ...resolved,
+    tools: {
+      ...resolved.tools,
+      resolved: allowedToolNames,
+      policy: { allow: allowedToolNames },
+    },
+  };
 }
 
 function enumValue<T extends string>(value: unknown, values: readonly T[]): T | undefined {
@@ -1250,8 +1306,9 @@ function productionPostconditions(
     input.step.type !== "planning" || stepStatus !== "completed"
       ? currentPlan
       : {
-          ...currentPlan,
+          ...(currentPlan ?? {}),
           ...(isReplan ? { version: planVersion + 1 } : { version: planVersion || 1 }),
+          write_scope: plannedWriteScope(input.result) ?? [],
           applicability: { status: "current" as const },
         };
   const repositoryReconciled =
@@ -1422,10 +1479,21 @@ function productionRepositoryState(
   snapshot: RepositorySnapshot,
   issue: boolean,
 ): WorkflowState {
+  const currentPlan =
+    issue && state.run.current_plan !== null
+      ? {
+          ...state.run.current_plan,
+          applicability: {
+            ...state.run.current_plan.applicability,
+            status: "replan-required" as const,
+          },
+        }
+      : state.run.current_plan;
   return {
     ...state,
     run: {
       ...state.run,
+      current_plan: currentPlan,
       repository: {
         ...state.run.repository,
         ...repositorySnapshotValue(snapshot),
@@ -1598,8 +1666,10 @@ async function createProductionUseCases(
   const agentRuntime: AgentRuntime = {
     run: async (request, signal) => {
       const production = await execution();
+      const sessionId = context.sessionManager?.getSessionId();
       piAgentRuntime ??= new PiSubagentsAdapter(requirePiFacilities(pi), {
         cwd: repositoryRoot,
+        ...(sessionId === undefined ? {} : { sessionId }),
         buildPrompt: (executionRequest) =>
           productionPrompt(executionRequest, production.skillCatalog),
       } satisfies PiSubagentsAdapterOptions);
@@ -1614,7 +1684,8 @@ async function createProductionUseCases(
       if (models.length === 0) {
         throw new Error("Production workflow runtime requires an available Pi model");
       }
-      const toolCatalog = createPiToolCatalog(pi);
+      const toolNames = createPiToolNames(pi);
+      const toolCatalog = createPiToolCatalog(toolNames);
       return {
         agentRuntime,
         executionResolver: new ExecutionResolver({
@@ -1624,6 +1695,7 @@ async function createProductionUseCases(
         skillCatalog: createPiSkillCatalog(context),
         modelCandidates: models,
         toolCatalog,
+        toolNames,
       };
     });
     return executionPromise;
@@ -1836,10 +1908,15 @@ async function createProductionUseCases(
       runStore: stateStore,
       repository,
       orchestrator: orchestratorSource,
+      workspaceLock,
       idAllocator,
     },
     status: { runReader },
-    resume: { lifecycle: resumeLifecycle, orchestrator: orchestratorSource },
+    resume: {
+      lifecycle: resumeLifecycle,
+      orchestrator: orchestratorSource,
+      workspaceLock,
+    },
     cancel: { lifecycle: cancellation },
   });
 }
@@ -1850,7 +1927,8 @@ function createProductionRuntimeFactory(
   const runtimes = new Map<string, Promise<RuntimeUseCases>>();
   return (value) => {
     const context = productionContext(value);
-    const key = resolvePath(context.cwd);
+    const sessionId = context.sessionManager?.getSessionId() ?? "";
+    const key = `${resolvePath(context.cwd)}\u0000${sessionId}`;
     const existing = runtimes.get(key);
     if (existing !== undefined) return existing;
     const runtime = createProductionUseCases(pi, context);

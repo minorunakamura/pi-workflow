@@ -1774,14 +1774,14 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] The approved Plan Write Scope is propagated into each Worker Execution Request; production composition does not replace it with repository-wide scope unless the authoritative Plan explicitly authorizes that scope.
-- [ ] Run start records the actual repository root identity, HEAD, branch, dirty state, and pre-existing changed/untracked files; a dirty repository is never persisted as a synthetic clean baseline.
-- [ ] Worker pre/post repository observation produces mutation attribution and an actual diff check before Change Set acceptance.
-- [ ] `WRITE_SCOPE_VIOLATION`, uncertain attribution, or detected pre-existing change loss blocks acceptance according to the repository safety contract.
-- [ ] Pre-existing user changes are preserved and are not automatically reset/restored/cleaned by the workflow runtime.
-- [ ] Required repository drift checks execute on the installed/default lifecycle boundaries and unresolved relevant/critical/unknown drift blocks unsafe continuation/completion.
-- [ ] Agent mode/permissions and Tool capability policy are propagated to the concrete Pi Agent Runtime adapter as enforceable execution constraints where supported; prompt text is not the sole security boundary.
-- [ ] Read-only/verify-only Agents cannot mutate source through the normal runtime path, Worker cannot escape approved Write Scope, and normal Phase 1 execution cannot perform prohibited Git writes.
+- [x] The approved Plan Write Scope is propagated into each Worker Execution Request; production composition does not replace it with repository-wide scope unless the authoritative Plan explicitly authorizes that scope.
+- [x] Run start records the actual repository root identity, HEAD, branch, dirty state, and pre-existing changed/untracked files; a dirty repository is never persisted as a synthetic clean baseline.
+- [x] Worker pre/post repository observation produces mutation attribution and an actual diff check before Change Set acceptance.
+- [x] `WRITE_SCOPE_VIOLATION`, uncertain attribution, or detected pre-existing change loss blocks acceptance according to the repository safety contract.
+- [x] Pre-existing user changes are preserved and are not automatically reset/restored/cleaned by the workflow runtime.
+- [x] Required repository drift checks execute on the installed/default lifecycle boundaries and unresolved relevant/critical/unknown drift blocks unsafe continuation/completion.
+- [x] Agent mode/permissions and Tool capability policy are propagated to the concrete Pi Agent Runtime adapter as enforceable execution constraints where supported; prompt text is not the sole security boundary.
+- [x] Read-only/verify-only Agents cannot mutate source through the normal runtime path, Worker cannot escape approved Write Scope, and normal Phase 1 execution cannot perform prohibited Git writes.
 - [ ] Security/golden-repository E2E covers dirty tree, pre-existing changes, out-of-scope mutation, drift, prohibited Agent mutation, and Tool-capability denial through the production composition.
 
 **Test Levels:** `UNIT`, `INT`, `E2E`, `CRASH`

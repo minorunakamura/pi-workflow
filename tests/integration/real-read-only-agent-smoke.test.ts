@@ -135,7 +135,10 @@ async function createHarness(): Promise<Harness> {
       cwd,
       auditPath,
       session: sessionResult.session,
-      adapter: new PiSubagentsAdapter({ events: eventBus }, { cwd }),
+      adapter: new PiSubagentsAdapter(
+        { events: eventBus },
+        { cwd, sessionId: sessionResult.session.sessionManager.getSessionId() },
+      ),
       catalog,
       close: async () => {
         sessionResult.session.dispose();
@@ -191,7 +194,10 @@ function request(
       repositoryTargets: [repositoryTarget],
     },
     skills: { required: [{ id: skillId, version: "1.0.0" }], optional: [] },
-    tools: { resolved: ["read"], policy: {} },
+    tools: {
+      resolved: ["read", "grep", "find", "ls"],
+      policy: { allow: ["read", "grep", "find", "ls"] },
+    },
     model: {
       requested: SMOKE_MODEL,
       actual: SMOKE_MODEL,
