@@ -7,8 +7,18 @@ import {
 import { registerWorkflowCommands } from "./commands/register-workflow-commands.js";
 
 export default function workflowExtension(
-  pi: Pick<ExtensionAPI, "registerCommand">,
+  pi: Pick<ExtensionAPI, "registerCommand"> & Partial<Pick<ExtensionAPI, "events" | "getAllTools">>,
   dependencies: WorkflowRuntimeDependencies = {},
 ): void {
-  registerWorkflowCommands(pi, createWorkflowRuntime(dependencies), createPiUserInteraction);
+  const runtimeDependencies =
+    pi.events === undefined
+      ? dependencies
+      : {
+          ...dependencies,
+          pi: {
+            events: pi.events,
+            ...(pi.getAllTools === undefined ? {} : { getAllTools: () => pi.getAllTools!() }),
+          },
+        };
+  registerWorkflowCommands(pi, createWorkflowRuntime(runtimeDependencies), createPiUserInteraction);
 }

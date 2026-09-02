@@ -31,6 +31,29 @@ describe("composition root", () => {
     expect(applicationSource).not.toMatch(/\bnew\s+\w*(?:Persistence|Pi|Git)\w*/);
   });
 
+  it("assembles the production path without the fake runtime or placeholder", () => {
+    const source = readFileSync(compositionRootPath, "utf8");
+
+    for (const concrete of [
+      "FileStateStore",
+      "FileRunReader",
+      "FileRunLock",
+      "FileWorkspaceLock",
+      "GitRepositoryAdapter",
+      "FileArtifactStore",
+      "PiSubagentsAdapter",
+      "PiUserInteractionAdapter",
+      "createPiPackageSkillCatalog",
+      "ExecutionResolver",
+      "createWorkflowUseCases",
+      "new Orchestrator",
+    ]) {
+      expect(source).toContain(concrete);
+    }
+    expect(source).not.toContain("FakeAgentRuntime");
+    expect(source).not.toContain("NOT_IMPLEMENTED");
+  });
+
   it("does not introduce a Service Locator or DI container", () => {
     const compositionRootSource = readFileSync(compositionRootPath, "utf8");
 

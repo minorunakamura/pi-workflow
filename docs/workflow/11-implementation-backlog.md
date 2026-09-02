@@ -1580,12 +1580,12 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Calling `workflowExtension(pi)` without test-only dependency injection constructs the production Composition Root.
-- [ ] Command context resolves the consuming repository/workspace used by `.pi/runs/`.
-- [ ] File stores/readers, Run/Workspace locks, Repository/Workspace adapters, Pi Agent/User adapters, Skill/Model/Tool resolution, Application use cases, and Orchestrator are connected through the Composition Root.
-- [ ] `PiSubagentsAdapter` receives the Pi execution facilities it requires, including events where required by the adapter contract.
-- [ ] `/wf-*` default execution no longer returns a `NOT_IMPLEMENTED` placeholder.
-- [ ] Fake/test composition remains available for tests but is not reachable as an implicit production fallback.
+- [x] Calling `workflowExtension(pi)` without test-only dependency injection constructs the production Composition Root.
+- [x] Command context resolves the consuming repository/workspace used by `.pi/runs/`.
+- [x] File stores/readers, Run/Workspace locks, Repository/Workspace adapters, Pi Agent/User adapters, Skill/Model/Tool resolution, Application use cases, and Orchestrator are connected through the Composition Root.
+- [x] `PiSubagentsAdapter` receives the Pi execution facilities it requires, including events where required by the adapter contract.
+- [x] `/wf-*` default execution no longer returns a `NOT_IMPLEMENTED` placeholder.
+- [x] Fake/test composition remains available for tests but is not reachable as an implicit production fallback.
 
 **Test Levels:** `ARCH`, `INT`
 

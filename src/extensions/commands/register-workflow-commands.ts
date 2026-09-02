@@ -43,7 +43,7 @@ export function registerWorkflowCommands(
             context.hasUI && createUserInteraction !== undefined
               ? createUserInteraction(context.ui)
               : undefined;
-          const output = await handler.execute(command.command, args, userInteraction);
+          const output = await handler.execute(command.command, args, userInteraction, context);
           if (output !== undefined) context.ui.notify(output, "info");
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

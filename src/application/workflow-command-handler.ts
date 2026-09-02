@@ -178,5 +178,6 @@ export interface WorkflowCommandHandler {
     command: WorkflowCommand,
     args: string,
     userInteraction?: UserInteraction,
+    context?: unknown,
   ): Promise<WorkflowCommandOutput | void>;
 }
