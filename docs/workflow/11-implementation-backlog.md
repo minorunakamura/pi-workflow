@@ -1483,6 +1483,8 @@ spec_refs:
 
 ## STORY-12-05 — Cross-platform Persistence and Git
 
+**Status:** REOPENED — macOS Evidence exists; Linux/Windows execution Evidence is insufficient.
+
 **Priority:** P0
 
 ```yaml
@@ -1494,11 +1496,15 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [x] macOS/Linux/Windows relevant path/rename/process/lock/Git behavior is validated.
+- [ ] macOS/Linux/Windows relevant path/rename/process/lock/Git behavior is validated on actual target OS environments.
+- [ ] Release Evidence records OS, Node/pnpm/Git versions, filesystem/environment, test command, result, and artifact/log location.
+- [ ] Persistence pointer replacement/crash boundaries, Run/Workspace locks and process liveness, space/Unicode paths, Git status/diff/rename, packed installation/load, and packaged Skill discovery are covered by the platform matrix.
 
-**Test Levels:** `INT`
+**Test Levels:** `INT`, `CRASH`
 
 ## STORY-12-06 — Legacy Cutover
+
+**Status:** REOPENED — legacy path absence is established, but the new default runtime is not yet operational and cutover is not eligible.
 
 **Priority:** P0
 
@@ -1512,12 +1518,136 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [x] `/wf-*` uses the new runtime after release gates pass.
-- [x] Obsolete runtime is removed only after stabilization.
-- [x] `workflow-tui.ts` is removed as planned.
-- [x] Legacy session transcript migration is not introduced.
+- [ ] `LEGACY_PATH_ABSENT` passes: obsolete Workflow runtime paths are absent, including `workflow-tui.ts`.
+- [ ] `NEW_RUNTIME_OPERATIONAL` passes: installed/default `/wf-*` reaches the new production runtime without manual use-case injection.
+- [ ] `CUTOVER_ELIGIBLE` passes only after Gates A-D and required hardening Evidence pass.
+- [ ] `NO_LEGACY_FALLBACK` passes: normal operation cannot silently invoke an obsolete Workflow runtime.
+- [ ] Legacy session transcript migration is not introduced.
 
 **Test Levels:** `E2E`
+
+# EPIC-13 — Release Closure
+
+This Epic closes release blockers discovered by Phase 1 Release Verification. It does not redefine runtime behavior; it completes the production integration and release Evidence required by the authoritative specification.
+
+## STORY-13-01 — Production Use Cases and Initial Run Bootstrap
+
+**Goal:** Provide production Application use cases and create the initial persisted Run/State required to enter the Orchestrator.
+
+**Priority:** P0
+
+**Dependencies:** Gate A, persistence/recovery components
+
+```yaml
+spec_refs:
+  required:
+    - 03-domain-model.md#workflow-run
+    - 04-orchestration.md#playbooks
+    - 06-persistence-and-artifacts.md#run-store-layout
+    - 10-implementation-specification.md#application-modules
+    - 10-implementation-specification.md#default-production-composition
+```
+
+**Acceptance Criteria**
+
+- [ ] Production `StartWorkflowUseCase` selects one of the six Playbooks and creates a valid initial Run/State in the consuming repository Run Store.
+- [ ] Production status use case reads current Run state through the read-side boundary.
+- [ ] Production resume use case reaches the defined resume lifecycle and can continue the Orchestrator.
+- [ ] Production cancel use case reaches the defined cancellation lifecycle.
+- [ ] Start-created state is sufficient to invoke `Orchestrator.run(runId)` without test-only fixtures or fake command stubs.
+- [ ] Failure/invalid-input behavior is explicit and does not silently fall back to test behavior.
+
+**Test Levels:** `UNIT`, `INT`
+
+## STORY-13-02 — Default Composition Root and Pi Context Wiring
+
+**Goal:** Make `workflowExtension(pi)` construct and expose the real production runtime used during normal Pi operation.
+
+**Priority:** P0
+
+**Dependencies:** STORY-13-01
+
+```yaml
+spec_refs:
+  required:
+    - 02-runtime-architecture.md#pi-package-boundary
+    - 02-runtime-architecture.md#composition-root
+    - 02-runtime-architecture.md#user-interaction-boundary
+    - 10-implementation-specification.md#composition-root
+    - 10-implementation-specification.md#default-production-composition
+    - 10-implementation-specification.md#commands
+```
+
+**Acceptance Criteria**
+
+- [ ] Calling `workflowExtension(pi)` without test-only dependency injection constructs the production Composition Root.
+- [ ] Command context resolves the consuming repository/workspace used by `.pi/runs/`.
+- [ ] File stores/readers, Run/Workspace locks, Repository/Workspace adapters, Pi Agent/User adapters, Skill/Model/Tool resolution, Application use cases, and Orchestrator are connected through the Composition Root.
+- [ ] `PiSubagentsAdapter` receives the Pi execution facilities it requires, including events where required by the adapter contract.
+- [ ] `/wf-*` default execution no longer returns a `NOT_IMPLEMENTED` placeholder.
+- [ ] Fake/test composition remains available for tests but is not reachable as an implicit production fallback.
+
+**Test Levels:** `ARCH`, `INT`
+
+## STORY-13-03 — Packed Package Installation Smoke
+
+**Goal:** Prove that the distributable Pi Package works from a clean consumer without relying on the source checkout layout.
+
+**Priority:** P0
+
+**Dependencies:** STORY-13-02
+
+```yaml
+spec_refs:
+  required:
+    - 05-agents-and-skills.md#skill-packaging-and-discovery
+    - 10-implementation-specification.md#package-manifest
+    - 10-implementation-specification.md#local-package-development
+    - 10-implementation-specification.md#release-evidence-contract
+```
+
+**Acceptance Criteria**
+
+- [ ] A package artifact is produced using the repository package process (for example `pnpm pack`).
+- [ ] The artifact is installed/loaded from a clean consumer context rather than referenced as the source checkout.
+- [ ] No authored `.pi/agent/skills/` copy is required and all nine packaged Skills are discovered.
+- [ ] The packed Extension binds successfully and `/wf-*` reaches the production/default runtime.
+- [ ] Pi core peer dependencies and the bundled/runtime dependency on `pi-subagents` resolve according to Package rules.
+- [ ] The test records reproducible Release Evidence.
+
+**Test Levels:** `INT`, `E2E`
+
+## STORY-13-04 — Gate C Default-path E2E
+
+**Goal:** Demonstrate Operational Safety through the same default runtime path used by a normally installed Package.
+
+**Priority:** P0
+
+**Dependencies:** STORY-13-02
+
+```yaml
+spec_refs:
+  required:
+    - 02-runtime-architecture.md#user-interaction-boundary
+    - 07-security-recovery-and-repository.md#recovery-manager
+    - 07-security-recovery-and-repository.md#resume
+    - 07-security-recovery-and-repository.md#cancellation
+    - 10-implementation-specification.md#commands
+    - 10-implementation-specification.md#default-production-composition
+```
+
+**Acceptance Criteria**
+
+- [ ] All six start commands execute through the default production path without manual use-case injection.
+- [ ] Start creates project-local Run data and Agent execution reaches the production Pi Agent Runtime boundary.
+- [ ] `/wf-status`, `/wf-resume`, and `/wf-cancel` operate on the same default Run Store.
+- [ ] D3 approval/options/custom/cancel interaction reaches the Pi User Interaction adapter through the production Composition Root.
+- [ ] A blocked Run can resume through `/wf-resume`.
+- [ ] Active execution can be cancelled through `/wf-cancel`, preserving required partial/recovery evidence and terminal outcome semantics.
+- [ ] Recovery behavior required for normal operation is exercised through the default path.
+- [ ] The E2E test MUST NOT satisfy the path by injecting `startWorkflow`, `statusWorkflow`, `resumeWorkflow`, `cancelWorkflow`, or equivalent production-use-case stubs into the Extension.
+
+**Test Levels:** `E2E`, `CRASH`
 
 # Critical Path
 
@@ -1544,6 +1674,12 @@ Monitoring / Compare    ← Gate D
   ↓
 Hardening / Cutover
   ↓
+Release Closure (production wiring / packed install / Gate C default path)
+  ↓
+Cross-platform re-validation (STORY-12-05)
+  ↓
+Legacy Cutover re-validation (STORY-12-06)
+  ↓
 Phase 1 Release
 ```
 
@@ -1559,7 +1695,7 @@ Real Worker/Verifier/Reviewer flow passes Write Scope, dirty-tree, Change Set, V
 
 ## Gate C — Operational Safety
 
-Recovery, resume, cancellation, D3 interaction, and command integration are usable for normal operation.
+Recovery, resume, cancellation, D3 interaction, and command integration are usable through the installed/default production runtime path. Component-level or manually injected command tests alone are insufficient.
 
 ## Gate D — Evaluation
 
@@ -1567,4 +1703,11 @@ Runs can be indexed, observed, evaluated, and compared with telemetry quality/co
 
 ## Phase 1 Release
 
-Requires architecture/domain/persistence/crash/fake-E2E/real-write/recovery/security/evaluation/Monitoring hard gates to pass. Parallelism begins only after multiple stable Phase 1 Runs establish an evaluation baseline.
+Requires architecture/domain/persistence/crash/fake-E2E/real-write/recovery/security/evaluation/Monitoring hard gates to pass, plus:
+
+- Gate C passing through the installed/default production runtime path;
+- packed Package installation/loading Evidence from a clean consumer;
+- cross-platform hardening Evidence for macOS, Linux, and Windows;
+- Legacy Cutover certification with `LEGACY_PATH_ABSENT`, `NEW_RUNTIME_OPERATIONAL`, `CUTOVER_ELIGIBLE`, and `NO_LEGACY_FALLBACK` satisfied.
+
+Release verification MUST report each required area as `PASS`, `FAIL`, `INSUFFICIENT EVIDENCE`, or `NOT ELIGIBLE` where applicable. A prior Story completion marker does not override missing Acceptance Criteria or Evidence discovered by release verification. Parallelism begins only after multiple stable Phase 1 Runs establish an evaluation baseline.

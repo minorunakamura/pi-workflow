@@ -490,6 +490,33 @@ construct Orchestrator/use cases
 
 Use manual constructor injection. A DI container or Service Locator SHOULD NOT be introduced for Phase 1.
 
+### Default Production Composition
+
+The package default path MUST construct an operational production runtime without test-only dependency injection. Calling `workflowExtension(pi)` from the installed Package MUST reach the production Composition Root and construct the Application use cases required by `/wf-*`.
+
+The production Composition Root MUST connect, as applicable:
+
+```text
+Pi Extension / command context
+  ↓
+validated configuration and static registries
+  ↓
+Run/State/Artifact/Event stores and readers
+  ↓
+Run/Workspace locks + Repository/Workspace adapters
+  ↓
+Pi Agent Runtime + User Interaction + Skill/Model/Tool resolution
+  ↓
+Application use cases + Orchestrator
+```
+
+- **MUST:** Start create the initial Run/State required by the selected Playbook before entering the Orchestrator control loop.
+- **MUST:** Status, resume, and cancel resolve the same project-local Run Store used by start.
+- **MUST:** Pi execution facilities required by concrete Pi adapters, including Agent execution events, be supplied by the Pi-facing composition boundary rather than invented inside Domain/Application code.
+- **MUST:** Command execution resolve the consuming repository/workspace explicitly; test-only defaults MUST NOT silently substitute for the real command context.
+- **MUST NOT:** `FakeAgentRuntime`, injected command stubs, or a `NOT_IMPLEMENTED` placeholder be part of the normal installed-package path used to satisfy a release gate.
+- **MAY:** Tests provide alternate factories/compositions, provided they are structurally separated from the default production path.
+
 ## Static Definitions
 
 `src/agents/` contains seven versioned Agent definitions. `src/playbooks/` contains six versioned Playbook definitions. Registries validate duplicate IDs, versions, Agent/Skill references, Step types, and base graph validity at startup.
@@ -630,6 +657,43 @@ legacy cutover
 ```
 
 Legacy `/wf-*` should switch to the new runtime only after real write safety/recovery gates pass. Legacy sessions are not migrated into the new State model.
+
+### Release Evidence Contract
+
+Hardening and release claims MUST be backed by reproducible Evidence rather than source inspection alone. Each platform/release Evidence record SHOULD capture:
+
+```text
+OS
+Node version
+pnpm version
+Git version
+filesystem/environment
+test command
+result
+artifact/log location
+```
+
+For cross-platform validation, Phase 1 MUST execute the relevant persistence/Git/package-install checks on actual macOS, Linux, and Windows environments (for example CI runners or equivalent hosts). Host-independent path simulation alone is insufficient. At minimum, Evidence MUST cover state snapshot commit/pointer replacement, crash boundaries, Run/Workspace locks and process liveness, space/Unicode paths, Git status/diff/rename behavior, packed Package installation/loading, and packaged Skill discovery without authored `.pi/agent/skills/` copies.
+
+Packed Package Evidence MUST exercise an artifact produced by the package process (for example `pnpm pack`) from a clean consumer context. Source-checkout resource existence or manually injected package roots do not by themselves satisfy packed-installation Evidence.
+
+### Legacy Cutover Certification
+
+Legacy cutover is evaluated as separate conditions rather than a single source-file absence check:
+
+```text
+LEGACY_PATH_ABSENT
+NEW_RUNTIME_OPERATIONAL
+CUTOVER_ELIGIBLE
+NO_LEGACY_FALLBACK
+```
+
+- `LEGACY_PATH_ABSENT` requires obsolete Workflow runtime paths such as `workflow-tui.ts` to be absent.
+- `NEW_RUNTIME_OPERATIONAL` requires installed/default `/wf-*` execution to reach the new production runtime without manual use-case injection.
+- `CUTOVER_ELIGIBLE` requires Gates A-D plus required hardening Evidence, including packed-installation and cross-platform validation, to pass.
+- `NO_LEGACY_FALLBACK` requires the normal path not to silently invoke an obsolete/compatibility Workflow runtime.
+
+A cutover result MUST distinguish `PASS`, `FAIL`, `INSUFFICIENT EVIDENCE`, and `NOT ELIGIBLE` where applicable. Legacy path absence alone MUST NOT be reported as completed operational cutover.
 
 ## Phase 1 Exclusions
 
