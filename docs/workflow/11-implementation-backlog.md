@@ -1506,7 +1506,7 @@ spec_refs:
 
 ## STORY-12-06 — Legacy Cutover
 
-**Status:** REOPENED — legacy path absence is established, but the new default runtime is not yet operational and cutover is not eligible.
+**Status:** COMPLETE — legacy absence, default/installed production execution, and the required Gate A-D and hardening prerequisites are verified.
 
 **Priority:** P0
 
@@ -1518,13 +1518,15 @@ spec_refs:
     - 10-implementation-specification.md#hardening
 ```
 
+**Release Evidence:** `tests/e2e/legacy-cutover.test.ts`, `tests/e2e/default-production-path.test.ts`, and `tests/e2e/packed-package-installation.test.ts` passed on the current production composition. The full local suite passed 74 test files / 281 tests. Cross-platform hardening, including packed installation, passed on macOS, Linux, and Windows in GitHub Actions [run #33625283638](https://github.com/minorunakamura/pi-workflow/actions/runs/33625283638); its three uploaded matrix artifacts contain the per-OS logs and environment records.
+
 **Acceptance Criteria**
 
-- [ ] `LEGACY_PATH_ABSENT` passes: obsolete Workflow runtime paths are absent, including `workflow-tui.ts`.
-- [ ] `NEW_RUNTIME_OPERATIONAL` passes: installed/default `/wf-*` reaches the new production runtime without manual use-case injection.
-- [ ] `CUTOVER_ELIGIBLE` passes only after Gates A-D and required hardening Evidence pass.
-- [ ] `NO_LEGACY_FALLBACK` passes: normal operation cannot silently invoke an obsolete Workflow runtime.
-- [ ] Legacy session transcript migration is not introduced.
+- [x] `LEGACY_PATH_ABSENT` passes: obsolete Workflow runtime paths are absent, including `workflow-tui.ts`.
+- [x] `NEW_RUNTIME_OPERATIONAL` passes: installed/default `/wf-*` reaches the new production runtime without manual use-case injection.
+- [x] `CUTOVER_ELIGIBLE` passes only after Gates A-D and required hardening Evidence pass.
+- [x] `NO_LEGACY_FALLBACK` passes: normal operation cannot silently invoke an obsolete Workflow runtime.
+- [x] Legacy session transcript migration is not introduced.
 
 **Test Levels:** `E2E`
 
