@@ -1653,6 +1653,66 @@ spec_refs:
 
 **Test Levels:** `E2E`, `CRASH`
 
+## STORY-13-05 — Phase 1 Core Skill Behavioral Specification
+
+**Goal:** Define the responsibility and executable procedure of each Phase 1 Core Skill before treating its packaged `SKILL.md` as an implementation target.
+
+**Priority:** P0
+
+**Dependencies:** existing Agent definitions and Skill model
+
+```yaml
+spec_refs:
+  required:
+    - 05-agents-and-skills.md#core-workflow-skills
+    - 05-agents-and-skills.md#skill-allowlists
+    - 10-implementation-specification.md#core-skill-implementation
+```
+
+**Acceptance Criteria**
+
+- [ ] `05-agents-and-skills.md` defines the responsibility of each of the nine Phase 1 Core Skills: `how`, `why`, `blast-radius`, `architect`, `tdd`, `interrogate`, `figure-it-out`, `show-me-your-work`, and `reflect`.
+- [ ] Each Skill specification defines enough procedural behavior to implement it without inventing semantics during implementation, including applicability, procedure, expected output/evidence, and relevant constraints or stopping/escalation conditions.
+- [ ] Skill responsibilities are non-overlapping enough to support deliberate selection and do not silently create a second Agent/Orchestrator role.
+- [ ] Skill behavior remains subordinate to Agent authority, permissions, decision classes, Write Scope, Tool policy, and Orchestrator-owned State mutation.
+- [ ] Agent allowlists remain consistent with the specified Skill responsibilities; any required semantic change is made in the authoritative specification before Skill implementation.
+- [ ] Phase 2/Phase 3 behavior such as arena, swarm, worktree isolation, or Operational Skills is not pulled into Phase 1 Core Skill semantics.
+
+**Test Levels:** documentation/specification review prerequisite; no runtime completion claim
+
+## STORY-13-06 — Phase 1 Core Skill Implementations
+
+**Goal:** Replace all metadata-only Core Skill placeholders with the executable procedures defined by the authoritative Skill specification and prove they work through the normal Pi Package path.
+
+**Priority:** P0
+
+**Dependencies:** STORY-13-05, STORY-06-02, STORY-06-03, STORY-13-03
+
+```yaml
+spec_refs:
+  required:
+    - 05-agents-and-skills.md#core-workflow-skills
+    - 05-agents-and-skills.md#skill-allowlists
+    - 05-agents-and-skills.md#skill-packaging-and-discovery
+    - 10-implementation-specification.md#prompt-assembler
+    - 10-implementation-specification.md#skill-catalog
+    - 10-implementation-specification.md#core-skill-implementation
+```
+
+**Acceptance Criteria**
+
+- [ ] All nine Phase 1 Core Skills contain implemented procedural guidance rather than metadata-only placeholders or text that defers behavior to a future Story.
+- [ ] Each `SKILL.md` implements the responsibility/procedure defined by the authoritative Skill specification without silently adding new behavior.
+- [ ] Each Skill makes its purpose/applicability, concrete procedure, expected output/evidence, and relevant constraints or stopping/escalation conditions operationally clear.
+- [ ] Skill content cannot widen the invoking Agent's permissions, authority, Write Scope, Tool access, or user-interaction capability.
+- [ ] Agent allowlists remain enforced and allowlisted Skills are not automatically loaded merely because they are permitted.
+- [ ] `SkillCatalog` discovers/resolves the implemented packaged content and `PromptAssembler` supplies only selected Skill content to Agent Execution.
+- [ ] Tests fail when any required Core Skill is missing, metadata-only, structurally incomplete, or still contains an implementation-deferred placeholder.
+- [ ] Packed-package verification proves all nine implemented Skills are included and discoverable from a clean consumer without authored `.pi/agent/skills/` copies.
+- [ ] Focused production-path integration/E2E Evidence demonstrates selected Skill content reaches Agent Execution; fake/test-only Skill injection alone is insufficient.
+
+**Test Levels:** `CONTRACT`, `INT`, `E2E`
+
 # Critical Path
 
 ```text
@@ -1679,6 +1739,8 @@ Monitoring / Compare    ← Gate D
 Hardening / Cutover
   ↓
 Release Closure (production wiring / packed install / Gate C default path)
+  ↓
+Core Skill specification / implementation (STORY-13-05 → STORY-13-06)
   ↓
 Cross-platform re-validation (STORY-12-05)
   ↓
@@ -1710,6 +1772,7 @@ Runs can be indexed, observed, evaluated, and compared with telemetry quality/co
 Requires architecture/domain/persistence/crash/fake-E2E/real-write/recovery/security/evaluation/Monitoring hard gates to pass, plus:
 
 - Gate C passing through the installed/default production runtime path;
+- all nine Phase 1 Core Skills having non-placeholder executable procedures defined by the authoritative Skill specification and available through the production Skill path;
 - packed Package installation/loading Evidence from a clean consumer;
 - cross-platform hardening Evidence for macOS, Linux, and Windows;
 - Legacy Cutover certification with `LEGACY_PATH_ABSENT`, `NEW_RUNTIME_OPERATIONAL`, `CUTOVER_ELIGIBLE`, and `NO_LEGACY_FALLBACK` satisfied.
