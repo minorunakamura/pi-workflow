@@ -1550,12 +1550,12 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] Production `StartWorkflowUseCase` selects one of the six Playbooks and creates a valid initial Run/State in the consuming repository Run Store.
-- [ ] Production status use case reads current Run state through the read-side boundary.
-- [ ] Production resume use case reaches the defined resume lifecycle and can continue the Orchestrator.
-- [ ] Production cancel use case reaches the defined cancellation lifecycle.
-- [ ] Start-created state is sufficient to invoke `Orchestrator.run(runId)` without test-only fixtures or fake command stubs.
-- [ ] Failure/invalid-input behavior is explicit and does not silently fall back to test behavior.
+- [x] Production `StartWorkflowUseCase` selects one of the six Playbooks and creates a valid initial Run/State in the consuming repository Run Store.
+- [x] Production status use case reads current Run state through the read-side boundary.
+- [x] Production resume use case reaches the defined resume lifecycle and can continue the Orchestrator.
+- [x] Production cancel use case reaches the defined cancellation lifecycle.
+- [x] Start-created state is sufficient to invoke `Orchestrator.run(runId)` without test-only fixtures or fake command stubs.
+- [x] Failure/invalid-input behavior is explicit and does not silently fall back to test behavior.
 
 **Test Levels:** `UNIT`, `INT`
 

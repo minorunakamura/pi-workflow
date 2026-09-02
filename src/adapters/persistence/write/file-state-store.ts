@@ -3,6 +3,7 @@ import {
   link as nodeLink,
   mkdir as nodeMkdir,
   mkdtemp as nodeMkdtemp,
+  readdir as nodeReaddir,
   readFile as nodeReadFile,
   rename as nodeRename,
   rm as nodeRm,
@@ -33,7 +34,11 @@ import {
 import type { EventWriter } from "../../../ports/event-log.js";
 import type { RunLock } from "../../../ports/run-lock.js";
 import type { RunReader, StateSnapshot, WorkflowState } from "../../../ports/run-reader.js";
-import type { StateStore, StateStoreCommitInput } from "../../../ports/state-store.js";
+import type {
+  RunStore,
+  StateStoreCommitInput,
+  StateStoreCreateInput,
+} from "../../../ports/state-store.js";
 
 export type WriteTextFile = (path: string, contents: string) => Promise<void>;
 export type RenamePath = (source: string, destination: string) => Promise<void>;
@@ -83,6 +88,15 @@ export class RequirementRevisionConflictError extends Error {
   constructor(runId: RunId, revision: number) {
     super(`REQUIREMENT_REVISION_CONFLICT for ${runId}: revision ${revision} is immutable`);
     this.name = "RequirementRevisionConflictError";
+  }
+}
+
+export class RunAlreadyExistsError extends Error {
+  readonly code = "RUN_ALREADY_EXISTS";
+
+  constructor(readonly runId: RunId) {
+    super(`RUN_ALREADY_EXISTS for ${runId}`);
+    this.name = "RunAlreadyExistsError";
   }
 }
 
@@ -163,7 +177,7 @@ function runDirectory(repositoryRoot: string, runId: RunId): string {
   return join(repositoryRoot, ".pi", "runs", runId);
 }
 
-export class FileStateStore implements StateStore {
+export class FileStateStore implements RunStore {
   private readonly repositoryRoot: string;
   private readonly reader: RunReader;
   private readonly eventWriter: EventWriter;
@@ -198,6 +212,144 @@ export class FileStateStore implements StateStore {
 
   load(runId: RunId): Promise<WorkflowState> {
     return this.reader.load(runId);
+  }
+
+  // ponytail: O(number of Run directories) scan; add a sequence index if retention makes it slow.
+  async issueRunId(): Promise<RunId> {
+    const runsDirectory = join(this.repositoryRoot, ".pi", "runs");
+    let entries: readonly { name: string }[];
+    try {
+      entries = await nodeReaddir(runsDirectory, { withFileTypes: true });
+    } catch (error) {
+      if (isNotFound(error)) return "run-001" as RunId;
+      throw error;
+    }
+
+    let highest = 0;
+    for (const entry of entries) {
+      const match = /^run-(\d+)$/.exec(entry.name);
+      if (match === null) continue;
+      const value = Number(match[1]);
+      if (!Number.isSafeInteger(value) || value < 1) {
+        throw new RangeError(`Run ID sequence is invalid: ${entry.name}`);
+      }
+      highest = Math.max(highest, value);
+    }
+    if (highest >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError("Run ID sequence exhausted");
+    }
+    return `run-${String(highest + 1).padStart(3, "0")}` as RunId;
+  }
+
+  async create(input: StateStoreCreateInput): Promise<WorkflowState> {
+    const { initial, request, effectiveConfig } = input;
+    if (typeof request !== "string" || request.trim().length === 0) {
+      throw new Error("Run creation request must be non-empty text");
+    }
+    if (typeof effectiveConfig !== "string" || effectiveConfig.trim().length === 0) {
+      throw new Error("Run creation effectiveConfig must be non-empty text");
+    }
+    if (!/^run-\d+$/.test(initial.run.run_id)) {
+      throw new Error(`Invalid Run ID: ${initial.run.run_id}`);
+    }
+    if (initial.run.state_revision !== 1) {
+      throw new Error("Initial Run state revision must be 1");
+    }
+    if (initial.snapshot.manifest.previous_state_revision !== 0) {
+      throw new Error("Initial snapshot previous state revision must be 0");
+    }
+
+    const durable = redactJson(initial as unknown as JsonValue) as unknown as WorkflowState;
+    validateRunYaml(durable.run);
+    validateStateSnapshot(durable.snapshot);
+    validateWorkflowStateConsistency(durable.run, durable.snapshot);
+
+    const runDir = runDirectory(this.repositoryRoot, durable.run.run_id);
+    await this.makeDirectory(dirname(runDir));
+    try {
+      await nodeMkdir(runDir);
+    } catch (error) {
+      if (isPathAlreadyExists(error)) {
+        throw new RunAlreadyExistsError(durable.run.run_id);
+      }
+      throw error;
+    }
+
+    let created = false;
+    try {
+      await Promise.all(
+        [
+          "requirements",
+          "state/snapshots",
+          "analysis",
+          "research",
+          "decisions",
+          "plans",
+          "implementation",
+          "verification/evidence",
+          "reviews",
+          "failures",
+          "events",
+          "runtime/repository",
+          "runtime/executions",
+          "runtime/staging",
+          "runtime/debug",
+        ].map((directory) => this.makeDirectory(join(runDir, directory))),
+      );
+      await this.writeTextFile(join(runDir, "request.md"), redactSecrets(request));
+      await this.writeTextFile(
+        join(runDir, "effective-config.yaml"),
+        redactSecrets(effectiveConfig),
+      );
+
+      const snapshotDir = join(runDir, "state", "snapshots", "1");
+      await this.makeDirectory(snapshotDir);
+      await this.writeSnapshot(snapshotDir, durable.snapshot);
+      const readBackSnapshot = await readSnapshotDirectory(snapshotDir, this.readTextFile);
+      validateWorkflowStateConsistency(durable.run, readBackSnapshot);
+      deepStrictEqual(readBackSnapshot, durable.snapshot);
+
+      const historyEntries = requirementHistoryEntries(runDir, durable.run.run_id, [
+        durable.snapshot.requirement,
+      ]);
+      for (const entry of historyEntries) {
+        await this.publishRequirementHistory(entry);
+      }
+
+      const runPath = join(runDir, "run.yaml");
+      await this.writeTextFile(runPath, stringify(durable.run));
+      const readBackRun = await readRunYaml(runPath, this.readTextFile);
+      deepStrictEqual(readBackRun, durable.run);
+      created = true;
+
+      const events = input.events ?? [];
+      if (events.length === 0) {
+        return durable;
+      }
+
+      try {
+        const appended = await this.eventWriter.appendBatch(events);
+        if (appended.length !== events.length) {
+          throw new Error("Event append produced a partial batch");
+        }
+      } catch {
+        const degradedRun = {
+          ...durable.run,
+          telemetry: { ...durable.run.telemetry, degraded: true },
+        };
+        try {
+          await this.writeTextFile(runPath, stringify(degradedRun));
+        } catch {
+          // The initial state is already durable; telemetry degradation is best-effort too.
+        }
+        return { ...durable, run: degradedRun };
+      }
+      return durable;
+    } finally {
+      if (!created) {
+        await this.removePath(runDir).catch(() => undefined);
+      }
+    }
   }
 
   async commit(input: StateStoreCommitInput): Promise<WorkflowState> {
