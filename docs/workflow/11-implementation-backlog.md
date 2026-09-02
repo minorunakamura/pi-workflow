@@ -1483,7 +1483,7 @@ spec_refs:
 
 ## STORY-12-05 — Cross-platform Persistence and Git
 
-**Status:** REOPENED — macOS Evidence exists; Linux/Windows execution Evidence is insufficient.
+**Status:** COMPLETE — GitHub Actions [run #33625283638](https://github.com/minorunakamura/pi-workflow/actions/runs/33625283638) passed on `macos-latest`, `ubuntu-latest`, and `windows-latest` with 8 test files / 39 tests on each OS; uploaded matrix artifacts are the Release Evidence.
 
 **Priority:** P0
 
@@ -1494,11 +1494,13 @@ spec_refs:
     - 07-security-recovery-and-repository.md#locks
 ```
 
+**Release Evidence:** The three matrix artifacts (`story-12-05-macos-latest`, `story-12-05-ubuntu-latest`, `story-12-05-windows-latest`) contain per-OS PASS logs and the required environment/version, command, result, and artifact locations.
+
 **Acceptance Criteria**
 
-- [ ] macOS/Linux/Windows relevant path/rename/process/lock/Git behavior is validated on actual target OS environments.
+- [x] macOS/Linux/Windows relevant path/rename/process/lock/Git behavior is validated on actual target OS environments.
 - [x] Release Evidence records OS, Node/pnpm/Git versions, filesystem/environment, test command, result, and artifact/log location.
-- [ ] Persistence pointer replacement/crash boundaries, Run/Workspace locks and process liveness, space/Unicode paths, Git status/diff/rename, packed installation/load, and packaged Skill discovery are covered by the platform matrix.
+- [x] Persistence pointer replacement/crash boundaries, Run/Workspace locks and process liveness, space/Unicode paths, Git status/diff/rename, packed installation/load, and packaged Skill discovery are covered by the platform matrix.
 
 **Test Levels:** `INT`, `CRASH`
 
