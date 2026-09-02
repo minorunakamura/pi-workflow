@@ -39,9 +39,15 @@ import {
   renderWorkflowResponse,
 } from "../application/workflow-command-handler.js";
 import { ExecutionResolver } from "../application/execution/model-tool-resolution.js";
+import { WorkerFinalizer } from "../application/execution/worker-finalizer.js";
 import { Orchestrator } from "../application/orchestrator.js";
 import { buildContext, type ContextCandidate } from "../application/context/context-builder.js";
-import { CancellationLifecycle } from "../application/recovery/cancellation-lifecycle.js";
+import {
+  CancellationLifecycle,
+  type CancellationCoordinator,
+  type CancellationExecution,
+} from "../application/recovery/cancellation-lifecycle.js";
+import { InterruptedExecutionRecovery } from "../application/recovery/interrupted-execution-recovery.js";
 import { ResumeLifecycle } from "../application/recovery/resume-lifecycle.js";
 import {
   createWorkflowUseCases,
@@ -777,25 +783,69 @@ async function createProductionUseCases(
     stateStore,
     recheckRepositoryAndFreshness: repositoryFreshness,
   });
+  const workerFinalizer = new WorkerFinalizer({ artifactStore, idAllocator });
+  const interruptedExecutionRecovery = new InterruptedExecutionRecovery({
+    repository,
+    workerFinalizer,
+  });
+  const workerSnapshots = new Map<
+    ExecutionId,
+    Readonly<{
+      before: RepositorySnapshot;
+      executionStateRevision: number;
+    }>
+  >();
+  const productionCancellation: CancellationCoordinator = {
+    isRequested: (runId) => cancellation.isRequested(runId),
+    register: (execution: CancellationExecution) => {
+      const workerSnapshot = workerSnapshots.get(execution.request.identity.executionId);
+      const reconcile =
+        workerSnapshot === undefined || execution.request.identity.agentId !== "worker"
+          ? execution.reconcile
+          : async () => {
+              await interruptedExecutionRecovery.recover({
+                request: execution.request,
+                before: workerSnapshot.before,
+                executionStateRevision: workerSnapshot.executionStateRevision,
+              });
+            };
+      const unregister = cancellation.register({
+        ...execution,
+        ...(reconcile === undefined ? {} : { reconcile }),
+      });
+      return () => {
+        workerSnapshots.delete(execution.request.identity.executionId);
+        unregister();
+      };
+    },
+  };
 
   const orchestratorSource = (userInteraction?: UserInteraction) => {
     const orchestrator = new Orchestrator({
       runReader,
       stateStore,
       agentRuntime,
-      buildRequest: async ({ state, step, iteration }) =>
-        buildProductionRequest(
+      buildRequest: async ({ state, step, iteration }) => {
+        const request = await buildProductionRequest(
           { state, step, iteration },
           await execution(),
           context,
           artifactReader,
           idAllocator,
-        ),
+        );
+        if (request.identity.agentId === "worker") {
+          workerSnapshots.set(request.identity.executionId, {
+            before: await repository.captureSnapshot(),
+            executionStateRevision: state.run.state_revision,
+          });
+        }
+        return request;
+      },
       completion: productionCompletion,
       schedule: productionSchedule,
       postconditions: productionPostconditions,
       artifactReader,
-      cancellation,
+      cancellation: productionCancellation,
       ...(userInteraction === undefined ? {} : { userInteraction }),
       idAllocator,
     });

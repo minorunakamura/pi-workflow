@@ -1638,14 +1638,14 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] All six start commands execute through the default production path without manual use-case injection.
-- [ ] Start creates project-local Run data and Agent execution reaches the production Pi Agent Runtime boundary.
-- [ ] `/wf-status`, `/wf-resume`, and `/wf-cancel` operate on the same default Run Store.
-- [ ] D3 approval/options/custom/cancel interaction reaches the Pi User Interaction adapter through the production Composition Root.
-- [ ] A blocked Run can resume through `/wf-resume`.
-- [ ] Active execution can be cancelled through `/wf-cancel`, preserving required partial/recovery evidence and terminal outcome semantics.
-- [ ] Recovery behavior required for normal operation is exercised through the default path.
-- [ ] The E2E test MUST NOT satisfy the path by injecting `startWorkflow`, `statusWorkflow`, `resumeWorkflow`, `cancelWorkflow`, or equivalent production-use-case stubs into the Extension.
+- [x] All six start commands execute through the default production path without manual use-case injection.
+- [x] Start creates project-local Run data and Agent execution reaches the production Pi Agent Runtime boundary.
+- [x] `/wf-status`, `/wf-resume`, and `/wf-cancel` operate on the same default Run Store.
+- [x] D3 approval/options/custom/cancel interaction reaches the Pi User Interaction adapter through the production Composition Root.
+- [x] A blocked Run can resume through `/wf-resume`.
+- [x] Active execution can be cancelled through `/wf-cancel`, preserving required partial/recovery evidence and terminal outcome semantics.
+- [x] Recovery behavior required for normal operation is exercised through the default path.
+- [x] The E2E test MUST NOT satisfy the path by injecting `startWorkflow`, `statusWorkflow`, `resumeWorkflow`, `cancelWorkflow`, or equivalent production-use-case stubs into the Extension.
 
 **Test Levels:** `E2E`, `CRASH`
 
