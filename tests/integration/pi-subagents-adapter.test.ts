@@ -132,6 +132,50 @@ describe("PiSubagentsAdapter integration", () => {
     expect(StepResultV1Schema.parse(actual)).toEqual(actual);
   });
 
+  it("does not resolve when the child is spawned until its completion response arrives", async () => {
+    const events = createEventBus();
+    const input = request();
+    const expected = result(input);
+    let childSpawnedResolve!: () => void;
+    const childSpawned = new Promise<void>((resolve) => {
+      childSpawnedResolve = resolve;
+    });
+    let releaseChild!: () => void;
+    const childCompletion = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
+    let responseSent = false;
+
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      childSpawnedResolve();
+      void childCompletion.then(() => {
+        responseSent = true;
+        events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+          requestId: delegation.requestId,
+          ownerRunId: delegation.ownerRunId,
+          nodeId: delegation.nodeId,
+          status: "completed",
+          result: { kind: "structured", value: expected },
+        } satisfies SubagentDelegationResponse);
+      });
+    });
+
+    const execution = new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input);
+    await childSpawned;
+    expect(responseSent).toBe(false);
+    let resolved = false;
+    void execution.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    releaseChild();
+    await expect(execution).resolves.toMatchObject(expected);
+    expect(responseSent).toBe(true);
+  });
+
   it("keeps candidate schemas identity-free while leaving semantic fields open", () => {
     const candidateSchemas = [
       STEP_RESULT_SCHEMA.properties.uncertainty_candidates,

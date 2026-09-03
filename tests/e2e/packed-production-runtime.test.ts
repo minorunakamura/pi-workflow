@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
@@ -16,6 +17,7 @@ import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import {
   SUBAGENT_DELEGATION_REQUEST_EVENT,
   SUBAGENT_DELEGATION_RESPONSE_EVENT,
+  SUBAGENT_DELEGATION_STARTED_EVENT,
   type SubagentDelegationRequest,
   type SubagentDelegationResponse,
 } from "pi-subagents/delegation";
@@ -33,6 +35,7 @@ const AGENT_IDS = ["scout", "researcher", "planner", "oracle", "worker", "verifi
 const PROVIDER_ID = "pi-workflow-story-13-09";
 const MODEL_ID = "packed";
 const AUDIT_ENV = "PI_WORKFLOW_STORY_13_09_AUDIT";
+const DELAY_ENV = "PI_WORKFLOW_STORY_13_09_DELAY_URL";
 
 type CommandOutput = Readonly<{ stdout: string; stderr: string }>;
 
@@ -197,7 +200,24 @@ function response(
   return fauxAssistantMessage(fauxToolCall("structured_output", { value: resultFor(request) }));
 }
 
-provider.setResponses([response, response]);
+let delayConsumed = false;
+
+async function delayedResponse(
+  context: { messages: readonly unknown[] },
+  options: unknown,
+  state: { callCount: number },
+) {
+  const request = requestFrom(context);
+  const delayUrl = process.env["PI_WORKFLOW_STORY_13_09_DELAY_URL"];
+  if (delayUrl && !delayConsumed && request.identity.agentId === "scout") {
+    delayConsumed = true;
+    const gate = await fetch(delayUrl + "/scout");
+    if (!gate.ok) throw new Error("lifecycle gate failed: " + gate.status);
+  }
+  return response(context, options, state);
+}
+
+provider.setResponses([delayedResponse, delayedResponse]);
 
 export default function registerPackedProvider(pi: { registerProvider(provider: unknown): void }): void {
   pi.registerProvider(provider.provider);
@@ -216,12 +236,15 @@ function testUi(notifications: string[]): ExtensionUIContext {
 }
 
 describe("packed Pi Package production Agent runtime", () => {
-  it("executes the installed Worker → Verifier → Reviewer path through the real Pi bridge", async () => {
+  it("waits for a delayed Scout before completing the installed real Pi bridge path", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "pi-workflow story-13-09-日本語-"));
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     const previousOffline = process.env.PI_OFFLINE;
     const previousAuditPath = process.env[AUDIT_ENV];
+    const previousDelayUrl = process.env[DELAY_ENV];
+    let delayServer: ReturnType<typeof createServer> | undefined;
+    let releaseScout: (() => void) | undefined;
 
     try {
       const artifactDirectory = join(tempRoot, "artifact");
@@ -324,9 +347,45 @@ describe("packed Pi Package production Agent runtime", () => {
       process.env.PI_OFFLINE = "1";
       process.env[AUDIT_ENV] = auditPath;
 
+      let scoutReachedResolve!: () => void;
+      const scoutReached = new Promise<void>((resolve) => {
+        scoutReachedResolve = resolve;
+      });
+      delayServer = createServer((request, response) => {
+        if (request.url !== "/scout") {
+          response.writeHead(404).end();
+          return;
+        }
+        if (releaseScout !== undefined) {
+          response.end("already released");
+          return;
+        }
+        scoutReachedResolve();
+        releaseScout = () => {
+          response.end("release");
+          releaseScout = undefined;
+        };
+      });
+      await new Promise<void>((resolveListen, reject) => {
+        delayServer!.once("error", reject);
+        delayServer!.listen(0, "127.0.0.1", resolveListen);
+      });
+      const address = delayServer.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("Lifecycle test gate did not expose a TCP address");
+      }
+      process.env[DELAY_ENV] = `http://127.0.0.1:${address.port}`;
+
       const eventBus = createEventBus();
       const requests: SubagentDelegationRequest[] = [];
       const responses: SubagentDelegationResponse[] = [];
+      let childStartedResolve!: () => void;
+      const childStarted = new Promise<void>((resolve) => {
+        childStartedResolve = resolve;
+      });
+      eventBus.on(SUBAGENT_DELEGATION_STARTED_EVENT, (payload) => {
+        if ((payload as { nodeId?: unknown }).nodeId === "step-001") childStartedResolve();
+      });
       eventBus.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
         requests.push(payload as SubagentDelegationRequest);
       });
@@ -375,7 +434,24 @@ describe("packed Pi Package production Agent runtime", () => {
       session = sessionResult.session;
       const notifications: string[] = [];
       await session.bindExtensions({ mode: "json", uiContext: testUi(notifications) });
-      await session.prompt("/wf-feature packed production runtime");
+      let invocationSettled = false;
+      const invocation = session.prompt("/wf-feature packed production runtime").then(() => {
+        invocationSettled = true;
+      });
+      await childStarted;
+      await scoutReached;
+      await Promise.resolve();
+      expect(invocationSettled).toBe(false);
+      expect(responses).toHaveLength(0);
+      await expect(new FileRunReader(consumerRoot).load("run-001" as RunId)).resolves.toMatchObject(
+        {
+          run: { status: "running", finalized: false, state_revision: 2 },
+        },
+      );
+
+      releaseScout!();
+      await invocation;
+      expect(invocationSettled).toBe(true);
 
       const state = await new FileRunReader(consumerRoot).load("run-001" as RunId);
       expect(state.run).toMatchObject({ status: "completed", finalized: true });
@@ -520,13 +596,19 @@ describe("packed Pi Package production Agent runtime", () => {
         );
       }
     } finally {
+      releaseScout?.();
       session?.dispose();
+      if (delayServer?.listening) {
+        await new Promise<void>((resolveClose) => delayServer!.close(() => resolveClose()));
+      }
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       if (previousOffline === undefined) delete process.env.PI_OFFLINE;
       else process.env.PI_OFFLINE = previousOffline;
       if (previousAuditPath === undefined) delete process.env[AUDIT_ENV];
       else process.env[AUDIT_ENV] = previousAuditPath;
+      if (previousDelayUrl === undefined) delete process.env[DELAY_ENV];
+      else process.env[DELAY_ENV] = previousDelayUrl;
       await rm(tempRoot, { recursive: true, force: true });
     }
   }, 180_000);
