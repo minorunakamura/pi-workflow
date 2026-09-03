@@ -1893,6 +1893,7 @@ async function createProductionUseCases(
         });
       },
       artifactReader,
+      artifactStore,
       cancellation: productionCancellation,
       ...(userInteraction === undefined ? {} : { userInteraction }),
       idAllocator,

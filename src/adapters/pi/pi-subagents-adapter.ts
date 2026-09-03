@@ -13,6 +13,7 @@ import {
 import { registerSubagentCapabilityCeiling } from "pi-subagents/capability-ceiling";
 import {
   parseStepResultV1,
+  STEP_RESULT_AGENT_OUTPUT_CONTRACT,
   STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
   type AgentExecutionRequestV1,
   type JsonObject,
@@ -85,78 +86,8 @@ export class PiSubagentsToolCapabilityError extends Error {
   }
 }
 
-const resultArraySchema = { type: "array" } as const;
-const candidateArraySchema = {
-  type: "array",
-  items: {
-    type: "object",
-    description:
-      "Semantic candidate content only; authoritative identity is assigned by the Orchestrator.",
-  },
-} as const;
-
 /** The structured result boundary is checked again by StepResultV1Schema below. */
-export const STEP_RESULT_SCHEMA = {
-  type: "object",
-  description:
-    "StepResultV1 from an Agent. Candidate objects are semantic-only; the Orchestrator allocates authoritative identity after validation.",
-  properties: {
-    identity: {
-      type: "object",
-      properties: {
-        runId: { type: "string" },
-        stepId: { type: "string" },
-        executionId: { type: "string" },
-      },
-      required: ["runId", "stepId", "executionId"],
-      additionalProperties: false,
-    },
-    outcome: { enum: ["completed", "blocked", "failed"] },
-    mode: { enum: ["read-only", "write", "verify-only"] },
-    summary: { type: "string" },
-    artifacts: resultArraySchema,
-    uncertainty_candidates: candidateArraySchema,
-    decision_requests: candidateArraySchema,
-    requirement_candidates: {
-      type: "object",
-      properties: {
-        acceptance_criteria: candidateArraySchema,
-        constraints: candidateArraySchema,
-        assumptions: candidateArraySchema,
-      },
-      required: ["acceptance_criteria", "constraints", "assumptions"],
-      additionalProperties: false,
-    },
-    finding_candidates: candidateArraySchema,
-    finding_rechecks: candidateArraySchema,
-    plan_deviations: candidateArraySchema,
-    skill_requests: candidateArraySchema,
-    execution_checks: candidateArraySchema,
-    observations: candidateArraySchema,
-    blocked: { anyOf: [{ type: "object" }, { type: "null" }] },
-    failure: { anyOf: [{ type: "object" }, { type: "null" }] },
-    runtime: { type: "object" },
-  },
-  required: [
-    "identity",
-    "outcome",
-    "summary",
-    "artifacts",
-    "uncertainty_candidates",
-    "decision_requests",
-    "requirement_candidates",
-    "finding_candidates",
-    "finding_rechecks",
-    "plan_deviations",
-    "skill_requests",
-    "execution_checks",
-    "observations",
-    "blocked",
-    "failure",
-    "runtime",
-  ],
-  additionalProperties: false,
-} as const satisfies Record<string, unknown>;
+export const STEP_RESULT_SCHEMA = STEP_RESULT_AGENT_OUTPUT_CONTRACT;
 
 function isThinkingLevel(value: string): value is SubagentDelegationThinking {
   return (THINKING_LEVELS as readonly string[]).includes(value);
@@ -255,6 +186,16 @@ function resolvedToolNames(request: AgentExecutionRequestV1): ReadonlySet<string
 }
 
 function createTask(request: AgentExecutionRequestV1, prompt?: string): string {
+  const requestForTask =
+    prompt === undefined
+      ? request
+      : {
+          ...request,
+          outputs: {
+            ...request.outputs,
+            outputContract: "See the full Output contract in the resolved Workflow Prompt above.",
+          },
+        };
   return [
     "Execute exactly one Workflow Agent Execution.",
     request.objective.objective,
@@ -266,7 +207,7 @@ function createTask(request: AgentExecutionRequestV1, prompt?: string): string {
         ]),
     STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
     "Execution request (JSON):",
-    JSON.stringify(request),
+    JSON.stringify(requestForTask),
     "Return only the StepResultV1 structured result and preserve the request identity.",
   ].join("\n\n");
 }

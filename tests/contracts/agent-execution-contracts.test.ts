@@ -1,8 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentExecutionRequestV1Schema,
+  STEP_RESULT_AGENT_OUTPUT_CONTRACT,
+  STEP_RESULT_REQUIREMENT_CANDIDATE_EFFECTS,
+  STEP_RESULT_REQUIREMENT_CANDIDATE_OPERATIONS,
+  STEP_RESULT_UNCERTAINTY_CATEGORIES,
+  STEP_RESULT_VERIFICATION_CHECK_TYPES,
+  STEP_RESULT_VERIFICATION_CHECK_STATUSES,
   StepResultV1Schema,
 } from "../../src/contracts/execution/agent-execution.js";
+import {
+  REQUIREMENT_CANDIDATE_EFFECTS,
+  REQUIREMENT_CANDIDATE_OPERATIONS,
+} from "../../src/domain/requirements/requirement.js";
+import { UNCERTAINTY_CATEGORIES } from "../../src/domain/uncertainty/uncertainty.js";
+import { FINDING_CONFIDENCES, FINDING_SEVERITIES } from "../../src/domain/findings/finding.js";
+import {
+  VERIFICATION_CHECK_STATUSES,
+  VERIFICATION_CHECK_TYPES,
+} from "../../src/application/execution/verifier-finalizer.js";
 
 function validRequest() {
   return {
@@ -93,9 +109,112 @@ function validResult() {
   };
 }
 
+type SchemaRecord = Record<string, unknown>;
+
+function schemaRecord(value: unknown): SchemaRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Expected a schema object");
+  }
+  return value as SchemaRecord;
+}
+
+function schemaProperties(value: unknown): SchemaRecord {
+  return schemaRecord(schemaRecord(value).properties);
+}
+
+function schemaEnum(value: unknown): readonly unknown[] {
+  const values = schemaRecord(value).enum;
+  if (!Array.isArray(values)) throw new Error("Expected an enum schema");
+  return values;
+}
+
+function schemaVariants(value: unknown): readonly SchemaRecord[] {
+  const schema = schemaRecord(value);
+  return Array.isArray(schema.oneOf) ? schema.oneOf.map(schemaRecord) : [schema];
+}
+
 describe("Agent execution contracts", () => {
   it("accepts a request with valid identity, arrays, and mode", () => {
     expect(AgentExecutionRequestV1Schema.parse(validRequest())).toEqual(validRequest());
+  });
+
+  it("keeps the shared LLM contract aligned with authoritative finite vocabularies", () => {
+    const root = schemaRecord(STEP_RESULT_AGENT_OUTPUT_CONTRACT);
+    const properties = schemaProperties(root);
+    expect(schemaEnum(properties.outcome)).toEqual(["completed", "blocked", "failed"]);
+
+    const requirements = schemaProperties(properties.requirement_candidates);
+    const acceptance = schemaRecord(requirements.acceptance_criteria);
+    const constraints = schemaRecord(requirements.constraints);
+    const assumptions = schemaRecord(requirements.assumptions);
+    const acceptanceVariants = schemaVariants(acceptance.items);
+    const constraintVariants = schemaVariants(constraints.items);
+    const assumptionVariants = schemaVariants(assumptions.items);
+    const acceptanceProperties = schemaProperties(acceptanceVariants[0]);
+    const acceptanceClarifyProperties = schemaProperties(acceptanceVariants[1]);
+    const constraintClarifyProperties = schemaProperties(constraintVariants[1]);
+    const assumptionProperties = schemaProperties(assumptionVariants[0]);
+    const assumptionClarifyProperties = schemaProperties(assumptionVariants[1]);
+
+    expect(
+      acceptanceVariants.map((variant) => schemaEnum(schemaProperties(variant).operation)),
+    ).toEqual(STEP_RESULT_REQUIREMENT_CANDIDATE_OPERATIONS.map((operation) => [operation]));
+    expect(
+      acceptanceVariants.flatMap((variant) => schemaEnum(schemaProperties(variant).operation)),
+    ).toEqual(REQUIREMENT_CANDIDATE_OPERATIONS);
+    expect(schemaEnum(acceptanceProperties.effect)).toEqual(REQUIREMENT_CANDIDATE_EFFECTS);
+    expect(schemaEnum(acceptanceProperties.effect)).toEqual(
+      STEP_RESULT_REQUIREMENT_CANDIDATE_EFFECTS,
+    );
+    expect(schemaEnum(schemaProperties(constraintVariants[0]!).operation)).toEqual(["add"]);
+    expect(schemaEnum(assumptionProperties.effect)).toEqual(
+      STEP_RESULT_REQUIREMENT_CANDIDATE_EFFECTS,
+    );
+    expect(schemaRecord(acceptanceClarifyProperties.targetId).pattern).toBe("^AC-0*[1-9][0-9]*$");
+    expect(schemaRecord(constraintClarifyProperties.targetId).pattern).toBe("^C-0*[1-9][0-9]*$");
+    expect(acceptanceProperties).not.toHaveProperty("targetId");
+    expect(assumptionProperties).not.toHaveProperty("targetIndex");
+    expect(schemaRecord(assumptionClarifyProperties.targetIndex)).toMatchObject({
+      type: "integer",
+      minimum: 0,
+    });
+    expect(schemaRecord(assumptionVariants[0]).required).toEqual(["operation", "effect"]);
+    expect(schemaRecord(assumptionVariants[1]).required).toEqual([
+      "operation",
+      "effect",
+      "targetIndex",
+    ]);
+
+    const uncertainty = schemaRecord(properties.uncertainty_candidates);
+    expect(schemaEnum(schemaProperties(uncertainty.items).category)).toEqual(
+      UNCERTAINTY_CATEGORIES,
+    );
+    expect(schemaEnum(schemaProperties(uncertainty.items).category)).toEqual(
+      STEP_RESULT_UNCERTAINTY_CATEGORIES,
+    );
+
+    const findings = schemaRecord(properties.finding_candidates);
+    expect(schemaEnum(schemaProperties(findings.items).severity)).toEqual(FINDING_SEVERITIES);
+    expect(schemaEnum(schemaProperties(findings.items).confidence)).toEqual(FINDING_CONFIDENCES);
+
+    const checks = schemaRecord(properties.execution_checks);
+    expect(schemaEnum(schemaProperties(checks.items).type)).toEqual(VERIFICATION_CHECK_TYPES);
+    expect(schemaEnum(schemaProperties(checks.items).type)).toEqual(
+      STEP_RESULT_VERIFICATION_CHECK_TYPES,
+    );
+    expect(schemaEnum(schemaProperties(checks.items).status)).toEqual(VERIFICATION_CHECK_STATUSES);
+    expect(schemaEnum(schemaProperties(checks.items).status)).toEqual(
+      STEP_RESULT_VERIFICATION_CHECK_STATUSES,
+    );
+
+    const rechecks = schemaRecord(properties.finding_rechecks);
+    const variants = schemaRecord(rechecks.items).oneOf;
+    if (!Array.isArray(variants)) throw new Error("Expected Finding recheck schema variants");
+    expect(variants.map((variant) => schemaRecord(variant).required)).toEqual([
+      ["findingId"],
+      ["finding_id"],
+    ]);
+    expect(root.additionalProperties).toBe(false);
   });
 
   it("rejects malformed identity and array fields", () => {
@@ -187,23 +306,48 @@ describe("Agent execution contracts", () => {
       { ...validResult(), execution_checks: [{ id: "V-001" }] },
       { ...validResult(), observations: [{ id: "G-001" }] },
       { ...validResult(), observations: [{ id: "RR-001" }] },
+      { ...validResult(), observations: [{ id: "local-observation" }] },
     ];
 
     for (const invalid of invalidResults) {
-      expect(() => StepResultV1Schema.parse(invalid)).toThrow(/authoritative State ID/);
+      expect(() => StepResultV1Schema.parse(invalid)).toThrow(
+        /authoritative State ID|candidate identity field/,
+      );
     }
   });
 
   it("validates requirement candidate operations and effects", () => {
-    expect(() =>
-      StepResultV1Schema.parse({
-        ...validResult(),
-        requirement_candidates: {
-          ...validResult().requirement_candidates,
-          acceptance_criteria: [{ operation: "replace", effect: "changing" }],
-        },
-      }),
-    ).toThrow(/requirement_candidates\.acceptance_criteria\[0\]\.operation.*add, clarify/);
+    for (const operation of ["add", "clarify"] as const) {
+      for (const effect of ["preserving", "narrowing", "broadening", "changing"] as const) {
+        expect(() =>
+          StepResultV1Schema.parse({
+            ...validResult(),
+            requirement_candidates: {
+              ...validResult().requirement_candidates,
+              acceptance_criteria: [
+                {
+                  operation,
+                  effect,
+                  ...(operation === "clarify" ? { targetId: "AC-001" } : {}),
+                },
+              ],
+            },
+          }),
+        ).not.toThrow();
+      }
+    }
+
+    for (const operation of ["remove", "replace", "supersede", "unknown"] as const) {
+      expect(() =>
+        StepResultV1Schema.parse({
+          ...validResult(),
+          requirement_candidates: {
+            ...validResult().requirement_candidates,
+            acceptance_criteria: [{ operation, effect: "changing" }],
+          },
+        }),
+      ).toThrow(/requirement_candidates\.acceptance_criteria\[0\]\.operation.*add, clarify/);
+    }
 
     expect(() =>
       StepResultV1Schema.parse({
@@ -225,7 +369,23 @@ describe("Agent execution contracts", () => {
           assumptions: [{ operation: "clarify", effect: "changing", targetId: "AC-001" }],
         },
       }),
-    ).toThrow(/authoritative State ID/);
+    ).toThrow(/no targetId for an assumption candidate/);
+  });
+
+  it("allows existing Requirement references while keeping candidate identity Agent-owned", () => {
+    expect(
+      StepResultV1Schema.parse({
+        ...validResult(),
+        requirement_candidates: {
+          acceptance_criteria: [{ operation: "clarify", effect: "preserving", targetId: "AC-001" }],
+          constraints: [{ operation: "clarify", effect: "changing", targetId: "C-001" }],
+          assumptions: [],
+        },
+      }).requirement_candidates,
+    ).toMatchObject({
+      acceptance_criteria: [{ targetId: "AC-001" }],
+      constraints: [{ targetId: "C-001" }],
+    });
   });
 
   it("requires structured information for blocked and failed outcomes", () => {
