@@ -18,6 +18,7 @@ import {
 } from "../../src/adapters/pi/pi-subagents-adapter.js";
 import {
   STEP_RESULT_AGENT_OUTPUT_CONTRACT,
+  STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
   StepResultV1Schema,
   type AgentExecutionRequestV1,
   type StepResultV1,
@@ -122,6 +123,7 @@ describe("PiSubagentsAdapter integration", () => {
       result: { kind: "structured", schema: STEP_RESULT_SCHEMA },
     });
     expect(requests[0]).not.toHaveProperty("workflowScript");
+    expect(requests[0]?.timeoutMs).toBe(1_000);
     expect(requests[0]?.task).toContain("Agent candidate identity boundary:");
     expect(requests[0]?.task).toContain("Do not include `id`, `authoritative_id`, or `state_id`");
     expect(actual).toMatchObject(expected);
@@ -135,6 +137,41 @@ describe("PiSubagentsAdapter integration", () => {
       },
     });
     expect(StepResultV1Schema.parse(actual)).toEqual(actual);
+  });
+
+  it("does not duplicate the structured schema in the task JSON without an assembled prompt", async () => {
+    const events = createEventBus();
+    const input = {
+      ...request(),
+      outputs: {
+        ...request().outputs,
+        outputContract: structuredClone(STEP_RESULT_AGENT_OUTPUT_CONTRACT),
+      },
+    } satisfies AgentExecutionRequestV1;
+    const requests: SubagentDelegationRequest[] = [];
+
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      requests.push(delegation);
+      events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+        requestId: delegation.requestId,
+        ownerRunId: delegation.ownerRunId,
+        nodeId: delegation.nodeId,
+        status: "completed",
+        result: { kind: "structured", value: result(input) },
+      } satisfies SubagentDelegationResponse);
+    });
+
+    await new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input);
+
+    expect(requests[0]?.task).not.toContain('"candidateGroups"');
+    expect(requests[0]?.task).toContain(
+      "The complete StepResultV1 field-level contract is supplied separately as the structured-output schema.",
+    );
+    expect(requests[0]?.result).toMatchObject({
+      kind: "structured",
+      schema: expect.objectContaining({ title: "StepResultV1" }),
+    });
   });
 
   it("does not resolve when the child is spawned until its completion response arrives", async () => {
@@ -276,7 +313,7 @@ describe("PiSubagentsAdapter integration", () => {
       ...request(),
       skills: { required: [{ id: "tdd", version: "1.0.0" }], optional: [] },
     } satisfies AgentExecutionRequestV1;
-    const assembled = "selected Skill procedure marker";
+    const assembled = `${STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS}\nselected Skill procedure marker`;
     const requests: SubagentDelegationRequest[] = [];
 
     events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
@@ -297,6 +334,7 @@ describe("PiSubagentsAdapter integration", () => {
     ).run(input);
 
     expect(requests[0]?.task).toContain(assembled);
+    expect(requests[0]?.task.match(/Agent candidate identity boundary:/g)).toHaveLength(1);
     expect(requests[0]?.task).toContain("Execution request (JSON):");
     expect(requests[0]?.skill).toEqual(["tdd"]);
   });
@@ -566,6 +604,27 @@ describe("PiSubagentsAdapter integration", () => {
         model: { ...input.model, actual: "unconfigured/model" },
       }),
     ).rejects.toThrow("requested model or a configured fallback");
+  });
+
+  it("maps a timed-out child response to a structured execution failure", async () => {
+    const events = createEventBus();
+    const input = request();
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      queueMicrotask(() => {
+        events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+          requestId: delegation.requestId,
+          ownerRunId: delegation.ownerRunId,
+          nodeId: delegation.nodeId,
+          status: "timed_out",
+          error: "Subagent timed out after 1000ms.",
+        } satisfies SubagentDelegationResponse);
+      });
+    });
+
+    await expect(
+      new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input),
+    ).rejects.toThrow("PiSubagents Agent Execution timed_out: Subagent timed out after 1000ms.");
   });
 
   it("does not commit Workflow State and rejects failed leaf responses", async () => {

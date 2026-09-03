@@ -495,13 +495,23 @@ describe("packed Pi Package production Agent runtime", () => {
       expect(scoutTask).toContain(
         "Requirement Candidate operation must be exactly one of: add, clarify.",
       );
-      expect(scoutTask).toContain('"operation":{"enum":["add"]}');
-      expect(scoutTask).toContain('"operation":{"enum":["clarify"]}');
       expect(scoutTask).toContain(
-        '"effect":{"enum":["preserving","narrowing","broadening","changing"]}',
+        "Requirement Candidate effect must be exactly one of: preserving, narrowing, broadening, changing.",
       );
       expect(scoutTask).toContain("Orchestrator normalization allocates authoritative identity");
-      expect(scoutTask).toContain("authoritativeAllocation");
+      expect(scoutTask).toContain(
+        "The complete StepResultV1 field-level contract is supplied separately as the structured-output schema.",
+      );
+      expect(scoutTask).not.toContain('"candidateGroups"');
+      expect(scoutTask).not.toContain('"operation":{"enum":["add"]}');
+      expect(scoutTask).not.toContain('"operation":{"enum":["clarify"]}');
+      expect(requests.find(({ agent }) => agent === "scout")?.result).toMatchObject({
+        kind: "structured",
+        schema: expect.objectContaining({
+          title: "StepResultV1",
+          candidateGroups: expect.arrayContaining(["observations"]),
+        }),
+      });
       expect(notifications.join("\n")).not.toContain("NOT_IMPLEMENTED");
 
       const audit = (await readFile(auditPath, "utf8"))
@@ -533,6 +543,12 @@ describe("packed Pi Package production Agent runtime", () => {
               task.includes("Resolved Workflow Prompt") && task.includes("## Procedure"),
           ),
       ).toBe(true);
+      expect(audit.find(({ agent }) => agent === "planner")?.systemPrompt).toContain(
+        "Use the supplied Context Pack and finalized Scout Artifact as the primary evidence.",
+      );
+      expect(audit.find(({ agent }) => agent === "planner")?.systemPrompt).toContain(
+        "Do not perform repository-wide investigation",
+      );
       expect(audit.find(({ agent }) => agent === "verifier")?.systemPrompt).toContain(
         "You are the Workflow Verifier Agent.",
       );
