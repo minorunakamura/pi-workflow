@@ -19,7 +19,7 @@ export const DEFAULT_EVALUATOR_VERSION = 1;
 export const EVALUATION_STATUSES = ["provisional", "final"] as const;
 export type EvaluationStatus = (typeof EVALUATION_STATUSES)[number];
 
-export const TELEMETRY_QUALITY_STATUSES = ["healthy", "degraded"] as const;
+export const TELEMETRY_QUALITY_STATUSES = ["healthy", "degraded", "insufficient"] as const;
 export type TelemetryQualityStatus = (typeof TELEMETRY_QUALITY_STATUSES)[number];
 
 export const EVALUATION_DIMENSIONS = [
@@ -166,20 +166,61 @@ function resultTelemetryLevel(result: JsonObject | null): unknown {
   return isRecord(telemetry) ? telemetry.telemetry_level : undefined;
 }
 
+function eventExecutionId(event: DomainEvent): string | undefined {
+  const data = event.data;
+  if (typeof data.execution_id === "string" && data.execution_id.length > 0) {
+    return data.execution_id;
+  }
+  const execution = data.execution;
+  if (isRecord(execution)) {
+    if (typeof execution.execution_id === "string" && execution.execution_id.length > 0) {
+      return execution.execution_id;
+    }
+    if (typeof execution.id === "string" && execution.id.length > 0) return execution.id;
+  }
+  return undefined;
+}
+
+function eventSequenceHasGap(events: readonly DomainEvent[]): boolean {
+  const sequences = events.map(({ sequence }) => sequence).sort((left, right) => left - right);
+  return sequences.some((sequence, index) => sequence !== index + 1);
+}
+
 function telemetryQuality(input: RunEvaluationRecordInput): TelemetryQuality {
   const levels: TelemetryLevel[] = [];
+  const executionIds = new Set<string>();
+  const observedExecutionIds = new Set<string>();
   let unsupported = false;
-  const addLevel = (value: unknown): void => {
+  const addLevel = (value: unknown, executionId?: string): void => {
     if (value === undefined) return;
     if ((TELEMETRY_LEVELS as readonly unknown[]).includes(value)) {
       levels.push(value as TelemetryLevel);
+      if (executionId !== undefined) observedExecutionIds.add(executionId);
     } else {
       unsupported = true;
     }
   };
 
-  for (const event of input.events) addLevel(eventTelemetryLevel(event));
-  for (const step of input.state.snapshot.steps.steps) addLevel(resultTelemetryLevel(step.result));
+  for (const event of input.events) {
+    if (!event.type.startsWith("execution.")) continue;
+    const executionId = eventExecutionId(event);
+    if (executionId !== undefined) executionIds.add(executionId);
+    addLevel(eventTelemetryLevel(event), executionId);
+  }
+  for (const step of input.state.snapshot.steps.steps) {
+    if (step.result === null) continue;
+    const result = isRecord(step.result) ? step.result : undefined;
+    const identity =
+      result !== undefined && isRecord(result.identity) ? result.identity : undefined;
+    const executionId =
+      typeof identity?.executionId === "string" && identity.executionId.length > 0
+        ? identity.executionId
+        : typeof result?.execution_id === "string" && result.execution_id.length > 0
+          ? result.execution_id
+          : `step:${step.id}`;
+    executionIds.add(executionId);
+    addLevel(resultTelemetryLevel(step.result), executionId);
+  }
 
   const order = new Map<TelemetryLevel, number>([
     ["minimal", 0],
@@ -190,11 +231,19 @@ function telemetryQuality(input: RunEvaluationRecordInput): TelemetryQuality {
     (lowest, current) => (order.get(current)! < order.get(lowest)! ? current : lowest),
     DEFAULT_TELEMETRY_LEVEL,
   );
+  const missingExecutionTelemetry = [...executionIds].some(
+    (executionId) => !observedExecutionIds.has(executionId),
+  );
+  const status: TelemetryQualityStatus =
+    input.state.run.telemetry.degraded || unsupported || eventSequenceHasGap(input.events)
+      ? "degraded"
+      : levels.length === 0
+        ? "insufficient"
+        : missingExecutionTelemetry
+          ? "degraded"
+          : "healthy";
 
-  return {
-    status: input.state.run.telemetry.degraded || unsupported ? "degraded" : "healthy",
-    telemetry_level: telemetryLevel,
-  };
+  return { status, telemetry_level: telemetryLevel };
 }
 
 function lastEventSequence(events: readonly DomainEvent[]): number {

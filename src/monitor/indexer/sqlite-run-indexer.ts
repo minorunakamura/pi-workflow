@@ -2,12 +2,20 @@ import { mkdirSync } from "node:fs";
 import { lstat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { ARTIFACT_STATUSES, type ArtifactStatus } from "../../contracts/artifacts/artifact.js";
 import type { DomainEvent } from "../../contracts/events/event.js";
 import type { RunYamlV1 } from "../../contracts/state/workflow-state.js";
 import type { RunId } from "../../domain/primitives/ids.js";
 import type { WorkflowState } from "../../ports/run-reader.js";
+import type { ArtifactContent } from "../../ports/artifact-store.js";
+import {
+  DEFAULT_EVALUATOR_VERSION,
+  RunEvaluationRecordEvaluator,
+  type RunEvaluationRecord,
+} from "../../evaluation/run-evaluation-record.js";
 import {
   assertNoSymlinkComponents,
+  FileArtifactReader,
   FileRunReader,
   JsonlEventReader,
   resolveRunRelativeArtifactPath,
@@ -233,6 +241,8 @@ const RUN_UPDATE_COLUMNS = [
   "last_indexed_state_revision",
   "last_indexed_event_sequence",
   "status",
+  "telemetry_level",
+  "telemetry_quality",
   "updated_at",
   "finalized",
   "index_status",
@@ -357,6 +367,17 @@ function artifactField(data: Row, name: string): unknown {
   return data[name] ?? artifactData(data)[name];
 }
 
+function artifactStatus(value: unknown): ArtifactStatus | undefined {
+  return typeof value === "string" && (ARTIFACT_STATUSES as readonly string[]).includes(value)
+    ? (value as ArtifactStatus)
+    : undefined;
+}
+
+type EvaluationArtifactRead = Readonly<{
+  artifacts: readonly ArtifactContent[];
+  errors: readonly string[];
+}>;
+
 export class RunIndexer {
   readonly databasePath: string;
   private readonly repositoryRoot: string;
@@ -364,6 +385,9 @@ export class RunIndexer {
   private readonly discovery: RunDiscovery;
   private readonly runReader: FileRunReader;
   private readonly eventReader: JsonlEventReader;
+  private readonly artifactReader: FileArtifactReader;
+  private readonly evaluator = new RunEvaluationRecordEvaluator();
+  private readonly stateCache = new Map<string, WorkflowState>();
 
   constructor(repositoryRoot: string, options: RunIndexerOptions = {}) {
     const root = resolve(repositoryRoot);
@@ -378,6 +402,10 @@ export class RunIndexer {
       options.readFile === undefined ? {} : { readFile: options.readFile },
     );
     this.eventReader = new JsonlEventReader(
+      root,
+      options.readFile === undefined ? {} : { readFile: options.readFile },
+    );
+    this.artifactReader = new FileArtifactReader(
       root,
       options.readFile === undefined ? {} : { readFile: options.readFile },
     );
@@ -429,21 +457,37 @@ export class RunIndexer {
       | undefined;
   }
 
+  private existingEvaluation(runId: string): Row | undefined {
+    return this.database.prepare("SELECT * FROM evaluations WHERE run_id = ?").get(runId) as
+      | Row
+      | undefined;
+  }
+
   private async indexCandidate(candidate: RunCandidate): Promise<void> {
     const existing = this.existingRun(candidate.runId);
+    const existingEvaluation = this.existingEvaluation(candidate.runId);
     const currentRun = candidate.run;
+    const previousStateRevision = rowNumber(existing, "last_indexed_state_revision");
+    const previousEventSequence = rowNumber(existing, "last_indexed_event_sequence") ?? 0;
     let state: WorkflowState | undefined;
     let stateError: string | undefined;
 
-    if (candidate.state === "valid" && currentRun !== undefined) {
-      const indexedRevision = rowNumber(existing, "last_indexed_state_revision");
-      if (existing === undefined || indexedRevision !== currentRun.state_revision) {
-        try {
-          state = await this.runReader.load(candidate.runId as RunId);
-        } catch (error) {
-          stateError = errorMessage(error);
-        }
+    const stateNeedsLoad =
+      candidate.state === "valid" &&
+      currentRun !== undefined &&
+      (existing === undefined ||
+        previousStateRevision !== currentRun.state_revision ||
+        rowNumber(existing, "finalized") !== booleanValue(currentRun.finalized));
+    if (stateNeedsLoad) {
+      try {
+        state = await this.runReader.load(candidate.runId as RunId);
+        this.stateCache.set(candidate.runId, state);
+      } catch (error) {
+        this.stateCache.delete(candidate.runId);
+        stateError = errorMessage(error);
       }
+    } else if (candidate.state === "valid") {
+      state = this.stateCache.get(candidate.runId);
     }
 
     let eventRead: EventRead | undefined;
@@ -452,7 +496,7 @@ export class RunIndexer {
       try {
         eventRead = await this.eventReader.readAfterWithQuality(
           candidate.runId as RunId,
-          rowNumber(existing, "last_indexed_event_sequence") ?? 0,
+          previousEventSequence,
         );
       } catch (error) {
         eventError = errorMessage(error);
@@ -462,12 +506,63 @@ export class RunIndexer {
     const indexedStateRevision =
       state?.run.state_revision ?? rowNumber(existing, "last_indexed_state_revision");
     const indexedEventSequence = Math.max(
-      rowNumber(existing, "last_indexed_event_sequence") ?? 0,
+      previousEventSequence,
       ...(eventRead?.events.map((event) => event.sequence) ?? []),
     );
+    const evaluationNeedsRefresh =
+      candidate.state === "valid" &&
+      (existingEvaluation === undefined ||
+        numberValue(existingEvaluation.state_revision) !== currentRun?.state_revision ||
+        numberValue(existingEvaluation.last_event_sequence) !== indexedEventSequence ||
+        numberValue(existingEvaluation.evaluator_version) !== DEFAULT_EVALUATOR_VERSION ||
+        eventRead?.degraded === true ||
+        eventError !== undefined);
+
+    let evaluationEvents: readonly DomainEvent[] | undefined;
+    let evaluation: RunEvaluationRecord | undefined;
+    let evaluationEventError: string | undefined;
+    let evaluationArtifactErrors: readonly string[] = [];
+    if (evaluationNeedsRefresh && state === undefined && candidate.state === "valid") {
+      try {
+        state = await this.runReader.load(candidate.runId as RunId);
+        this.stateCache.set(candidate.runId, state);
+      } catch (error) {
+        this.stateCache.delete(candidate.runId);
+        stateError ??= errorMessage(error);
+      }
+    }
+    if (evaluationNeedsRefresh && state !== undefined) {
+      let allEvents = eventRead;
+      if (previousEventSequence > 0) {
+        try {
+          allEvents = await this.eventReader.readAfterWithQuality(candidate.runId as RunId, 0);
+        } catch (error) {
+          evaluationEventError = errorMessage(error);
+          allEvents = undefined;
+        }
+      }
+      if (allEvents !== undefined) {
+        evaluationEvents = allEvents.events;
+        const evaluationState: WorkflowState =
+          allEvents.degraded && !state.run.telemetry.degraded
+            ? {
+                ...state,
+                run: { ...state.run, telemetry: { ...state.run.telemetry, degraded: true } },
+              }
+            : state;
+        const artifactRead = await this.evaluationArtifacts(candidate.runId, allEvents.events);
+        evaluationArtifactErrors = artifactRead.errors;
+        evaluation = this.evaluator.evaluate({
+          state: evaluationState,
+          events: allEvents.events,
+          artifacts: artifactRead.artifacts,
+        });
+      }
+    }
+
     const artifactErrors =
       candidate.state === "valid"
-        ? await this.artifactErrors(candidate, eventRead?.events ?? [])
+        ? await this.artifactErrors(candidate, evaluationEvents ?? eventRead?.events ?? [])
         : [];
     const indexStatus =
       candidate.state === "unreadable"
@@ -475,7 +570,9 @@ export class RunIndexer {
         : candidate.state === "degraded" ||
             stateError !== undefined ||
             eventError !== undefined ||
-            artifactErrors.length > 0
+            evaluationEventError !== undefined ||
+            artifactErrors.length > 0 ||
+            evaluationArtifactErrors.length > 0
           ? "degraded"
           : eventRead?.degraded === true
             ? "degraded"
@@ -484,19 +581,23 @@ export class RunIndexer {
       candidate.error,
       stateError === undefined ? undefined : `state: ${stateError}`,
       eventError === undefined ? undefined : `events: ${eventError}`,
+      evaluationEventError === undefined ? undefined : `evaluation events: ${evaluationEventError}`,
       eventRead?.degraded === true && eventError === undefined ? "events: degraded" : undefined,
       ...artifactErrors,
+      ...evaluationArtifactErrors,
     ].filter((value): value is string => value !== undefined);
     const runError = errors.length === 0 ? null : errors.join("; ");
 
     this.transaction(() => {
       this.upsertRun(
         candidate,
+        state,
         existing,
         indexedStateRevision,
         indexedEventSequence,
         indexStatus,
         runError,
+        evaluation,
       );
       if (state !== undefined) {
         this.replaceSnapshot(state);
@@ -504,7 +605,46 @@ export class RunIndexer {
       for (const event of eventRead?.events ?? []) {
         this.upsertEvent(event);
       }
+      if (evaluation !== undefined) {
+        this.upsertEvaluation(evaluation);
+      } else if (evaluationNeedsRefresh) {
+        this.database.prepare("DELETE FROM evaluations WHERE run_id = ?").run(candidate.runId);
+      }
     });
+  }
+
+  private async evaluationArtifacts(
+    runId: string,
+    events: readonly DomainEvent[],
+  ): Promise<EvaluationArtifactRead> {
+    const references = new Map<string, ArtifactStatus>();
+    const addReference = (pathValue: unknown, statusValue: unknown): void => {
+      const path = text(pathValue);
+      const status = artifactStatus(statusValue);
+      if (path !== null && status !== undefined) references.set(path, status);
+    };
+
+    for (const row of this.database
+      .prepare("SELECT path, status FROM artifacts WHERE run_id = ?")
+      .all(runId)) {
+      addReference(row.path, row.status);
+    }
+    for (const event of events) {
+      if (event.type !== "artifact.finalized") continue;
+      const data = record(event.data) ?? {};
+      addReference(artifactField(data, "path"), artifactField(data, "status"));
+    }
+
+    const artifacts: ArtifactContent[] = [];
+    const errors: string[] = [];
+    for (const [path, status] of references) {
+      try {
+        artifacts.push(await this.artifactReader.read({ runId: runId as RunId, path, status }));
+      } catch (error) {
+        errors.push(`artifacts: unable to read ${path}: ${errorMessage(error)}`);
+      }
+    }
+    return { artifacts, errors };
   }
 
   private async artifactErrors(
@@ -545,22 +685,30 @@ export class RunIndexer {
 
   private upsertRun(
     candidate: RunCandidate,
+    state: WorkflowState | undefined,
     existing: ExistingRun | undefined,
     indexedStateRevision: number | null,
     indexedEventSequence: number,
     indexStatus: string,
     error: string | null,
+    evaluation: RunEvaluationRecord | undefined,
   ): void {
-    const run = candidate.run;
+    const run = state?.run ?? candidate.run;
     const request = run === undefined ? undefined : run.request;
     const outcome = run === undefined ? undefined : record(run.outcome);
     const failure = run === undefined ? undefined : record(run.failure);
+    const telemetryLevel =
+      evaluation?.telemetry_quality.telemetry_level ??
+      (run === undefined
+        ? rowString(existing, "telemetry_level")
+        : (runTelemetryField(run, "level") ?? rowString(existing, "telemetry_level")));
     const telemetryQuality =
-      run === undefined
+      evaluation?.telemetry_quality.status ??
+      (run === undefined
         ? rowString(existing, "telemetry_quality")
         : run.telemetry.degraded
           ? "degraded"
-          : "healthy";
+          : (rowString(existing, "telemetry_quality") ?? "healthy"));
 
     this.database
       .prepare(
@@ -616,9 +764,7 @@ export class RunIndexer {
         run === undefined
           ? rowNumber(existing, "request_satisfied")
           : booleanValue(outcome?.request_satisfied),
-        run === undefined
-          ? rowString(existing, "telemetry_level")
-          : runTelemetryField(run, "level"),
+        telemetryLevel,
         telemetryQuality,
         run === undefined
           ? rowString(existing, "baseline_head")
@@ -794,6 +940,30 @@ export class RunIndexer {
         text(artifactField(data, "domain_id")),
         text(artifactField(data, "handoff_summary")),
         json(artifactData(data)) ?? "{}",
+      );
+  }
+
+  private upsertEvaluation(evaluation: RunEvaluationRecord): void {
+    const evaluationJson = json(evaluation);
+    if (evaluationJson === null) throw new Error("Evaluation record is not JSON serializable");
+
+    this.database
+      .prepare(
+        `INSERT INTO evaluations (
+          run_id, state_revision, last_event_sequence, evaluator_version, evaluation_json
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(run_id) DO UPDATE SET
+          state_revision = excluded.state_revision,
+          last_event_sequence = excluded.last_event_sequence,
+          evaluator_version = excluded.evaluator_version,
+          evaluation_json = excluded.evaluation_json`,
+      )
+      .run(
+        evaluation.run_id,
+        evaluation.source.state_revision,
+        evaluation.source.last_event_sequence,
+        evaluation.evaluator_version,
+        evaluationJson,
       );
   }
 

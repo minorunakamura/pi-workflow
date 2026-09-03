@@ -57,7 +57,7 @@ function runYaml(runId: RunId, fixture: LifecycleFixture): Record<string, unknow
     cancellation: fixture.status === "cancelled" ? { reason: "user requested" } : null,
     limits: {},
     counters: {},
-    telemetry: { degraded: false, level: "standard" },
+    telemetry: { degraded: runId === "run-006", level: "standard" },
     outcome,
     timestamps: {
       created_at: TIMESTAMP,
@@ -300,12 +300,11 @@ describe("monitoring Run overview and timeline", () => {
       const database = new DatabaseSync(defaultMonitorIndexPath(repositoryRoot));
       database
         .prepare(
-          "INSERT INTO evaluations (run_id, state_revision, last_event_sequence, evaluator_version, evaluation_json) VALUES (?, ?, ?, ?, ?)",
+          "UPDATE evaluations SET state_revision = ?, last_event_sequence = ?, evaluator_version = ?, evaluation_json = ? WHERE run_id = ?",
         )
         .run(
-          "run-005",
           1,
-          7,
+          9,
           1,
           JSON.stringify({
             correctness: {
@@ -325,16 +324,13 @@ describe("monitoring Run overview and timeline", () => {
               orchestration: { executions_count: 1 },
             },
           }),
+          "run-005",
         );
       database
-        .prepare("UPDATE runs SET telemetry_quality = ?, telemetry_level = ? WHERE run_id = ?")
-        .run("degraded", "debug", "run-006");
-      database
         .prepare(
-          "INSERT INTO evaluations (run_id, state_revision, last_event_sequence, evaluator_version, evaluation_json) VALUES (?, ?, ?, ?, ?)",
+          "UPDATE evaluations SET state_revision = ?, last_event_sequence = ?, evaluator_version = ?, evaluation_json = ? WHERE run_id = ?",
         )
         .run(
-          "run-006",
           1,
           9,
           1,
@@ -352,6 +348,7 @@ describe("monitoring Run overview and timeline", () => {
               orchestration: { executions_count: 2 },
             },
           }),
+          "run-006",
         );
       database.close();
 
