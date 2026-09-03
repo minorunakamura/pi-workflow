@@ -128,7 +128,12 @@ function snapshotFiles(runId: RunId): RepositoryFixture {
   };
 }
 
-function event(runId: RunId, sequence: number, type = "step.started"): Record<string, unknown> {
+function event(
+  runId: RunId,
+  sequence: number,
+  type = "step.started",
+  data: Record<string, unknown> = { step_id: "step-001" },
+): Record<string, unknown> {
   return {
     schema_version: 1,
     event_id: `evt-${String(sequence).padStart(6, "0")}`,
@@ -138,7 +143,7 @@ function event(runId: RunId, sequence: number, type = "step.started"): Record<st
     run_id: runId,
     source: { component: "test" },
     state_revision: 1,
-    data: { step_id: "step-001" },
+    data,
   };
 }
 
@@ -280,10 +285,33 @@ describe("monitoring live updates and degraded handling", () => {
       const eventPath = join(repositoryRoot, `.pi/runs/${RUN_ID}/events/events.jsonl`);
       try {
         const port = serverPort(server);
+        const initialEvaluation = await getJson(port, `/api/v1/runs/${RUN_ID}/evaluation`);
+        expect(initialEvaluation.body.evaluation).toEqual(
+          expect.objectContaining({
+            evaluation_status: "provisional",
+            source: { state_revision: 1, last_event_sequence: 1, finalized: false },
+            telemetry_quality: expect.objectContaining({ status: "insufficient" }),
+          }),
+        );
         const stream = await openSse(port, `/api/v1/runs/${RUN_ID}/events`);
         await appendFile(
           eventPath,
-          `${JSON.stringify(event(RUN_ID, 2, "step.completed"))}\n`,
+          `${JSON.stringify(
+            event(RUN_ID, 2, "execution.completed", {
+              execution_id: "exec-001",
+              step_id: "step-001",
+              telemetry: {
+                telemetry_level: "standard",
+                wall_clock_ms: 10,
+                active_wall_ms: 10,
+                execution_sum_ms: 10,
+                input_tokens: 4,
+                output_tokens: 2,
+                tokens: 6,
+                tool_calls: 1,
+              },
+            }),
+          )}\n`,
           "utf8",
         );
         const update = await stream.updates;
@@ -293,6 +321,24 @@ describe("monitoring live updates and degraded handling", () => {
             run_id: RUN_ID,
             state_revision: 1,
             last_event_sequence: 2,
+          }),
+        );
+        await eventually(async () => {
+          const evaluation = await getJson(port, `/api/v1/runs/${RUN_ID}/evaluation`);
+          const record = evaluation.body.evaluation as Record<string, unknown>;
+          return (
+            evaluation.status === 200 &&
+            (record.telemetry_quality as Record<string, unknown>)?.status === "healthy"
+          );
+        });
+        const evaluation = await getJson(port, `/api/v1/runs/${RUN_ID}/evaluation`);
+        expect(evaluation.body.evaluation).toEqual(
+          expect.objectContaining({
+            evaluation_status: "provisional",
+            source: { state_revision: 1, last_event_sequence: 2, finalized: false },
+            metrics: expect.objectContaining({
+              telemetry: expect.objectContaining({ wall_clock_ms: 10, tool_calls: 1 }),
+            }),
           }),
         );
         stream.close();
@@ -341,6 +387,7 @@ describe("monitoring live updates and degraded handling", () => {
               expect.objectContaining({
                 run_id: CORRUPT_RUN_ID,
                 index_status: "degraded",
+                telemetry_quality: "degraded",
                 error_message: expect.stringContaining("events: degraded"),
               }),
               expect.objectContaining({

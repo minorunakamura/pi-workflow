@@ -113,7 +113,15 @@ function snapshotFiles(stateRevision: number): RepositoryFixture {
   };
 }
 
-function event(sequence: number, type: "step.started" | "step.completed" = "step.started") {
+function event(
+  sequence: number,
+  type:
+    | "step.started"
+    | "step.completed"
+    | "execution.completed"
+    | "run.completed" = "step.started",
+  data: Record<string, unknown> = { step_id: "step-001" },
+) {
   return {
     schema_version: 1,
     event_id: `evt-${String(sequence).padStart(6, "0")}`,
@@ -123,7 +131,7 @@ function event(sequence: number, type: "step.started" | "step.completed" = "step
     run_id: RUN_ID,
     source: { component: "orchestrator" },
     state_revision: sequence > 2 ? 2 : 1,
-    data: { step_id: "step-001" },
+    data,
   };
 }
 
@@ -219,6 +227,104 @@ describe("Run discovery and SQLite index", () => {
       expect(second.prepare("SELECT COUNT(*) AS count FROM events").get()).toEqual({ count: 1 });
       second.close();
       await expect(readFile(runPath, "utf8")).resolves.toBe(runBeforeRebuild);
+    });
+  });
+
+  it("projects provisional/final evaluations from Run sources and rebuilds them", async () => {
+    await withTempRepository(runFiles(), async (repositoryRoot) => {
+      let indexer = new RunIndexer(repositoryRoot);
+      await indexer.index();
+      indexer.close();
+      indexer = new RunIndexer(repositoryRoot);
+      await indexer.index();
+
+      const indexPath = defaultMonitorIndexPath(repositoryRoot);
+      const readEvaluation = (): Record<string, unknown> => {
+        const database = new DatabaseSync(indexPath);
+        const row = database
+          .prepare("SELECT evaluation_json FROM evaluations WHERE run_id = ?")
+          .get(RUN_ID) as { evaluation_json: string };
+        database.close();
+        return JSON.parse(row.evaluation_json) as Record<string, unknown>;
+      };
+
+      expect(readEvaluation()).toMatchObject({
+        evaluation_status: "provisional",
+        source: { state_revision: 1, last_event_sequence: 1, finalized: false },
+        telemetry_quality: { status: "insufficient" },
+      });
+
+      await appendFile(
+        join(repositoryRoot, RUN_DIRECTORY, "events", "events.jsonl"),
+        `${JSON.stringify(
+          event(2, "execution.completed", {
+            execution_id: "exec-001",
+            step_id: "step-001",
+            agent: "worker",
+            attempt: 1,
+            status: "completed",
+            telemetry: {
+              telemetry_level: "standard",
+              wall_clock_ms: 25,
+              active_wall_ms: 25,
+              execution_sum_ms: 25,
+              input_tokens: 10,
+              output_tokens: 5,
+              tokens: 15,
+              tool_calls: 1,
+            },
+          }),
+        )}\n`,
+        "utf8",
+      );
+      await indexer.index();
+      expect(readEvaluation()).toMatchObject({
+        evaluation_status: "provisional",
+        source: { state_revision: 1, last_event_sequence: 2, finalized: false },
+        telemetry_quality: { status: "healthy" },
+        metrics: { telemetry: { wall_clock_ms: 25, input_tokens: 10, tool_calls: 1 } },
+      });
+
+      const baseRun = runYaml(2);
+      const finalizedRun = {
+        ...baseRun,
+        status: "completed",
+        finalized: true,
+        outcome: { status: "completed", request_satisfied: true },
+        timestamps: {
+          ...(baseRun.timestamps as Record<string, unknown>),
+          completed_at: TIMESTAMP,
+          finalized_at: TIMESTAMP,
+        },
+      };
+      const revisionTwo = {
+        [`${RUN_DIRECTORY}/run.yaml`]: stringify(finalizedRun),
+        ...snapshotFiles(2),
+      };
+      for (const [path, contents] of Object.entries(revisionTwo)) {
+        const absolutePath = join(repositoryRoot, path);
+        await mkdir(dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, contents, "utf8");
+      }
+      await appendFile(
+        join(repositoryRoot, RUN_DIRECTORY, "events", "events.jsonl"),
+        `${JSON.stringify(event(3, "run.completed", { status: "completed" }))}\n`,
+        "utf8",
+      );
+
+      await indexer.index();
+      const finalEvaluation = readEvaluation();
+      expect(finalEvaluation).toMatchObject({
+        evaluation_status: "final",
+        source: { state_revision: 2, last_event_sequence: 3, finalized: true },
+      });
+      indexer.close();
+
+      await rm(indexPath);
+      const rebuilt = new RunIndexer(repositoryRoot);
+      await rebuilt.index();
+      rebuilt.close();
+      expect(readEvaluation()).toEqual(finalEvaluation);
     });
   });
 

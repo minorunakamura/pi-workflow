@@ -1,14 +1,10 @@
 import { request, type IncomingHttpHeaders, type Server } from "node:http";
 import { symlink } from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
 import { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { stringify } from "yaml";
 import { describe, expect, it } from "vitest";
-import {
-  defaultMonitorIndexPath,
-  RunIndexer,
-} from "../../src/monitor/indexer/sqlite-run-indexer.js";
+import { RunIndexer } from "../../src/monitor/indexer/sqlite-run-indexer.js";
 import { startMonitorServer } from "../../src/monitor/backend/read-only-api.js";
 import type { RunId } from "../../src/domain/primitives/ids.js";
 import { withTempRepository, type RepositoryFixture } from "../fixtures/temp-repository.js";
@@ -151,7 +147,12 @@ function event(
   };
 }
 
-function runFiles(runId: RunId, model: string, includeSymlinkArtifact = false): RepositoryFixture {
+function runFiles(
+  runId: RunId,
+  model: string,
+  wallClockMs = 100,
+  includeSymlinkArtifact = false,
+): RepositoryFixture {
   const root = `.pi/runs/${runId}`;
   const events = [
     event(runId, 1, "run.created", {}),
@@ -164,8 +165,18 @@ function runFiles(runId: RunId, model: string, includeSymlinkArtifact = false): 
       provider: "test",
       model,
       thinking: "standard",
-      timing: { wall_clock_ms: 100 },
+      timing: { wall_clock_ms: wallClockMs },
       tokens: { input_tokens: 10, output_tokens: 5 },
+      telemetry: {
+        telemetry_level: "standard",
+        wall_clock_ms: wallClockMs,
+        active_wall_ms: wallClockMs,
+        execution_sum_ms: wallClockMs,
+        input_tokens: 10,
+        output_tokens: 5,
+        tokens: 15,
+        tool_calls: 1,
+      },
     }),
     event(runId, 3, "artifact.finalized", {
       path: ARTIFACT_PATH,
@@ -241,39 +252,13 @@ describe("read-only monitoring API", () => {
   it("serves the required read projections and compare data", async () => {
     await withTempRepository(
       {
-        ...runFiles(RUN_ONE, "model-a"),
-        ...runFiles(RUN_TWO, "model-b"),
+        ...runFiles(RUN_ONE, "model-a", 100),
+        ...runFiles(RUN_TWO, "model-b", 150),
       },
       async (repositoryRoot) => {
         const indexer = new RunIndexer(repositoryRoot);
         await indexer.index();
         indexer.close();
-
-        const database = new DatabaseSync(defaultMonitorIndexPath(repositoryRoot));
-        for (const [runId, model, wallClock] of [
-          [RUN_ONE, "model-a", 100],
-          [RUN_TWO, "model-b", 150],
-        ] as const) {
-          database
-            .prepare(
-              "INSERT INTO evaluations (run_id, state_revision, last_event_sequence, evaluator_version, evaluation_json) VALUES (?, ?, ?, ?, ?)",
-            )
-            .run(
-              runId,
-              1,
-              3,
-              1,
-              JSON.stringify({
-                evaluation_status: "provisional",
-                comparison: {
-                  workflow_version: 1,
-                  model_provider_usage: [{ provider: "test", model }],
-                },
-                metrics: { telemetry: { wall_clock_ms: wallClock } },
-              }),
-            );
-        }
-        database.close();
 
         const server = await startMonitorServer(repositoryRoot);
         try {
@@ -351,11 +336,25 @@ describe("read-only monitoring API", () => {
           expect(artifact.headers["x-content-type-options"]).toBe("nosniff");
           expect((artifact.body.content as Record<string, unknown>).body).toBe("artifact body\n");
           expect(evaluation.status).toBe(200);
-          expect((evaluation.body.evaluation as Record<string, unknown>).metrics).toBeDefined();
+          expect(evaluation.body.evaluation).toEqual(
+            expect.objectContaining({
+              evaluation_status: "provisional",
+              source: { state_revision: 1, last_event_sequence: 3, finalized: false },
+              telemetry_quality: expect.objectContaining({ status: "healthy" }),
+              metrics: expect.any(Object),
+            }),
+          );
           expect(compare.status).toBe(200);
+          expect(compare.body.evaluations).toEqual(
+            expect.objectContaining({
+              [RUN_ONE]: expect.any(Object),
+              [RUN_TWO]: expect.any(Object),
+            }),
+          );
           expect(compare.body.comparability).toEqual(
             expect.objectContaining({ same_request_requirement: true, same_model: false }),
           );
+          expect(compare.body.warnings).toContain("different model/provider/thinking");
           expect(
             (compare.body.deltas as Record<string, unknown>)["telemetry.wall_clock_ms"],
           ).toEqual(expect.objectContaining({ absolute: 50, percentage: 50 }));
@@ -369,7 +368,7 @@ describe("read-only monitoring API", () => {
   it("rejects workflow mutations and unsafe Artifact paths", async () => {
     await withTempRepository(
       {
-        ...runFiles(RUN_ONE, "model-a", true),
+        ...runFiles(RUN_ONE, "model-a", 100, true),
         "outside.md": artifactContents(RUN_ONE),
       },
       async (repositoryRoot) => {

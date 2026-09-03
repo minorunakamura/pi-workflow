@@ -368,7 +368,9 @@ function renderRunList(data: MonitorPageData): string {
                       ? "healthy"
                       : run.telemetry_quality === "degraded"
                         ? "degraded"
-                        : "unknown";
+                        : run.telemetry_quality === "insufficient"
+                          ? "insufficient"
+                          : "unknown";
                   return `<tr class="run-row lifecycle-row-${presentation.kind}" data-lifecycle="${presentation.kind}"${selected ? ' aria-current="true"' : ""}>
                     <td><a href="/?run=${encodeURIComponent(run.run_id)}">${escapeHtml(run.run_id)}</a></td>
                     <td>${escapeHtml(requestLabel(run))}</td>
@@ -1203,7 +1205,7 @@ th { color: #536170; font-size: .78rem; white-space: nowrap; }
 .run-row:hover, .run-row[aria-current="true"] { background: #f4f8fc; }
 .telemetry { font-weight: 700; }
 .telemetry-healthy { color: #176235; }
-.telemetry-degraded, .telemetry-unknown { color: #9a5700; }
+.telemetry-degraded, .telemetry-insufficient, .telemetry-unknown { color: #9a5700; }
 .muted { color: #687582; font-size: .88em; }
 .empty { padding: 18px 0; color: #687582; }
 .run-detail { max-width: 1100px; margin: 0 auto; }

@@ -156,6 +156,43 @@ describe("Run evaluation record", () => {
     expect(record.comparison.effective_config_fingerprint).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("classifies healthy, degraded, and insufficient telemetry without inventing metrics", () => {
+    const healthy = buildRunEvaluationRecord(input({ events: [event(1)] }));
+    const degraded = buildRunEvaluationRecord(
+      input({ state: state(false, true), events: [event(1)] }),
+    );
+    const insufficient = buildRunEvaluationRecord(input({ events: [] }));
+    const executionWithoutTelemetry = buildRunEvaluationRecord(
+      input({
+        events: [
+          {
+            ...event(1),
+            data: { execution_id: "exec-1", step_id: "step-001" },
+          },
+        ],
+      }),
+    );
+    const partiallyObserved = buildRunEvaluationRecord(
+      input({
+        events: [
+          event(1),
+          {
+            ...event(2),
+            data: { execution_id: "exec-2", step_id: "step-001" },
+          },
+        ],
+      }),
+    );
+
+    expect(healthy.telemetry_quality.status).toBe("healthy");
+    expect(degraded.telemetry_quality.status).toBe("degraded");
+    expect(insufficient.telemetry_quality.status).toBe("insufficient");
+    expect(executionWithoutTelemetry.telemetry_quality.status).toBe("insufficient");
+    expect(partiallyObserved.telemetry_quality.status).toBe("degraded");
+    expect(insufficient.metrics.telemetry.input_tokens).toBeNull();
+    expect(insufficient.metrics.telemetry.tool_calls).toBeNull();
+  });
+
   it("is deterministic for the same source and evaluator version", () => {
     const first = buildRunEvaluationRecord(input());
     const second = buildRunEvaluationRecord(

@@ -1844,15 +1844,15 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] `RunEvaluationRecord.telemetry_quality.status` supports `healthy`, `degraded`, and `insufficient` according to the authoritative telemetry-quality rules.
-- [ ] Missing required telemetry is represented explicitly and is not silently converted to zero-valued healthy metrics.
-- [ ] On relevant State/Event changes, the Monitoring indexer invokes the deterministic metrics/evaluation path and writes/updates the `evaluations` SQLite projection.
-- [ ] A finalized Run receives a `final` evaluation for the current evaluator version; active/non-final Runs can receive a `provisional` evaluation.
-- [ ] Full Monitoring rebuild from authoritative Run directories recreates evaluation projections without relying on prior SQLite state or manually inserted evaluation records.
-- [ ] Incremental indexing updates evaluation projection consistently with indexed State/Event revisions and does not expose a mixed projection for one Run update.
-- [ ] Evaluation and Two-Run Compare read paths consume generated evaluation records and surface telemetry-quality/comparability warnings where applicable.
-- [ ] Gate D E2E proves Run discovery/index → metrics aggregation → evaluation → SQLite projection → Evaluation/Compare API through the production Monitoring composition; tests that satisfy the path only by manual evaluation INSERT are insufficient.
-- [ ] `/api/v1/health` is not required to close this Story or Phase 1 release unless `09-monitoring.md` Phase 1 MVP Required is explicitly changed to make it mandatory.
+- [x] `RunEvaluationRecord.telemetry_quality.status` supports `healthy`, `degraded`, and `insufficient` according to the authoritative telemetry-quality rules.
+- [x] Missing required telemetry is represented explicitly and is not silently converted to zero-valued healthy metrics.
+- [x] On relevant State/Event changes, the Monitoring indexer invokes the deterministic metrics/evaluation path and writes/updates the `evaluations` SQLite projection.
+- [x] A finalized Run receives a `final` evaluation for the current evaluator version; active/non-final Runs can receive a `provisional` evaluation.
+- [x] Full Monitoring rebuild from authoritative Run directories recreates evaluation projections without relying on prior SQLite state or manually inserted evaluation records.
+- [x] Incremental indexing updates evaluation projection consistently with indexed State/Event revisions and does not expose a mixed projection for one Run update.
+- [x] Evaluation and Two-Run Compare read paths consume generated evaluation records and surface telemetry-quality/comparability warnings where applicable.
+- [x] Gate D E2E proves Run discovery/index → metrics aggregation → evaluation → SQLite projection → Evaluation/Compare API through the production Monitoring composition; tests that satisfy the path only by manual evaluation INSERT are insufficient.
+- [x] `/api/v1/health` is not required to close this Story or Phase 1 release unless `09-monitoring.md` Phase 1 MVP Required is explicitly changed to make it mandatory.
 
 **Test Levels:** `UNIT`, `INT`, `E2E`
 
