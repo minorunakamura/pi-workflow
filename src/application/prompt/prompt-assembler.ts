@@ -84,6 +84,25 @@ function renderValue(value: unknown): string {
   return typeof value === "string" ? value : stableJson(value);
 }
 
+function isStepResultOutputContract(value: JsonValue): boolean {
+  if (!isRecord(value)) return false;
+  const properties = value.properties;
+  return (
+    value.type === "object" &&
+    value.title === "StepResultV1" &&
+    value.candidateIdentity === "semantic-only; no Agent-generated authoritative identity" &&
+    isRecord(properties) &&
+    Object.hasOwn(properties, "identity") &&
+    Object.hasOwn(properties, "runtime")
+  );
+}
+
+function renderOutputContract(value: JsonValue): string {
+  return isStepResultOutputContract(value)
+    ? "The complete StepResultV1 field-level contract is supplied separately as the structured-output schema."
+    : stableJson(value);
+}
+
 function section(title: string, body: string): string {
   return `## ${title}\n${body}`;
 }
@@ -280,7 +299,7 @@ export function assemblePrompt(input: PromptAssemblerInput): PromptAssemblyResul
       [
         `Completion criteria: ${stableJson(request.objective.completionCriteria)}`,
         `Expected artifact types: ${stableJson(request.outputs.expectedArtifactTypes)}`,
-        `Output contract: ${stableJson(request.outputs.outputContract)}`,
+        `Output contract: ${renderOutputContract(request.outputs.outputContract)}`,
         STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
       ].join("\n"),
     ),

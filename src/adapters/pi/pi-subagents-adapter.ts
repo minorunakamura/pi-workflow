@@ -185,17 +185,30 @@ function resolvedToolNames(request: AgentExecutionRequestV1): ReadonlySet<string
   return new Set([...resolved].filter((tool) => !deny.has(tool)));
 }
 
+function isStepResultOutputContract(value: JsonValue | undefined): boolean {
+  if (value === undefined || !isJsonObject(value)) return false;
+  const properties = value.properties;
+  return (
+    value.type === "object" &&
+    value.title === "StepResultV1" &&
+    value.candidateIdentity === "semantic-only; no Agent-generated authoritative identity" &&
+    properties !== undefined &&
+    isJsonObject(properties) &&
+    Object.hasOwn(properties, "identity") &&
+    Object.hasOwn(properties, "runtime")
+  );
+}
+
 function createTask(request: AgentExecutionRequestV1, prompt?: string): string {
-  const requestForTask =
-    prompt === undefined
-      ? request
-      : {
-          ...request,
-          outputs: {
-            ...request.outputs,
-            outputContract: "See the full Output contract in the resolved Workflow Prompt above.",
-          },
-        };
+  const outputContract = isStepResultOutputContract(request.outputs.outputContract)
+    ? "The complete StepResultV1 field-level contract is supplied separately as the structured-output schema."
+    : prompt === undefined
+      ? request.outputs.outputContract
+      : "See the full Output contract in the resolved Workflow Prompt above.";
+  const requestForTask = {
+    ...request,
+    outputs: { ...request.outputs, outputContract },
+  };
   return [
     "Execute exactly one Workflow Agent Execution.",
     request.objective.objective,
@@ -205,7 +218,9 @@ function createTask(request: AgentExecutionRequestV1, prompt?: string): string {
           "Resolved Workflow Prompt (assembled from the selected Skill content and execution inputs):",
           prompt,
         ]),
-    STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
+    ...(prompt === undefined || !prompt.includes(STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS)
+      ? [STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS]
+      : []),
     "Execution request (JSON):",
     JSON.stringify(requestForTask),
     "Return only the StepResultV1 structured result and preserve the request identity.",

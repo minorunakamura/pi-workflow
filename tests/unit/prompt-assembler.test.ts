@@ -9,7 +9,10 @@ import {
   PROMPT_SECTION_ORDER,
   type PromptAssemblerInput,
 } from "../../src/application/prompt/prompt-assembler.js";
-import type { AgentExecutionRequestV1 } from "../../src/contracts/execution/agent-execution.js";
+import {
+  STEP_RESULT_AGENT_OUTPUT_CONTRACT,
+  type AgentExecutionRequestV1,
+} from "../../src/contracts/execution/agent-execution.js";
 import type { ExecutionId, RunId, StepId } from "../../src/domain/primitives/ids.js";
 
 const worker = AGENT_DEFINITIONS.find(({ id }) => id === "worker");
@@ -188,6 +191,29 @@ describe("assemblePrompt", () => {
     );
     expect(content).toContain(
       "Artifacts supplied by an Agent are analysis/research drafts with type, purpose, and content",
+    );
+  });
+
+  it("keeps the full structured contract out of the natural-language prompt", () => {
+    const executionRequest = request();
+    const result = assemblePrompt(
+      input({
+        executionRequest: {
+          ...executionRequest,
+          outputs: {
+            ...executionRequest.outputs,
+            outputContract: structuredClone(STEP_RESULT_AGENT_OUTPUT_CONTRACT),
+          },
+        },
+      }),
+    );
+
+    expect(result.content).toContain(
+      "The complete StepResultV1 field-level contract is supplied separately as the structured-output schema.",
+    );
+    expect(result.content).not.toContain('"candidateGroups"');
+    expect(result.size).toBeLessThan(
+      Buffer.byteLength(JSON.stringify(STEP_RESULT_AGENT_OUTPUT_CONTRACT), "utf8"),
     );
   });
 
