@@ -2,7 +2,6 @@ name: STORY-12-05 cross-platform
 
 on:
   workflow_dispatch:
-  push:
   pull_request:
 
 permissions:
