@@ -104,6 +104,53 @@ function requiredText(value: unknown, name: string): string {
   return value;
 }
 
+export type RepositoryPrerequisiteErrorCode = "ERR-REPOSITORY-NOT-GIT" | "ERR-REPOSITORY-NO-HEAD";
+
+export class RepositoryPrerequisiteError extends Error {
+  readonly category = "validation" as const;
+  readonly error_id: RepositoryPrerequisiteErrorCode;
+  readonly severity = "error" as const;
+  readonly retryable = false;
+  readonly recoverable = true;
+
+  constructor(
+    readonly code: RepositoryPrerequisiteErrorCode,
+    message: string,
+  ) {
+    super(`${code}\n\n${message}`);
+    this.name = "RepositoryPrerequisiteError";
+    this.error_id = code;
+  }
+}
+
+export async function validateRepositoryPrerequisites(
+  repository: Pick<RepositoryAdapter, "getRoot" | "getHead">,
+): Promise<string> {
+  let root: string;
+  try {
+    root = await repository.getRoot();
+  } catch {
+    throw new RepositoryPrerequisiteError(
+      "ERR-REPOSITORY-NOT-GIT",
+      "pi-workflow requires a Git repository.\nInitialize the repository and create an initial commit before starting a workflow.",
+    );
+  }
+
+  try {
+    const head = await repository.getHead();
+    if (typeof head !== "string" || head.trim().length === 0) {
+      throw new Error("Repository HEAD is empty");
+    }
+  } catch {
+    throw new RepositoryPrerequisiteError(
+      "ERR-REPOSITORY-NO-HEAD",
+      "pi-workflow requires a Git repository with at least one commit.\nCreate an initial commit before starting a workflow.",
+    );
+  }
+
+  return root;
+}
+
 function playbook(command: StartWorkflowCommand): PlaybookDefinition {
   const definition = PLAYBOOK_DEFINITIONS.find(({ id }) => id === command);
   if (definition === undefined) {
@@ -410,6 +457,7 @@ export class StartWorkflowUseCase implements StartWorkflowContract {
   ): Promise<WorkflowState> {
     const rawRequest = requiredText(args, "Workflow request");
     playbook(command);
+    await validateRepositoryPrerequisites(this.dependencies.repository);
     const createdAt = timestamp(this.now);
     const workspace =
       this.dependencies.workspaceLock === undefined
