@@ -1782,7 +1782,7 @@ spec_refs:
 - [x] Required repository drift checks execute on the installed/default lifecycle boundaries and unresolved relevant/critical/unknown drift blocks unsafe continuation/completion.
 - [x] Agent mode/permissions and Tool capability policy are propagated to the concrete Pi Agent Runtime adapter as enforceable execution constraints where supported; prompt text is not the sole security boundary.
 - [x] Read-only/verify-only Agents cannot mutate source through the normal runtime path, Worker cannot escape approved Write Scope, and normal Phase 1 execution cannot perform prohibited Git writes.
-- [ ] Security/golden-repository E2E covers dirty tree, pre-existing changes, out-of-scope mutation, drift, prohibited Agent mutation, and Tool-capability denial through the production composition.
+- [x] Security/golden-repository E2E covers dirty tree, pre-existing changes, out-of-scope mutation, drift, prohibited Agent mutation, and Tool-capability denial through the production composition.
 
 **Test Levels:** `UNIT`, `INT`, `E2E`, `CRASH`
 
