@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { createEventBus, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   SUBAGENT_DELEGATION_CANCEL_EVENT,
   SUBAGENT_DELEGATION_REQUEST_EVENT,
@@ -13,6 +13,7 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   PiSubagentsAdapter,
+  PiSubagentsContextUnavailableError,
   STEP_RESULT_SCHEMA,
 } from "../../src/adapters/pi/pi-subagents-adapter.js";
 import {
@@ -127,6 +128,50 @@ describe("PiSubagentsAdapter integration", () => {
       },
     });
     expect(StepResultV1Schema.parse(actual)).toEqual(actual);
+  });
+
+  it("fails closed when the invocation context is unavailable or stale", async () => {
+    const events = createEventBus();
+    let context: ExtensionContext | undefined;
+    const adapter = new PiSubagentsAdapter(
+      { events },
+      { cwd: "/tmp/workflow", getContext: () => context },
+    );
+
+    await expect(adapter.run(request())).rejects.toMatchObject({
+      name: "PiSubagentsContextUnavailableError",
+      code: "PI_EXTENSION_CONTEXT_UNAVAILABLE",
+    } satisfies Partial<PiSubagentsContextUnavailableError>);
+
+    context = new Proxy({} as ExtensionContext, {
+      get() {
+        throw new Error("This extension ctx is stale after session replacement or reload.");
+      },
+    });
+    await expect(adapter.run(request())).rejects.toMatchObject({
+      code: "PI_EXTENSION_CONTEXT_UNAVAILABLE",
+    });
+  });
+
+  it("normalizes an unavailable structured bridge response", async () => {
+    const events = createEventBus();
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+        requestId: delegation.requestId,
+        ownerRunId: delegation.ownerRunId,
+        nodeId: delegation.nodeId,
+        status: "unavailable_context",
+        error: "No active extension context for delegated subagent execution.",
+      } satisfies SubagentDelegationResponse);
+    });
+
+    await expect(
+      new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(request()),
+    ).rejects.toMatchObject({
+      name: "PiSubagentsContextUnavailableError",
+      code: "PI_EXTENSION_CONTEXT_UNAVAILABLE",
+    });
   });
 
   it("passes the assembled selected Skill prompt into the delegated Agent Execution", async () => {

@@ -140,9 +140,19 @@ function failureProvenance(
 
 function errorValue(error: unknown): JsonValue {
   if (error instanceof Error) {
+    const details = error as unknown as Record<string, unknown>;
+    const code = typeof details.code === "string" ? redactSecrets(details.code) : undefined;
+    const category =
+      typeof details.category === "string" ? redactSecrets(details.category) : undefined;
+    const retryable = typeof details.retryable === "boolean" ? details.retryable : undefined;
+    const recoverable = typeof details.recoverable === "boolean" ? details.recoverable : undefined;
     return {
       name: redactSecrets(error.name),
       message: redactSecrets(error.message),
+      ...(code === undefined ? {} : { code }),
+      ...(category === undefined ? {} : { category }),
+      ...(retryable === undefined ? {} : { retryable }),
+      ...(recoverable === undefined ? {} : { recoverable }),
     };
   }
   return redactSecrets(String(error));

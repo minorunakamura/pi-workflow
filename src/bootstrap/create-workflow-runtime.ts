@@ -1,6 +1,7 @@
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
+  ExtensionContext,
   ExtensionUIContext,
   Skill as PiSkill,
 } from "@earendil-works/pi-coding-agent";
@@ -144,16 +145,11 @@ export type WorkflowRuntimeDependencies = RuntimeUseCases & {
 
 type PiRuntimeFacilities = Pick<ExtensionAPI, "events"> &
   Partial<Pick<ExtensionAPI, "getAllTools">>;
-type ProductionCommandContext = Pick<
-  ExtensionCommandContext,
-  "cwd" | "model" | "scopedModels" | "modelRegistry" | "getSystemPromptOptions"
-> &
-  Readonly<{
-    sessionManager?: Readonly<{ getSessionId(): string }>;
-    thinkingLevel?: string;
-  }>;
+type ProductionCommandContext = ExtensionContext &
+  Pick<ExtensionCommandContext, "getSystemPromptOptions">;
 
 type ProductionRuntimeFactory = (context: unknown) => Promise<RuntimeUseCases>;
+type ProductionContextRef = { current: ProductionCommandContext };
 
 type ProductionExecution = Readonly<{
   agentRuntime: AgentRuntime;
@@ -1650,9 +1646,9 @@ async function finalizeProductionStep(
 
 async function createProductionUseCases(
   pi: PiRuntimeFacilities | undefined,
-  value: unknown,
+  contextRef: ProductionContextRef,
 ): Promise<WorkflowUseCases> {
-  const context = productionContext(value);
+  const context = contextRef.current;
   const repository: RepositoryAdapter = new GitRepositoryAdapter(context.cwd);
   const repositoryRoot = await validateRepositoryPrerequisites(repository);
   const runLock = new FileRunLock(repositoryRoot);
@@ -1663,43 +1659,49 @@ async function createProductionUseCases(
   const workspaceLock = new FileWorkspaceLock(repositoryRoot);
   const idAllocator = createIdAllocator();
 
-  let piAgentRuntime: PiSubagentsAdapter | undefined;
+  let executionPromise: Promise<ProductionExecution> | undefined;
+  let executionContext: ProductionCommandContext | undefined;
+  const execution = (): Promise<ProductionExecution> => {
+    const currentContext = contextRef.current;
+    if (executionPromise === undefined || executionContext !== currentContext) {
+      executionContext = currentContext;
+      executionPromise = Promise.resolve().then(() => {
+        const models = availableModels(currentContext);
+        if (models.length === 0) {
+          throw new Error("Production workflow runtime requires an available Pi model");
+        }
+        const toolNames = createPiToolNames(pi);
+        const toolCatalog = createPiToolCatalog(toolNames);
+        return {
+          agentRuntime,
+          executionResolver: new ExecutionResolver({
+            modelCatalog: modelCatalog(models),
+            toolCatalog,
+          }),
+          skillCatalog: createPiSkillCatalog(currentContext),
+          modelCandidates: models,
+          toolCatalog,
+          toolNames,
+        };
+      });
+    }
+    return executionPromise;
+  };
+
   const agentRuntime: AgentRuntime = {
     run: async (request, signal) => {
       const production = await execution();
-      const sessionId = context.sessionManager?.getSessionId();
-      piAgentRuntime ??= new PiSubagentsAdapter(requirePiFacilities(pi), {
+      const invocationContext = contextRef.current;
+      const sessionId = invocationContext.sessionManager?.getSessionId();
+      const adapter = new PiSubagentsAdapter(requirePiFacilities(pi), {
         cwd: repositoryRoot,
         ...(sessionId === undefined ? {} : { sessionId }),
+        getContext: () => contextRef.current,
         buildPrompt: (executionRequest) =>
           productionPrompt(executionRequest, production.skillCatalog),
       } satisfies PiSubagentsAdapterOptions);
-      return piAgentRuntime.run(request, signal);
+      return adapter.run(request, signal);
     },
-  };
-
-  let executionPromise: Promise<ProductionExecution> | undefined;
-  const execution = (): Promise<ProductionExecution> => {
-    executionPromise ??= Promise.resolve().then(() => {
-      const models = availableModels(context);
-      if (models.length === 0) {
-        throw new Error("Production workflow runtime requires an available Pi model");
-      }
-      const toolNames = createPiToolNames(pi);
-      const toolCatalog = createPiToolCatalog(toolNames);
-      return {
-        agentRuntime,
-        executionResolver: new ExecutionResolver({
-          modelCatalog: modelCatalog(models),
-          toolCatalog,
-        }),
-        skillCatalog: createPiSkillCatalog(context),
-        modelCandidates: models,
-        toolCatalog,
-        toolNames,
-      };
-    });
-    return executionPromise;
   };
 
   const cancellation: CancellationLifecycle = new CancellationLifecycle({
@@ -1824,7 +1826,7 @@ async function createProductionUseCases(
         const request = await buildProductionRequest(
           { state, step, iteration },
           await execution(),
-          context,
+          contextRef.current,
           artifactReader,
           idAllocator,
         );
@@ -1925,18 +1927,25 @@ async function createProductionUseCases(
 function createProductionRuntimeFactory(
   pi: PiRuntimeFacilities | undefined,
 ): ProductionRuntimeFactory {
-  const runtimes = new Map<string, Promise<RuntimeUseCases>>();
+  const runtimes = new Map<
+    string,
+    { context: ProductionContextRef; runtime: Promise<RuntimeUseCases> }
+  >();
   return (value) => {
     const context = productionContext(value);
     const sessionId = context.sessionManager?.getSessionId() ?? "";
     const key = `${resolvePath(context.cwd)}\u0000${sessionId}`;
     const existing = runtimes.get(key);
-    if (existing !== undefined) return existing;
-    const runtime = createProductionUseCases(pi, context).catch((error) => {
-      runtimes.delete(key);
+    if (existing !== undefined) {
+      existing.context.current = context;
+      return existing.runtime;
+    }
+    const contextRef: ProductionContextRef = { current: context };
+    const runtime = createProductionUseCases(pi, contextRef).catch((error) => {
+      if (runtimes.get(key)?.runtime === runtime) runtimes.delete(key);
       throw error;
     });
-    runtimes.set(key, runtime);
+    runtimes.set(key, { context: contextRef, runtime });
     return runtime;
   };
 }
