@@ -105,7 +105,8 @@ function stepResult(request: AgentExecutionRequestV1): Record<string, unknown> {
       request.identity.agentId === "verifier"
         ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
         : [],
-    observations: request.identity.agentId === "planner" ? [{ write_scope: ["src"] }] : [],
+    ...(request.identity.agentId === "planner" ? { plan: { write_scope: ["src"] } } : {}),
+    observations: [],
     blocked: null,
     failure: null,
     runtime: {},

@@ -499,25 +499,28 @@ function thinkingLevel(context: ProductionCommandContext): string {
 function planWriteScope(state: WorkflowState): readonly string[] {
   const plan = state.run.current_plan;
   if (!isRecord(plan)) return [];
-  const value = plan.write_scope ?? plan.writeScope;
+  const value = plan.write_scope;
   return value === undefined ? [] : writeScopePaths(value as unknown as RepositoryScope);
 }
 
-function candidateWriteScope(value: unknown): unknown {
-  if (!isRecord(value)) return undefined;
-  const direct = value.write_scope ?? value.writeScope;
-  if (direct !== undefined) return direct;
-  const nested = value.plan;
-  if (!isRecord(nested)) return undefined;
-  return nested.write_scope ?? nested.writeScope;
+function plannedWriteScope(result: StepResultV1): readonly string[] | undefined {
+  return result.plan === undefined
+    ? undefined
+    : writeScopePaths(result.plan.write_scope as unknown as RepositoryScope);
 }
 
-function plannedWriteScope(result: StepResultV1): readonly string[] | undefined {
-  for (const candidate of [...result.observations, result.runtime]) {
-    const value = candidateWriteScope(candidate);
-    if (value !== undefined) return writeScopePaths(value as unknown as RepositoryScope);
-  }
-  return undefined;
+const PLAN_WRITE_SCOPE_BLOCK_CLASSIFICATION = "recovery-required" as const;
+
+function planWriteScopeBlock(stepId: StepId, detail?: string): JsonObject {
+  return {
+    reason:
+      detail === undefined
+        ? "Planner completed without a non-empty structured Plan Write Scope"
+        : `Planner returned an invalid structured Plan Write Scope: ${detail}`,
+    classification: PLAN_WRITE_SCOPE_BLOCK_CLASSIFICATION,
+    step_id: stepId,
+    reference: "StepResultV1.plan.write_scope",
+  };
 }
 
 async function buildProductionRequest(
@@ -539,6 +542,9 @@ async function buildProductionRequest(
   execution.skillCatalog.resolveForAgent(definition.id, skillReferences);
 
   const workerScope = definition.id === "worker" ? planWriteScope(input.state) : [];
+  if (definition.id === "worker" && workerScope.length === 0) {
+    throw new Error("Worker dispatch requires a non-empty approved Plan Write Scope");
+  }
   const requestedCapabilities = [
     "repository-read",
     ...(definition.id === "worker" && workerScope.length > 0 ? ["repository-write"] : []),
@@ -1293,7 +1299,7 @@ function productionPostconditions(
       : step;
   });
 
-  const status =
+  const normalRunStatus =
     stepStatus === "completed" || (stepStatus === "failed" && input.step.type === "verification")
       ? "running"
       : stepStatus;
@@ -1303,29 +1309,48 @@ function productionPostconditions(
       ? currentPlan.version
       : 0;
   const isReplan = input.step.type === "planning" && input.step.objective.startsWith("re-plan");
+  const isPlanningCompletion = input.step.type === "planning" && stepStatus === "completed";
+  let plannedScope: readonly string[] | undefined;
+  let planScopeError: string | undefined;
+  if (isPlanningCompletion) {
+    try {
+      plannedScope = plannedWriteScope(input.result);
+    } catch (error) {
+      planScopeError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const validPlanScope = plannedScope !== undefined && plannedScope.length > 0;
+  const missingPlanScope = isPlanningCompletion && !validPlanScope;
   const nextPlan =
-    input.step.type !== "planning" || stepStatus !== "completed"
+    !isPlanningCompletion || missingPlanScope
       ? currentPlan
       : {
           ...currentPlan,
+          ...input.result.plan,
           ...(isReplan ? { version: planVersion + 1 } : { version: planVersion || 1 }),
-          write_scope: plannedWriteScope(input.result) ?? [],
+          requirement_revision: input.state.snapshot.requirement.revision,
+          write_scope: plannedScope ?? [],
           applicability: { status: "current" as const },
         };
+  const runStatus = missingPlanScope ? ("blocked" as const) : normalRunStatus;
   const repositoryReconciled =
     input.step.objective === "reconcile repository drift" && stepStatus === "completed";
   return {
     ...input.state,
     run: {
       ...input.state.run,
-      status,
+      status: runStatus,
       current_step: {
         id: input.step.id,
         execution_id: input.result.identity.executionId,
         status: stepStatus,
       },
-      blocked: stepStatus === "blocked" ? input.result.blocked : null,
-      failure: status === "failed" ? input.result.failure : null,
+      blocked: missingPlanScope
+        ? planWriteScopeBlock(input.step.id, planScopeError)
+        : stepStatus === "blocked"
+          ? input.result.blocked
+          : null,
+      failure: runStatus === "failed" ? input.result.failure : null,
       current_plan: nextPlan,
       repository: repositoryReconciled
         ? { ...input.state.run.repository, resolution: "reconciled" }
