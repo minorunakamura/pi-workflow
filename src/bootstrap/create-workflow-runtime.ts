@@ -94,11 +94,12 @@ import {
 } from "../domain/requirements/requirement.js";
 import { PLAYBOOK_DEFINITIONS, type PlaybookDefinition } from "../playbooks/definitions.js";
 import type { AgentRuntime } from "../ports/agent-runtime.js";
-import type {
-  JsonObject,
-  JsonValue,
-  AgentExecutionRequestV1,
-  StepResultV1,
+import {
+  STEP_RESULT_AGENT_OUTPUT_CONTRACT,
+  type JsonObject,
+  type JsonValue,
+  type AgentExecutionRequestV1,
+  type StepResultV1,
 } from "../contracts/execution/agent-execution.js";
 import { ArtifactFrontMatterV1Schema } from "../contracts/artifacts/artifact.js";
 import type { ArtifactReader, ArtifactRef, ArtifactStore } from "../ports/artifact-store.js";
@@ -593,7 +594,10 @@ async function buildProductionRequest(
       manifest: contextPack.manifest,
       artifactRefs: contextPack.artifactRefs,
     },
-    outputs: { expectedArtifactTypes: [], outputContract: {} },
+    outputs: {
+      expectedArtifactTypes: [],
+      outputContract: STEP_RESULT_AGENT_OUTPUT_CONTRACT,
+    },
   } as const;
 
   const resolved = execution.executionResolver.resolve(request, requestedCapabilities);

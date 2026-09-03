@@ -411,10 +411,13 @@ describe("packed Pi Package production Agent runtime", () => {
         "why",
         "blast-radius",
       ]);
-      expect(requests.find(({ agent }) => agent === "scout")?.task).toContain(
-        "Selected Skill how@1.0.0",
-      );
-      expect(requests.find(({ agent }) => agent === "scout")?.task).toContain("## Procedure");
+      const scoutTask = requests.find(({ agent }) => agent === "scout")?.task ?? "";
+      expect(scoutTask).toContain("Selected Skill how@1.0.0");
+      expect(scoutTask).toContain("## Procedure");
+      expect(scoutTask).toContain("Agent candidate identity boundary:");
+      expect(scoutTask).toContain("Do not include `id`, `authoritative_id`, or `state_id`");
+      expect(scoutTask).toContain("Orchestrator normalization allocates authoritative identity");
+      expect(scoutTask).toContain("authoritativeAllocation");
       expect(notifications.join("\n")).not.toContain("NOT_IMPLEMENTED");
 
       const audit = (await readFile(auditPath, "utf8"))

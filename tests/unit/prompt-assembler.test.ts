@@ -155,6 +155,30 @@ describe("assemblePrompt", () => {
     expect(first.telemetry).not.toHaveProperty("content");
   });
 
+  it("states that every Agent candidate group is semantic-only", () => {
+    const content = assemblePrompt(input()).content;
+
+    expect(content).toContain("Agent candidate identity boundary:");
+    expect(content).toContain("Do not include `id`, `authoritative_id`, or `state_id` fields.");
+    for (const group of [
+      "uncertainty_candidates",
+      "decision_requests",
+      "requirement_candidates.acceptance_criteria",
+      "requirement_candidates.constraints",
+      "requirement_candidates.assumptions",
+      "finding_candidates",
+      "finding_rechecks",
+      "plan_deviations",
+      "skill_requests",
+      "execution_checks",
+      "observations",
+    ]) {
+      expect(content).toContain(group);
+    }
+    expect(content).toContain("Orchestrator normalization allocates authoritative identity");
+    expect(content).toContain("Domain-model IDs shown in context are references/evidence");
+  });
+
   it("does not silently omit a selected Skill without resolved content", () => {
     expect(() =>
       assemblePrompt(

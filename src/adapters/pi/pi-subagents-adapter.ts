@@ -13,6 +13,7 @@ import {
 import { registerSubagentCapabilityCeiling } from "pi-subagents/capability-ceiling";
 import {
   parseStepResultV1,
+  STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
   type AgentExecutionRequestV1,
   type JsonObject,
   type JsonValue,
@@ -85,11 +86,20 @@ export class PiSubagentsToolCapabilityError extends Error {
 }
 
 const resultArraySchema = { type: "array" } as const;
-const candidateArraySchema = { type: "array", items: { type: "object" } } as const;
+const candidateArraySchema = {
+  type: "array",
+  items: {
+    type: "object",
+    description:
+      "Semantic candidate content only; authoritative identity is assigned by the Orchestrator.",
+  },
+} as const;
 
 /** The structured result boundary is checked again by StepResultV1Schema below. */
 export const STEP_RESULT_SCHEMA = {
   type: "object",
+  description:
+    "StepResultV1 from an Agent. Candidate objects are semantic-only; the Orchestrator allocates authoritative identity after validation.",
   properties: {
     identity: {
       type: "object",
@@ -254,6 +264,7 @@ function createTask(request: AgentExecutionRequestV1, prompt?: string): string {
           "Resolved Workflow Prompt (assembled from the selected Skill content and execution inputs):",
           prompt,
         ]),
+    STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
     "Execution request (JSON):",
     JSON.stringify(request),
     "Return only the StepResultV1 structured result and preserve the request identity.",

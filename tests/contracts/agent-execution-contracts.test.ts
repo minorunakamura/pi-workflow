@@ -142,15 +142,56 @@ describe("Agent execution contracts", () => {
     );
   });
 
-  it("rejects authoritative State IDs in Agent result candidates", () => {
-    const invalid = {
+  it("accepts a semantic candidate without an Agent-generated identity", () => {
+    const parsed = StepResultV1Schema.parse({
       ...validResult(),
-      uncertainty_candidates: [{ id: "U-001", summary: "unknown" }],
-    };
+      uncertainty_candidates: [{ category: "behavior", summary: "Current behavior is unclear" }],
+    });
 
-    expect(() => StepResultV1Schema.parse(invalid)).toThrow(
-      /uncertainty_candidates\[0\]\.id.*authoritative State ID/,
-    );
+    expect(parsed.uncertainty_candidates).toEqual([
+      { category: "behavior", summary: "Current behavior is unclear" },
+    ]);
+    expect(parsed.uncertainty_candidates[0]).not.toHaveProperty("id");
+  });
+
+  it("rejects authoritative State IDs in every Agent candidate group", () => {
+    const invalidResults = [
+      { ...validResult(), uncertainty_candidates: [{ id: "U-001" }] },
+      { ...validResult(), decision_requests: [{ id: "D-001" }] },
+      {
+        ...validResult(),
+        requirement_candidates: {
+          ...validResult().requirement_candidates,
+          acceptance_criteria: [{ id: "AC-001", operation: "add", effect: "preserving" }],
+        },
+      },
+      {
+        ...validResult(),
+        requirement_candidates: {
+          ...validResult().requirement_candidates,
+          constraints: [{ id: "C-001", operation: "add", effect: "preserving" }],
+        },
+      },
+      {
+        ...validResult(),
+        requirement_candidates: {
+          ...validResult().requirement_candidates,
+          assumptions: [{ id: "AC-001" }],
+        },
+      },
+      { ...validResult(), finding_candidates: [{ id: "F-001" }] },
+      { ...validResult(), finding_rechecks: [{ findingId: "F-001", id: "F-002" }] },
+      { ...validResult(), plan_deviations: [{ id: "PD-001" }] },
+      { ...validResult(), skill_requests: [{ id: "CS-001" }] },
+      { ...validResult(), skill_requests: [{ id: "VR-001" }] },
+      { ...validResult(), execution_checks: [{ id: "V-001" }] },
+      { ...validResult(), observations: [{ id: "G-001" }] },
+      { ...validResult(), observations: [{ id: "RR-001" }] },
+    ];
+
+    for (const invalid of invalidResults) {
+      expect(() => StepResultV1Schema.parse(invalid)).toThrow(/authoritative State ID/);
+    }
   });
 
   it("validates requirement candidate operations and effects", () => {

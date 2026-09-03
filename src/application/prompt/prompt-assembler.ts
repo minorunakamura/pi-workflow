@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import type { AgentDefinition } from "../../agents/definitions.js";
-import type {
-  AgentExecutionRequestV1,
-  JsonValue,
-  SkillReference,
+import {
+  STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
+  type AgentExecutionRequestV1,
+  type JsonValue,
+  type SkillReference,
 } from "../../contracts/execution/agent-execution.js";
 import {
   CONTEXT_PRIORITIES,
@@ -280,6 +281,7 @@ export function assemblePrompt(input: PromptAssemblerInput): PromptAssemblyResul
         `Completion criteria: ${stableJson(request.objective.completionCriteria)}`,
         `Expected artifact types: ${stableJson(request.outputs.expectedArtifactTypes)}`,
         `Output contract: ${stableJson(request.outputs.outputContract)}`,
+        STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
       ].join("\n"),
     ),
   ].join("\n\n");
