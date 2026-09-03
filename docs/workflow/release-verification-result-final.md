@@ -1,67 +1,77 @@
-# Phase 1 Release Candidate 再検証結果
+# Phase 1 Release Candidate 最終検証結果
 
 ## 判定
 
-**Phase 1 Release: NOT ELIGIBLE**
+**Phase 1 Release: ELIGIBLE — 宣言可能**
 
-`INSUFFICIENT EVIDENCE` が1件あるため、Phase 1 Releaseは宣言しない。
+今回のRC HEADに対する必須Evidenceで、FAILおよびINSUFFICIENT EVIDENCEは残っていない。
 
 ## Release Candidate固定
 
-- Current HEAD: `dd297d0b9cee0a81d283f5c061f44e67634a80e2`
+- Current HEAD: `9197c6f451f4f6b7069cac93d1244855fbfd25e7`
 - Branch: `main`
-- `pnpm check`実行後に固定。tracked working treeはclean。
-- Evidence: `release-evidence/phase-1-rc-dd297d0b9cee/release-candidate-verification.json`
+- RC HEAD変更なし
+- 初回および最終 `pnpm check`: PASS — 77 test files / 301 tests
+- Evidence: `release-evidence/phase-1-rc-9197c6f451f4/`
+- Commit / push: 実施していない
 
-## Evidence Ledger（すべてRC HEAD対応）
+## Evidence Ledger
 
 | Area | Result | Evidence |
 |---|---|---|
-| Static prerequisites | PASS | `01-static-prerequisites.log` — 10 files / 36 tests |
-| Gate A | PASS | `02-gate-a.log` — 7 files / 36 tests |
-| Core Skills | PASS | 9 Skill実装・allowlist・packed discoveryをcurrent testで確認 |
-| Gate B | INSUFFICIENT EVIDENCE | `03-gate-b.log` — 12 files / 55 tests。Repository/Securityのproduction E2Eが不足 |
-| Gate C | PASS | `04-gate-c.log` — 11 files / 35 tests |
-| Packed Package Installation / Loading | PASS | `05-packed-package-installation-loading.log`、CI matrix artifact |
-| Packed Production Runtime Operation | PASS | `06-packed-production-runtime.log` — 実Pi bridgeでWorker → Verifier → Reviewer → Outcome |
-| Persistence / Recovery | PASS | `07-persistence-recovery.log` — 12 files / 61 tests |
-| Repository / Security | INSUFFICIENT EVIDENCE | `08-repository-security.log` — 12 files / 65 tests。ただし必須production security E2Eなし |
-| Cross-platform | PASS | GitHub Actions `33708236691`、head SHA一致。macOS/Linux/Windows各8 files / 39 tests |
-| Gate D | PASS | `09-gate-d.log` — 6 files / 16 tests。generated evaluation projection/rebuild/API |
-| Context Independence | PASS | `10-context-independence.log` — 4 files / 11 tests |
-| Legacy Cutover | NOT ELIGIBLE | `legacy-cutover.test.log` — 4 files / 10 tests。前提Evidence不足 |
-| Full Check | PASS | `11-full-check.log` — 76 files / 300 tests |
+| Static prerequisites | PASS | `release-verification/01-static-prerequisites.log` — 10 files / 36 tests |
+| Gate A | PASS | `release-verification/02-gate-a.log` — 7 files / 36 tests |
+| Core Skills | PASS | Static、packed discovery、production Skill path Evidence |
+| Gate B | PASS | `release-verification/03-gate-b.log` — 13 files / 56 tests |
+| Gate C | PASS | `release-verification/04-gate-c.log` — 11 files / 35 tests |
+| Packed Package Installation / Loading | PASS | `release-verification/05-packed-package-installation-loading.log` |
+| Packed Production Runtime Operation | PASS | `release-verification/06-packed-production-runtime.log` — 実Pi bridgeでWorker → Verifier → Reviewer → Outcome |
+| Persistence / Recovery | PASS | `release-verification/07-persistence-recovery.log` — 12 files / 61 tests |
+| Repository / Security | PASS | `release-verification/08-repository-security.log` — 13 files / 66 tests |
+| Cross-platform | PASS | `cross-platform-ci/revalidation-summary.json`、GitHub Actions run `33716075977` |
+| Gate D | PASS | `release-verification/09-gate-d.log` — 6 files / 16 tests |
+| Context Independence | PASS | `release-verification/10-context-independence.log` — 4 files / 11 tests |
+| Legacy Cutover | PASS | `legacy-cutover/legacy-cutover.test.log` — 4 files / 10 tests |
+| Full Check | PASS | `release-verification/11-full-check.log` — 77 files / 301 tests |
 
 ## Cross-platform hardening
 
-RC HEAD `dd297d0b9cee0a81d283f5c061f44e67634a80e2` に対する GitHub Actions run `33708236691` が成功した。
+GitHub Actions run [`33716075977`](https://github.com/minorunakamura/pi-workflow/actions/runs/33716075977) は `main` のRC HEADを対象に実行され、workflow `head_sha` はRC HEADと一致している。
 
-- `macos-latest`: 8 files / 39 tests PASS
-- `ubuntu-latest`: 8 files / 39 tests PASS
-- `windows-latest`: 8 files / 39 tests PASS
-
-Evidence artifactは `release-evidence/phase-1-rc-dd297d0b9cee/cross-platform-ci/` に保存した。
+- `macos-latest`: PASS — 8 files / 39 tests
+- `ubuntu-latest`: PASS — 8 files / 39 tests
+- `windows-latest`: PASS — 8 files / 39 tests
+- RC SHA: `9197c6f451f4f6b7069cac93d1244855fbfd25e7`
+- 各jobのartifact: `release-evidence/phase-1-rc-9197c6f451f4/cross-platform-ci/main-run-33716075977/`
 
 ## Legacy Cutover certification
 
-- `LEGACY_PATH_ABSENT`: PASS
-- `NEW_RUNTIME_OPERATIONAL`: PASS
-- `NO_LEGACY_FALLBACK`: PASS
-- `CUTOVER_ELIGIBLE`: **NOT ELIGIBLE**（Repository/Security Evidence不足）
+- `LEGACY_PATH_ABSENT`: **PASS**
+- `NEW_RUNTIME_OPERATIONAL`: **PASS**
+- `CUTOVER_ELIGIBLE`: **PASS** — Gate A〜D、packed runtime、persistence/recovery、repository/security、cross-platform、その他の必須hardening Evidenceが今回のRC HEADでPASS
+- `NO_LEGACY_FALLBACK`: **PASS**
+- Legacy session transcript migration: 導入なし
 
-## Release blocker
+## STORY-13-08 security Evidence
 
-- **Classification:** `INSUFFICIENT EVIDENCE`
-- **Story:** STORY-13-08
-- **影響範囲:** Gate B、Repository/Security、`CUTOVER_ELIGIBLE`、Phase 1 Release
-- **原因:** current HEADには、通常のinstalled/default production compositionを通じて、dirty/pre-existing、out-of-scope mutation、drift、read-only/verify-onlyの禁止mutation、Tool-capability denialを一つのrelease-level security E2Eで証明するEvidenceがない。`PiSubagentsAdapter`のTool denialテストはcomponent-levelであり、production compositionの代替にはならない。`workflow-extension-production.test.ts`のdelegation応答もテスト境界で合成されている。
-- **必要な修正:** synthetic delegation shortcutやmanual use-case injectionを使わず、実installed/default Pi bridgeを通るproduction-composition E2Eを追加・PASSさせる。dirty/pre-existing、out-of-scope、drift、禁止Agent mutation、Tool capability denial（必要ならsame-file attribution uncertaintyも含む）を検証し、EvidenceをRC HEADに紐付ける。
+`tests/e2e/production-security.test.ts` は concrete Pi Agent Runtime bridge経由でPASS。
 
-`11-implementation-backlog.md` の未完了 `[ ]` は今回も完了扱いに変更していない。
+- prohibited Agent mutation: **PASS**
+  - read-only Scoutの`edit`を拒否
+  - verify-only Verifierの`write` / `bash`を拒否
+  - 保護対象ファイルを不変に維持
+- Tool-capability denial: **PASS**
+  - denied Toolをadvertiseせず、呼び出しをエラー化
+
+## Final Release Eligibility
+
+今回のRC HEADに対する全必須項目がPASSし、FAIL / INSUFFICIENT EVIDENCEはない。
+
+**Phase 1 Releaseは宣言可能。**
 
 ## Residual Risk
 
-- `pnpm check`はPASSだが、既存のnon-fatal type assertion warningがある。
-- 外部live LLM/provider実行は今回の必須Evidence範囲外。
+- `pnpm check`には既存のnon-fatal type assertion/lint warningsがある。
+- 外部live LLM/provider実行は必須Release Evidence範囲外。
 
 コミットおよびpushは行っていない。
