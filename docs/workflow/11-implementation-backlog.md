@@ -1809,14 +1809,14 @@ spec_refs:
 
 **Acceptance Criteria**
 
-- [ ] The distributable package contains/resolves all seven Phase 1 Agent resources required by the production registry, including `verifier`.
-- [ ] A `pnpm pack` (or repository-equivalent package artifact) is installed/loaded from a clean consumer without source-checkout resource paths, authored `.pi/agent/skills/` copies, or manually injected Agent roots.
-- [ ] The packed/default runtime resolves Worker, Verifier, and Reviewer through the production Agent registry and reaches `PiSubagentsAdapter` through the normal Composition Root.
-- [ ] Release E2E does not intercept delegation and synthesize the Agent response before the production Pi Agent Runtime bridge; the actual bridge used by installed/default operation is exercised.
-- [ ] Selected packaged Skill content still reaches Agent execution through `SkillCatalog → PromptAssembler → PiSubagentsAdapter` while Agent/Tool allowlists remain enforced.
-- [ ] A packed/default E2E demonstrates the required production chain through Worker → Verifier → Reviewer → Outcome without manual use-case injection or synthetic delegation shortcuts.
-- [ ] Packed Package Installation/Loading Evidence is reported separately from Packed Production Runtime Operation Evidence; successful install/load alone does not establish `NEW_RUNTIME_OPERATIONAL`.
-- [ ] External live LLM/provider execution is not required for every deterministic release test; any remaining live-provider coverage gap is reported separately and is not used to substitute for proof of the real Pi execution bridge.
+- [x] The distributable package contains/resolves all seven Phase 1 Agent resources required by the production registry, including `verifier`.
+- [x] A `pnpm pack` (or repository-equivalent package artifact) is installed/loaded from a clean consumer without source-checkout resource paths, authored `.pi/agent/skills/` copies, or manually injected Agent roots.
+- [x] The packed/default runtime resolves Worker, Verifier, and Reviewer through the production Agent registry and reaches `PiSubagentsAdapter` through the normal Composition Root.
+- [x] Release E2E does not intercept delegation and synthesize the Agent response before the production Pi Agent Runtime bridge; the actual bridge used by installed/default operation is exercised.
+- [x] Selected packaged Skill content still reaches Agent execution through `SkillCatalog → PromptAssembler → PiSubagentsAdapter` while Agent/Tool allowlists remain enforced.
+- [x] A packed/default E2E demonstrates the required production chain through Worker → Verifier → Reviewer → Outcome without manual use-case injection or synthetic delegation shortcuts.
+- [x] Packed Package Installation/Loading Evidence is reported separately from Packed Production Runtime Operation Evidence; successful install/load alone does not establish `NEW_RUNTIME_OPERATIONAL`.
+- [x] External live LLM/provider execution is not required for every deterministic release test; any remaining live-provider coverage gap is reported separately and is not used to substitute for proof of the real Pi execution bridge.
 
 **Test Levels:** `ARCH`, `INT`, `E2E`
 
