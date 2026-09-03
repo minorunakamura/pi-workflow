@@ -122,18 +122,30 @@ function commandContext(
 }
 
 describe("workflow Extension production composition", () => {
-  it("uses the command cwd and Pi execution events for the default runtime", async () => {
-    const packageSkills = loadSkillsFromDir({
-      dir: resolve(PROJECT_ROOT, "skills"),
-      source: "pi-workflow",
-    }).skills.map((skill) => ({
-      ...skill,
-      sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+  it("uses the command cwd and tolerates unrelated bundled Skills", async () => {
+    const packageSkills = [
+      ...loadSkillsFromDir({
+        dir: resolve(PROJECT_ROOT, "skills"),
         source: "pi-workflow",
-        scope: "project",
-        origin: "package",
-      }),
-    }));
+      }).skills.map((skill) => ({
+        ...skill,
+        sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+          source: "pi-workflow",
+          scope: "project",
+          origin: "package",
+        }),
+      })),
+      ...loadSkillsFromDir({
+        dir: resolve(PROJECT_ROOT, "node_modules/pi-subagents/skills"),
+        source: "pi-subagents",
+      }).skills.map((skill) => ({
+        ...skill,
+        sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+          source: "pi-subagents",
+          origin: "package",
+        }),
+      })),
+    ];
 
     await withGoldenRepository("feature", {}, async (repositoryRoot) => {
       const events = createEventBus();
@@ -174,6 +186,9 @@ describe("workflow Extension production composition", () => {
         expect.stringContaining("Run run-001: status=completed; finalized=true"),
       ]);
       expect(notifications.join("\n")).not.toContain("NOT_IMPLEMENTED");
+      expect(
+        requests.every(({ skill }) => !(Array.isArray(skill) && skill.includes("pi-subagents"))),
+      ).toBe(true);
       expect(state.run).toMatchObject({
         status: "completed",
         finalized: true,

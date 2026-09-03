@@ -1,5 +1,11 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createSyntheticSourceInfo, type Skill as PiSkill } from "@earendil-works/pi-coding-agent";
+import {
+  createSyntheticSourceInfo,
+  loadSkillsFromDir,
+  parseFrontmatter,
+  type Skill as PiSkill,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   AGENT_DEFINITIONS,
@@ -45,6 +51,24 @@ function packageSkill(id: string): PiSkill {
       origin: "package",
     }),
     disableModelInvocation: false,
+  };
+}
+
+function bundledPiSubagentsSkill(): PiSkill {
+  const skills = loadSkillsFromDir({
+    dir: resolve(projectRoot, "node_modules/pi-subagents/skills"),
+    source: "pi-subagents",
+  }).skills;
+  const skill = skills.find(({ name }) => name === "pi-subagents");
+  if (skill === undefined) {
+    throw new Error("Bundled pi-subagents Skill fixture is missing");
+  }
+  return {
+    ...skill,
+    sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+      source: "pi-subagents",
+      origin: "package",
+    }),
   };
 }
 
@@ -180,6 +204,35 @@ describe("Skill Catalog contract", () => {
     expect(catalog.list().map(({ version }) => version)).toEqual(CORE_SKILL_IDS.map(() => "1.0.0"));
     expect(catalog.resolve("scout", [{ id: "how", version: "1.0.0" }])[0]?.content).toContain(
       "# how",
+    );
+  });
+
+  it("uses the provider package version for an Agent Skills-compatible bundled Skill", () => {
+    const bundledSkill = bundledPiSubagentsSkill();
+    const packageJson = JSON.parse(
+      readFileSync(resolve(projectRoot, "node_modules/pi-subagents/package.json"), "utf8"),
+    ) as { version?: unknown };
+    if (typeof packageJson.version !== "string") {
+      throw new Error("Bundled pi-subagents package version is missing");
+    }
+
+    expect(parseFrontmatter(readFileSync(bundledSkill.filePath, "utf8")).frontmatter.version).toBe(
+      undefined,
+    );
+    const catalog = createPiPackageSkillCatalog({
+      getSkills: () => ({
+        skills: [...CORE_SKILL_IDS.map(packageSkill), bundledSkill],
+        diagnostics: [],
+      }),
+    });
+
+    expect(catalog.list().find(({ id }) => id === "pi-subagents")).toMatchObject({
+      id: "pi-subagents",
+      version: packageJson.version,
+    });
+    expect([...CORE_SKILL_IDS]).not.toContain("pi-subagents");
+    expect(catalog.resolve("scout", [{ id: "how", version: "1.0.0" }]).map(({ id }) => id)).toEqual(
+      ["how"],
     );
   });
 
