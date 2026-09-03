@@ -64,6 +64,7 @@ import { RepositoryDriftRecovery } from "../application/recovery/repository-drif
 import { ResumeLifecycle } from "../application/recovery/resume-lifecycle.js";
 import {
   createWorkflowUseCases,
+  validateRepositoryPrerequisites,
   type WorkflowUseCases,
 } from "../application/workflow-use-cases.js";
 import { assemblePrompt } from "../application/prompt/prompt-assembler.js";
@@ -1653,7 +1654,7 @@ async function createProductionUseCases(
 ): Promise<WorkflowUseCases> {
   const context = productionContext(value);
   const repository: RepositoryAdapter = new GitRepositoryAdapter(context.cwd);
-  const repositoryRoot = await repository.getRoot();
+  const repositoryRoot = await validateRepositoryPrerequisites(repository);
   const runLock = new FileRunLock(repositoryRoot);
   const runReader = new FileRunReader(repositoryRoot);
   const stateStore = new FileStateStore(repositoryRoot, { reader: runReader, runLock });
@@ -1931,7 +1932,10 @@ function createProductionRuntimeFactory(
     const key = `${resolvePath(context.cwd)}\u0000${sessionId}`;
     const existing = runtimes.get(key);
     if (existing !== undefined) return existing;
-    const runtime = createProductionUseCases(pi, context);
+    const runtime = createProductionUseCases(pi, context).catch((error) => {
+      runtimes.delete(key);
+      throw error;
+    });
     runtimes.set(key, runtime);
     return runtime;
   };

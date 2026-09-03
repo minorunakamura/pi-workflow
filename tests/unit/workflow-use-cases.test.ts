@@ -86,7 +86,11 @@ describe("production workflow use cases", () => {
     const runner = orchestrator(store);
     const start = new StartWorkflowUseCase({
       runStore: store.store,
-      repository: { captureSnapshot: async () => repository } as never,
+      repository: {
+        getRoot: async () => repository.root,
+        getHead: async () => repository.head,
+        captureSnapshot: async () => repository,
+      } as never,
       orchestrator: runner,
       idAllocator: createIdAllocator(),
       now: () => new Date(CREATED_AT),

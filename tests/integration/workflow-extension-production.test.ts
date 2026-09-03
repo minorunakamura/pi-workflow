@@ -1,6 +1,8 @@
+import { execFile as nodeExecFile } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { resolve } from "node:path";
+import { promisify } from "node:util";
 import {
   createEventBus,
   createSyntheticSourceInfo,
@@ -22,7 +24,9 @@ import { JsonlEventReader } from "../../src/adapters/persistence/read/jsonl-even
 import { GitRepositoryAdapter } from "../../src/adapters/repository/git-repository-adapter.js";
 import { type ExecutionId, type RunId, type StepId } from "../../src/domain/primitives/ids.js";
 import { withGoldenRepository } from "../fixtures/golden-repositories.js";
+import { withTempRepository } from "../fixtures/temp-repository.js";
 
+const execFile = promisify(nodeExecFile);
 const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
 
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
@@ -122,6 +126,50 @@ function commandContext(
 }
 
 describe("workflow Extension production composition", () => {
+  it("reports distinct repository prerequisite errors through the production command boundary", async () => {
+    const scenarios = [
+      {
+        code: "ERR-REPOSITORY-NOT-GIT",
+        guidance:
+          "Initialize the repository and create an initial commit before starting a workflow.",
+        rawError: "fatal: not a git repository",
+        setup: async () => undefined,
+      },
+      {
+        code: "ERR-REPOSITORY-NO-HEAD",
+        guidance: "Create an initial commit before starting a workflow.",
+        rawError: "ambiguous argument 'HEAD'",
+        setup: async (root: string) => {
+          await execFile("git", ["init", "--quiet"], { cwd: root });
+        },
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      await withTempRepository({ "README.md": "# prerequisite test\n" }, async (repositoryRoot) => {
+        await scenario.setup(repositoryRoot);
+        const events = createEventBus();
+        const registrations = new Map<string, RegisteredCommand>();
+        workflowExtension({
+          registerCommand(name, options) {
+            registrations.set(name, options);
+          },
+          events,
+        });
+
+        const notifications: string[] = [];
+        await registrations
+          .get("wf-feature")!
+          .handler("repository prerequisite", commandContext(repositoryRoot, [], notifications));
+
+        expect(notifications).toHaveLength(1);
+        expect(notifications[0]).toContain(scenario.code);
+        expect(notifications[0]).toContain(scenario.guidance);
+        expect(notifications[0]).not.toContain(scenario.rawError);
+      });
+    }
+  });
+
   it("uses the command cwd and tolerates unrelated bundled Skills", async () => {
     const packageSkills = [
       ...loadSkillsFromDir({

@@ -66,6 +66,13 @@ dirty state
 pre-existing changed/untracked files
 ```
 
+Phase 1 start prerequisite:
+
+- the consuming workspace MUST be a Git repository;
+- at least one commit MUST exist and HEAD MUST resolve.
+
+A non-Git workspace and an unborn HEAD are unsupported and MUST return a Workflow-level validation error before baseline capture. A valid HEAD with a dirty tree passes this prerequisite and remains subject to the existing dirty-tree protection.
+
 Before each Worker, capture a more targeted execution baseline sufficient to detect mutation and protect pre-existing changes.
 
 The repository working tree is the source of truth for actual current source; a Change Set is an implementation record, not a patch archive that replaces the tree.
