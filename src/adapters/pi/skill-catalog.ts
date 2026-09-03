@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   parseFrontmatter,
   stripFrontmatter,
@@ -12,14 +13,49 @@ import {
   type SkillResource,
 } from "../../agents/skill-catalog.js";
 
-function version(value: unknown, skillName: string): string {
+function normalizedVersion(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim().length > 0) {
     return value.trim();
   }
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
     return String(value);
   }
-  throw new Error(`Pi package Skill must declare a version: ${skillName}`);
+  return undefined;
+}
+
+function providerPackageVersion(filePath: string): string | undefined {
+  let directory = dirname(filePath);
+  while (true) {
+    const packageJsonPath = join(directory, "package.json");
+    if (existsSync(packageJsonPath)) {
+      try {
+        const manifest: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+        return isRecord(manifest) ? normalizedVersion(manifest.version) : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
+function version(value: unknown, skillName: string, filePath: string): string {
+  const frontmatterVersion = normalizedVersion(value);
+  if (frontmatterVersion !== undefined) return frontmatterVersion;
+  if (value === undefined) {
+    const packageVersion = providerPackageVersion(filePath);
+    if (packageVersion !== undefined) return packageVersion;
+  }
+  throw new Error(
+    `Pi package Skill must declare a version in frontmatter or its provider package.json: ${skillName}`,
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function metadataValue(
@@ -44,7 +80,7 @@ function toResource(skill: PiSkill): SkillResource {
 
   return {
     id: skill.name,
-    version: version(frontmatter.version, skill.name),
+    version: version(frontmatter.version, skill.name, skill.filePath),
     description: skill.description,
     ...(frontmatter.dependencies === undefined
       ? {}
