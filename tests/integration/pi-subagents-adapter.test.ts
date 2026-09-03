@@ -117,6 +117,8 @@ describe("PiSubagentsAdapter integration", () => {
       result: { kind: "structured", schema: STEP_RESULT_SCHEMA },
     });
     expect(requests[0]).not.toHaveProperty("workflowScript");
+    expect(requests[0]?.task).toContain("Agent candidate identity boundary:");
+    expect(requests[0]?.task).toContain("Do not include `id`, `authoritative_id`, or `state_id`");
     expect(actual).toMatchObject(expected);
     expect(actual.runtime).toMatchObject({
       telemetry: {
@@ -128,6 +130,29 @@ describe("PiSubagentsAdapter integration", () => {
       },
     });
     expect(StepResultV1Schema.parse(actual)).toEqual(actual);
+  });
+
+  it("keeps candidate schemas identity-free while leaving semantic fields open", () => {
+    const candidateSchemas = [
+      STEP_RESULT_SCHEMA.properties.uncertainty_candidates,
+      STEP_RESULT_SCHEMA.properties.decision_requests,
+      STEP_RESULT_SCHEMA.properties.requirement_candidates.properties.acceptance_criteria,
+      STEP_RESULT_SCHEMA.properties.requirement_candidates.properties.constraints,
+      STEP_RESULT_SCHEMA.properties.requirement_candidates.properties.assumptions,
+      STEP_RESULT_SCHEMA.properties.finding_candidates,
+      STEP_RESULT_SCHEMA.properties.finding_rechecks,
+      STEP_RESULT_SCHEMA.properties.plan_deviations,
+      STEP_RESULT_SCHEMA.properties.skill_requests,
+      STEP_RESULT_SCHEMA.properties.execution_checks,
+      STEP_RESULT_SCHEMA.properties.observations,
+    ];
+
+    for (const schema of candidateSchemas) {
+      const item = schema.items as Record<string, unknown>;
+      expect(item).not.toHaveProperty("properties.id");
+      expect(item).not.toHaveProperty("properties.authoritative_id");
+      expect(item).not.toHaveProperty("properties.state_id");
+    }
   });
 
   it("fails closed when the invocation context is unavailable or stale", async () => {
@@ -203,6 +228,31 @@ describe("PiSubagentsAdapter integration", () => {
     expect(requests[0]?.task).toContain(assembled);
     expect(requests[0]?.task).toContain("Execution request (JSON):");
     expect(requests[0]?.skill).toEqual(["tdd"]);
+  });
+
+  it("rejects an authoritative candidate ID at the adapter result boundary", async () => {
+    const events = createEventBus();
+    const input = request();
+    events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+      const delegation = payload as SubagentDelegationRequest;
+      events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+        requestId: delegation.requestId,
+        ownerRunId: delegation.ownerRunId,
+        nodeId: delegation.nodeId,
+        status: "completed",
+        result: {
+          kind: "structured",
+          value: {
+            ...result(input),
+            uncertainty_candidates: [{ id: "U-001", category: "behavior" }],
+          },
+        },
+      } satisfies SubagentDelegationResponse);
+    });
+
+    await expect(
+      new PiSubagentsAdapter({ events }, { cwd: "/tmp/workflow" }).run(input),
+    ).rejects.toThrow(/uncertainty_candidates\[0\]\.id.*authoritative State ID/);
   });
 
   it("rejects a write-capable read-only request before delegation", async () => {

@@ -142,6 +142,55 @@ export interface RuntimeSchema<T> {
 const REQUEST_CONTRACT = "AgentExecutionRequestV1";
 const RESULT_CONTRACT = "StepResultV1";
 const AUTHORITATIVE_STATE_ID = /^(?:run|step|exec)-\d+$|^(?:U|D|G|F|P|V|PD|CS|VR|RR|AC|C)-\d+$/;
+
+export const STEP_RESULT_AGENT_OUTPUT_GROUPS = [
+  "uncertainty_candidates",
+  "decision_requests",
+  "requirement_candidates.acceptance_criteria",
+  "requirement_candidates.constraints",
+  "requirement_candidates.assumptions",
+  "finding_candidates",
+  "finding_rechecks",
+  "plan_deviations",
+  "skill_requests",
+  "execution_checks",
+  "observations",
+] as const;
+
+export const STEP_RESULT_AGENT_OUTPUT_CONTRACT = {
+  candidateGroups: STEP_RESULT_AGENT_OUTPUT_GROUPS,
+  candidateIdentity: "semantic-only; no Agent-generated authoritative identity",
+  forbiddenFields: ["id", "authoritative_id", "state_id"],
+  forbiddenAuthoritativePrefixes: [
+    "U-*",
+    "D-*",
+    "F-*",
+    "PD-*",
+    "CS-*",
+    "VR-*",
+    "RR-*",
+    "AC-*",
+    "C-*",
+    "G-*",
+    "P-*",
+    "V-*",
+  ],
+  findingRecheckReference:
+    "findingId or finding_id may reference an existing F-* Finding only; it is not a new candidate identity",
+  authoritativeAllocation:
+    "Orchestrator normalization allocates identity after StepResultV1 validation",
+} as const;
+
+export const STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS = [
+  "Agent candidate identity boundary:",
+  `This rule covers: ${STEP_RESULT_AGENT_OUTPUT_GROUPS.join(", ")}.`,
+  "All candidate objects contain semantic content only. Do not include `id`, `authoritative_id`, or `state_id` fields.",
+  "Except for an existing Finding reference in `finding_rechecks`, do not generate or claim any Orchestrator-owned authoritative ID such as U-*, D-*, F-*, PD-*, CS-*, VR-*, RR-*, AC-*, C-*, G-*, P-*, or V-* (or any other authoritative State ID).",
+  "Domain-model IDs shown in context are references/evidence, not instructions to copy into a new candidate.",
+  "`finding_rechecks` may use `findingId` or `finding_id` only to reference an existing F-* Finding; this is not a new candidate identity.",
+  "Return semantic fields only. Orchestrator normalization allocates authoritative identity after StepResultV1 validation.",
+].join("\n");
+
 const REQUIREMENT_CANDIDATE_OPERATIONS = ["add", "clarify"] as const;
 const REQUIREMENT_CANDIDATE_EFFECTS = [
   "preserving",

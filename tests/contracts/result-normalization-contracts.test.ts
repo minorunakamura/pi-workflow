@@ -7,6 +7,7 @@ import {
 } from "../../src/contracts/execution/agent-execution.js";
 import {
   normalizeResultCandidates,
+  normalizeStepResult,
   validateStepResult,
 } from "../../src/application/normalization/result-normalizer.js";
 import { createStep } from "../../src/domain/graph/step-graph.js";
@@ -83,6 +84,31 @@ function result(): StepResultV1 {
 }
 
 describe("Result normalization contract", () => {
+  it("passes an ID-free candidate through validation and allocates its authoritative ID centrally", async () => {
+    const semanticResult = StepResultV1Schema.parse({
+      ...result(),
+      uncertainty_candidates: [{ category: "behavior", summary: "Current behavior is unclear" }],
+    });
+
+    expect(semanticResult.uncertainty_candidates[0]).toEqual({
+      category: "behavior",
+      summary: "Current behavior is unclear",
+    });
+
+    const normalized = await normalizeStepResult({
+      result: semanticResult,
+      request: request(),
+      state: stateWithExistingIds(),
+      step: step(),
+    });
+
+    expect(normalized.candidates.uncertainty_candidates[0]).toMatchObject({
+      id: "U-002",
+      category: "behavior",
+      summary: "Current behavior is unclear",
+    });
+  });
+
   it("allocates authoritative IDs centrally and avoids existing identities", () => {
     const normalized = normalizeResultCandidates({
       result: result(),
