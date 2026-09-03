@@ -1,5 +1,6 @@
 import { stringify as stringifyYaml } from "yaml";
 import {
+  ContractValidationError,
   StepResultV1Schema,
   type AgentExecutionRequestV1,
   type JsonObject,
@@ -259,6 +260,12 @@ function verifierResult(value: unknown, request: AgentExecutionRequestV1): StepR
     return result;
   } catch (error) {
     if (error instanceof VerifierFinalizationError) throw error;
+    if (
+      error instanceof ContractValidationError &&
+      error.issues[0]?.path.startsWith("execution_checks[")
+    ) {
+      throw new VerifierFinalizationError("CHECK_INVALID", error.message);
+    }
     throw new VerifierFinalizationError(
       "RESULT_INVALID",
       error instanceof Error ? error.message : String(error),

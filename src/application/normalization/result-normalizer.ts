@@ -1,12 +1,18 @@
+import { stringify as stringifyYaml } from "yaml";
 import { AGENT_DEFINITIONS } from "../../agents/definitions.js";
 import { validateAgentExecutionRequest } from "../../agents/permission-policy.js";
 import {
   StepResultV1Schema,
   type AgentExecutionRequestV1,
+  type JsonValue,
   type ResultCandidate,
   type StepResultV1,
 } from "../../contracts/execution/agent-execution.js";
-import { ARTIFACT_STATUSES, type ArtifactStatus } from "../../contracts/artifacts/artifact.js";
+import {
+  ARTIFACT_STATUSES,
+  ArtifactFrontMatterV1Schema,
+  type ArtifactStatus,
+} from "../../contracts/artifacts/artifact.js";
 import {
   createIdAllocator,
   type AcceptanceCriterionId,
@@ -19,7 +25,12 @@ import {
   type UncertaintyId,
 } from "../../domain/primitives/ids.js";
 import type { SchedulerStep } from "../../domain/scheduling/scheduler.js";
-import type { ArtifactContent, ArtifactReader, ArtifactRef } from "../../ports/artifact-store.js";
+import type {
+  ArtifactContent,
+  ArtifactReader,
+  ArtifactRef,
+  ArtifactStore,
+} from "../../ports/artifact-store.js";
 import type { WorkflowState } from "../../ports/run-reader.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -41,7 +52,9 @@ export type ResultNormalizationOptions = Readonly<{
   postconditions?: ((input: ResultValidationInput) => MaybePromise<WorkflowState>) | undefined;
   allocator?: IdAllocator | undefined;
   artifactReader?: ArtifactReader | undefined;
+  artifactStore?: ArtifactStore | undefined;
   maxArtifactBytes?: number | undefined;
+  now?: (() => Date) | undefined;
 }>;
 
 export type ResultNormalizationErrorCode =
@@ -169,6 +182,26 @@ function validArtifactPath(path: string): boolean {
   );
 }
 
+export type AgentArtifactDraft = Readonly<{
+  type: "analysis" | "research";
+  purpose: string;
+  content: string;
+}>;
+
+function isArtifactReference(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && ("runId" in value || "path" in value || "status" in value);
+}
+
+function isAgentArtifactDraft(value: unknown): value is AgentArtifactDraft {
+  return (
+    isRecord(value) &&
+    (value.type === "analysis" || value.type === "research") &&
+    typeof value.purpose === "string" &&
+    typeof value.content === "string" &&
+    !isArtifactReference(value)
+  );
+}
+
 function artifactReference(value: unknown, index: number, expectedRunId: RunId): ArtifactRef {
   const path = `artifacts[${index}]`;
   if (!isRecord(value)) {
@@ -201,8 +234,10 @@ export function parseResultArtifactReferences(
   result: StepResultV1,
   request: AgentExecutionRequestV1,
 ): readonly ArtifactRef[] {
-  return result.artifacts.map((artifact, index) =>
-    artifactReference(artifact, index, request.identity.runId),
+  return result.artifacts.flatMap((artifact, index) =>
+    isArtifactReference(artifact)
+      ? [artifactReference(artifact, index, request.identity.runId)]
+      : [],
   );
 }
 
@@ -352,6 +387,124 @@ export function normalizeResultCandidates(
   };
 }
 
+function agentVersionNumber(version: string): number {
+  const match = /^(\d+)(?:\.\d+){0,2}(?:[-+].*)?$/.exec(version.trim());
+  const value = match?.[1] === undefined ? Number.NaN : Number(match[1]);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    fail("ARTIFACT_INVALID", `Agent version must start with a positive number: ${version}`);
+  }
+  return value;
+}
+
+function artifactPurposeSlug(purpose: string): string {
+  const slug = purpose
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (slug.length === 0) {
+    fail("ARTIFACT_INVALID", "Agent Artifact purpose must contain an ASCII path slug");
+  }
+  return slug;
+}
+
+function artifactDestination(
+  draft: AgentArtifactDraft,
+  executionId: string,
+  usedPaths: Set<string>,
+): string {
+  const root = draft.type;
+  const slug = artifactPurposeSlug(draft.purpose);
+  let suffix = 1;
+  for (;;) {
+    const numbered = suffix === 1 ? "" : `-${suffix}`;
+    const path = `${root}/${slug}${numbered}-${executionId}.md`;
+    if (!usedPaths.has(path)) {
+      usedPaths.add(path);
+      return path;
+    }
+    suffix += 1;
+  }
+}
+
+function agentArtifactContents(
+  input: ResultValidationInput,
+  draft: AgentArtifactDraft,
+  status: ArtifactStatus,
+  createdAt: string,
+): string {
+  const stateRevision = input.state.run.state_revision;
+  if (!Number.isSafeInteger(stateRevision) || stateRevision < 0) {
+    fail("ARTIFACT_INVALID", "Current state revision must be a non-negative safe integer");
+  }
+  const frontMatter = ArtifactFrontMatterV1Schema.parse({
+    schema_version: 1,
+    run_id: input.request.identity.runId,
+    step_id: input.request.identity.stepId,
+    execution_id: input.request.identity.executionId,
+    execution_state_revision: stateRevision,
+    agent: {
+      id: input.request.identity.agentId,
+      version: agentVersionNumber(input.request.identity.agentVersion),
+    },
+    artifact: { type: draft.type, status },
+    created_at: createdAt,
+    skills: [...input.request.skills.required, ...input.request.skills.optional],
+  });
+  const body = draft.content.endsWith("\n") ? draft.content : `${draft.content}\n`;
+  return `---\n${stringifyYaml(frontMatter).trimEnd()}\n---\n${body}`;
+}
+
+async function finalizeAgentArtifactDrafts(
+  input: ResultValidationInput,
+  result: StepResultV1,
+  options: Pick<ResultNormalizationOptions, "artifactStore" | "maxArtifactBytes" | "now">,
+): Promise<StepResultV1> {
+  const drafts = result.artifacts.filter(isAgentArtifactDraft);
+  if (drafts.length === 0) return result;
+  if (options.artifactStore === undefined) {
+    fail(
+      "ARTIFACT_INVALID",
+      "Agent Artifact drafts require an ArtifactStore for Orchestrator finalization",
+    );
+  }
+  const now = options.now?.() ?? new Date();
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
+    fail("ARTIFACT_INVALID", "Artifact finalization clock must return a valid Date");
+  }
+  const status: ArtifactStatus = result.outcome === "completed" ? "complete" : "partial";
+  const usedPaths = new Set(
+    result.artifacts.flatMap((artifact) =>
+      isArtifactReference(artifact) && typeof artifact.path === "string" ? [artifact.path] : [],
+    ),
+  );
+  const artifacts: JsonValue[] = [];
+  for (const artifact of result.artifacts) {
+    if (!isAgentArtifactDraft(artifact)) {
+      artifacts.push(artifact);
+      continue;
+    }
+    const contents = agentArtifactContents(input, artifact, status, now.toISOString());
+    if (
+      options.maxArtifactBytes !== undefined &&
+      Buffer.byteLength(contents, "utf8") > options.maxArtifactBytes
+    ) {
+      fail("ARTIFACT_INVALID", `Agent Artifact exceeds the configured size limit`);
+    }
+    const staged = await options.artifactStore.stage({
+      runId: input.request.identity.runId,
+      executionId: input.request.identity.executionId,
+      contents,
+    });
+    const ref = await options.artifactStore.finalize(
+      staged,
+      artifactDestination(artifact, input.request.identity.executionId, usedPaths),
+    );
+    artifacts.push({ runId: ref.runId, path: ref.path, status: ref.status });
+  }
+  return { ...result, artifacts };
+}
+
 function validateArtifactContent(
   content: ArtifactContent,
   ref: ArtifactRef,
@@ -401,6 +554,13 @@ export async function validateResultArtifacts(
     throw new RangeError("maxArtifactBytes must be a non-negative safe integer");
   }
 
+  const draftIndex = input.result.artifacts.findIndex(isAgentArtifactDraft);
+  if (draftIndex >= 0) {
+    fail(
+      "ARTIFACT_INVALID",
+      `artifacts[${draftIndex}] is an Agent draft and must be finalized by the Orchestrator`,
+    );
+  }
   const refs = parseResultArtifactReferences(input.result, input.request);
   if (options.artifactReader === undefined) {
     if (refs.length > 0) {
@@ -461,16 +621,19 @@ export async function normalizeStepResult(
   }>,
   options: ResultNormalizationOptions = {},
 ): Promise<ResultNormalizationResult> {
-  const result = await validateStepResult(input, options);
+  const validated = await validateStepResult(input, options);
+  const validatedInput: ResultValidationInput = { ...input, result: validated };
+  const result = await finalizeAgentArtifactDrafts(validatedInput, validated, options);
+  const normalizedInput: ResultValidationInput = { ...validatedInput, result };
   const state =
     options.postconditions === undefined
       ? noPostconditions(input.state)
-      : await options.postconditions({ ...input, result });
+      : await options.postconditions(normalizedInput);
   const candidates = normalizeResultCandidates({
     result,
     state,
     ...(options.allocator === undefined ? {} : { allocator: options.allocator }),
   });
-  const artifacts = await validateResultArtifacts({ ...input, state, result }, options);
+  const artifacts = await validateResultArtifacts({ ...normalizedInput, state }, options);
   return { state, result, candidates, artifacts };
 }

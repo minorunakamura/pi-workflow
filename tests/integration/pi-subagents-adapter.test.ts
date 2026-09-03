@@ -17,6 +17,7 @@ import {
   STEP_RESULT_SCHEMA,
 } from "../../src/adapters/pi/pi-subagents-adapter.js";
 import {
+  STEP_RESULT_AGENT_OUTPUT_CONTRACT,
   StepResultV1Schema,
   type AgentExecutionRequestV1,
   type StepResultV1,
@@ -85,6 +86,10 @@ function result(input: AgentExecutionRequestV1): StepResultV1 {
 }
 
 describe("PiSubagentsAdapter integration", () => {
+  it("passes the shared LLM contract unchanged to structured delegation", () => {
+    expect(STEP_RESULT_SCHEMA).toBe(STEP_RESULT_AGENT_OUTPUT_CONTRACT);
+  });
+
   it("maps one request to one structured leaf execution and returns only StepResultV1", async () => {
     const events = createEventBus();
     const input = request();
@@ -176,7 +181,7 @@ describe("PiSubagentsAdapter integration", () => {
     expect(responseSent).toBe(true);
   });
 
-  it("keeps candidate schemas identity-free while leaving semantic fields open", () => {
+  it("uses the shared explicit candidate shapes and finite fields", () => {
     const candidateSchemas = [
       STEP_RESULT_SCHEMA.properties.uncertainty_candidates,
       STEP_RESULT_SCHEMA.properties.decision_requests,
@@ -193,10 +198,32 @@ describe("PiSubagentsAdapter integration", () => {
 
     for (const schema of candidateSchemas) {
       const item = schema.items as Record<string, unknown>;
-      expect(item).not.toHaveProperty("properties.id");
-      expect(item).not.toHaveProperty("properties.authoritative_id");
-      expect(item).not.toHaveProperty("properties.state_id");
+      const variants = Array.isArray(item.oneOf) ? item.oneOf : [item];
+      for (const variant of variants) {
+        const candidate = variant as Record<string, unknown>;
+        expect(candidate.additionalProperties).toBe(false);
+        const properties = candidate.properties;
+        if (properties !== undefined) {
+          expect(properties).not.toHaveProperty("id");
+          expect(properties).not.toHaveProperty("authoritative_id");
+          expect(properties).not.toHaveProperty("state_id");
+        }
+      }
     }
+
+    const requirementItem = STEP_RESULT_SCHEMA.properties.requirement_candidates.properties
+      .acceptance_criteria.items as Record<string, unknown>;
+    const requirementVariants = requirementItem.oneOf as readonly Record<string, unknown>[];
+    expect(requirementVariants[0]?.required).toEqual(["operation", "effect"]);
+    expect(requirementVariants[1]?.required).toEqual(["operation", "effect", "targetId"]);
+    expect(requirementVariants[0]?.properties).toHaveProperty("operation");
+    expect(requirementVariants[1]?.properties).toHaveProperty("targetId");
+    expect(
+      (
+        (STEP_RESULT_SCHEMA.properties.execution_checks.items as Record<string, unknown>)
+          .properties as Record<string, unknown>
+      ).status,
+    ).toMatchObject({ enum: ["passed", "failed", "skipped", "unavailable"] });
   });
 
   it("fails closed when the invocation context is unavailable or stale", async () => {

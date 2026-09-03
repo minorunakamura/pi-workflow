@@ -177,6 +177,18 @@ describe("assemblePrompt", () => {
     }
     expect(content).toContain("Orchestrator normalization allocates authoritative identity");
     expect(content).toContain("Domain-model IDs shown in context are references/evidence");
+    expect(content).toContain(
+      "Requirement Candidate operation must be exactly one of: add, clarify.",
+    );
+    expect(content).toContain(
+      "Requirement Candidate effect must be exactly one of: preserving, narrowing, broadening, changing.",
+    );
+    expect(content).toContain(
+      "Uncertainty candidate category must be one of: requirement, behavior, design, external, impact, verification.",
+    );
+    expect(content).toContain(
+      "Artifacts supplied by an Agent are analysis/research drafts with type, purpose, and content",
+    );
   });
 
   it("does not silently omit a selected Skill without resolved content", () => {

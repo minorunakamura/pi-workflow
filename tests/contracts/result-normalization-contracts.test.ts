@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FileArtifactStore } from "../../src/adapters/persistence/write/file-artifact-store.js";
 import {
   StepResultV1Schema,
   type AgentExecutionMode,
@@ -13,10 +14,11 @@ import {
 import { createStep } from "../../src/domain/graph/step-graph.js";
 import type { ExecutionId, RunId, StepId } from "../../src/domain/primitives/ids.js";
 import type { WorkflowState } from "../../src/ports/run-reader.js";
+import { withTempRepository } from "../fixtures/temp-repository.js";
 
 function stateWithExistingIds(): WorkflowState {
   return {
-    run: { run_id: "run-001" },
+    run: { run_id: "run-001", state_revision: 2 },
     snapshot: {
       requirement: { acceptance_criteria: [{ id: "AC-001" }], constraints: [{ id: "C-001" }] },
       uncertainties: { uncertainties: [{ id: "U-001" }] },
@@ -64,14 +66,14 @@ function result(): StepResultV1 {
     outcome: "completed",
     summary: "done",
     artifacts: [],
-    uncertainty_candidates: [{ localId: "uncertainty-1" }],
-    decision_requests: [{ localId: "decision-1" }],
+    uncertainty_candidates: [{ localId: "uncertainty-1", category: "behavior" }],
+    decision_requests: [{ localId: "decision-1", class: "D1" }],
     requirement_candidates: {
       acceptance_criteria: [{ operation: "add", effect: "preserving", description: "ac" }],
       constraints: [{ operation: "add", effect: "preserving", description: "constraint" }],
       assumptions: [],
     },
-    finding_candidates: [{ localId: "finding-1" }],
+    finding_candidates: [{ localId: "finding-1", severity: "medium", confidence: "high" }],
     finding_rechecks: [],
     plan_deviations: [{ localId: "deviation-1" }],
     skill_requests: [],
@@ -83,7 +85,142 @@ function result(): StepResultV1 {
   });
 }
 
+function scoutRequest(): AgentExecutionRequestV1 {
+  const base = request("read-only");
+  return {
+    ...base,
+    identity: { ...base.identity, agentId: "scout" },
+    objective: { objective: "Scout", type: "analysis", completionCriteria: [] },
+    authority: { maximumDLevel: "D0", escalationRules: [] },
+  };
+}
+
+function realisticScoutResult(): Record<string, unknown> {
+  return {
+    identity: { runId: "run-001", stepId: "step-001", executionId: "exec-001" },
+    outcome: "completed",
+    mode: "read-only",
+    summary: "Scout completed with a repository handoff.",
+    artifacts: [
+      {
+        type: "analysis",
+        purpose: "repository-scout",
+        content: "## Handoff Summary\n\nThe repository was inspected.",
+      },
+    ],
+    uncertainty_candidates: [
+      {
+        category: "behavior",
+        question: "What existing behavior must be preserved?",
+        basis: ["repository inventory"],
+        impact: "The implementation boundary is not yet known.",
+        confidence: "high",
+      },
+    ],
+    decision_requests: [],
+    requirement_candidates: {
+      acceptance_criteria: [],
+      constraints: [],
+      assumptions: [
+        {
+          operation: "add",
+          effect: "preserving",
+          summary: "The current repository is the implementation baseline.",
+          basis: "Repository inspection",
+        },
+      ],
+    },
+    finding_candidates: [],
+    finding_rechecks: [],
+    plan_deviations: [],
+    skill_requests: [],
+    execution_checks: [
+      {
+        type: "inspection",
+        status: "passed",
+        required: false,
+        check: "repository inventory",
+        evidence: ["read-only inspection"],
+      },
+    ],
+    observations: [
+      {
+        kind: "Fact",
+        statement: "The repository was inspected without source mutation.",
+        evidence: ["repository inventory"],
+      },
+    ],
+    blocked: null,
+    failure: null,
+    runtime: {},
+  };
+}
+
 describe("Result normalization contract", () => {
+  it("accepts and finalizes a realistic Scout StepResult through normalization", async () => {
+    await withTempRepository({}, async (repositoryRoot) => {
+      const artifactStore = new FileArtifactStore(repositoryRoot);
+      const normalized = await normalizeStepResult(
+        {
+          result: realisticScoutResult(),
+          request: scoutRequest(),
+          state: stateWithExistingIds(),
+          step: step("scout"),
+        },
+        {
+          artifactStore,
+          artifactReader: artifactStore,
+          now: () => new Date("2026-09-03T10:52:00.000Z"),
+        },
+      );
+
+      expect(normalized.result.artifacts).toEqual([
+        {
+          runId: "run-001",
+          path: "analysis/repository-scout-exec-001.md",
+          status: "complete",
+        },
+      ]);
+      expect(normalized.artifacts.refs).toEqual(normalized.result.artifacts);
+      expect(normalized.artifacts.contents[0]?.frontMatter).toMatchObject({
+        run_id: "run-001",
+        step_id: "step-001",
+        execution_id: "exec-001",
+        artifact: { type: "analysis", status: "complete" },
+      });
+      expect(normalized.candidates.uncertainty_candidates[0]).toMatchObject({
+        id: "U-002",
+        category: "behavior",
+      });
+      expect(normalized.candidates.requirement_candidates.assumptions[0]).toMatchObject({
+        operation: "add",
+        effect: "preserving",
+      });
+    });
+  });
+
+  it("keeps the captured invalid Scout payload invalid at the missing operation field", () => {
+    const invalid = realisticScoutResult();
+    const requirements = invalid.requirement_candidates;
+    if (typeof requirements !== "object" || requirements === null || Array.isArray(requirements)) {
+      throw new Error("Expected requirement candidates");
+    }
+    expect(() =>
+      StepResultV1Schema.parse({
+        ...invalid,
+        requirement_candidates: {
+          ...requirements,
+          assumptions: [
+            {
+              summary: "The current repository is the implementation baseline.",
+              basis: "Repository inspection",
+            },
+          ],
+        },
+      }),
+    ).toThrow("requirement_candidates.assumptions[0].operation: expected a string");
+  });
+
   it("passes an ID-free candidate through validation and allocates its authoritative ID centrally", async () => {
     const semanticResult = StepResultV1Schema.parse({
       ...result(),

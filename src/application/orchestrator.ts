@@ -21,7 +21,7 @@ import {
 import type { CompletionEvaluation } from "../evaluation/completion-evaluator.js";
 import type { AgentRuntime } from "../ports/agent-runtime.js";
 import { TelemetryAgentRuntime, type TelemetryLevel } from "../telemetry/runtime-metrics.js";
-import type { ArtifactReader } from "../ports/artifact-store.js";
+import type { ArtifactReader, ArtifactStore } from "../ports/artifact-store.js";
 import type { RunReader, WorkflowState } from "../ports/run-reader.js";
 import type { StateStore } from "../ports/state-store.js";
 import {
@@ -128,6 +128,7 @@ export type OrchestratorDependencies = Readonly<{
   validatePermissions?: OrchestratorResultValidationPhase;
   validateArtifacts?: OrchestratorArtifactValidator;
   artifactReader?: ArtifactReader;
+  artifactStore?: ArtifactStore;
   maxArtifactBytes?: number;
   idAllocator?: IdAllocator;
   events?: OrchestratorEventFactory;
@@ -596,6 +597,7 @@ export class Orchestrator {
             postconditions: this.postconditions,
             allocator: this.idAllocator,
             artifactReader: this.dependencies.artifactReader,
+            artifactStore: this.dependencies.artifactStore,
             maxArtifactBytes: this.dependencies.maxArtifactBytes,
           },
         );

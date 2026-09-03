@@ -492,6 +492,14 @@ describe("packed Pi Package production Agent runtime", () => {
       expect(scoutTask).toContain("## Procedure");
       expect(scoutTask).toContain("Agent candidate identity boundary:");
       expect(scoutTask).toContain("Do not include `id`, `authoritative_id`, or `state_id`");
+      expect(scoutTask).toContain(
+        "Requirement Candidate operation must be exactly one of: add, clarify.",
+      );
+      expect(scoutTask).toContain('"operation":{"enum":["add"]}');
+      expect(scoutTask).toContain('"operation":{"enum":["clarify"]}');
+      expect(scoutTask).toContain(
+        '"effect":{"enum":["preserving","narrowing","broadening","changing"]}',
+      );
       expect(scoutTask).toContain("Orchestrator normalization allocates authoritative identity");
       expect(scoutTask).toContain("authoritativeAllocation");
       expect(notifications.join("\n")).not.toContain("NOT_IMPLEMENTED");
