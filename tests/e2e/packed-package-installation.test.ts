@@ -101,6 +101,7 @@ function testUi(notifications: string[]): ExtensionUIContext {
     confirm: async () => false,
     input: async () => undefined,
     notify: (message: string) => notifications.push(message),
+    setToolsExpanded: () => {},
   } as unknown as ExtensionUIContext;
 }
 

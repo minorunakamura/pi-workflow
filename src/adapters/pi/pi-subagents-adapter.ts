@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   SUBAGENT_DELEGATION_CANCEL_EVENT,
   SUBAGENT_DELEGATION_REQUEST_EVENT,
@@ -32,6 +32,14 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 
 type PiEventBus = ExtensionAPI["events"];
 
+// The structured delegation contract does not carry ExtensionContext. The
+// command-aware slash bridge is the Pi-supported requester-context boundary.
+const PI_SUBAGENT_SLASH_REQUEST_EVENT = "subagent:slash:request";
+const PI_SUBAGENT_SLASH_STARTED_EVENT = "subagent:slash:started";
+const PI_SUBAGENT_SLASH_RESPONSE_EVENT = "subagent:slash:response";
+const PI_SUBAGENT_SLASH_UPDATE_EVENT = "subagent:slash:update";
+const PI_SUBAGENT_SLASH_CANCEL_EVENT = "subagent:slash:cancel";
+
 type ExecutionObservation = Readonly<{
   toolCount?: number;
   durationMs?: number;
@@ -49,7 +57,20 @@ export type PiSubagentsAdapterOptions = Readonly<{
   sessionId?: string;
   telemetryLevel?: TelemetryLevel;
   buildPrompt?: (request: AgentExecutionRequestV1) => string;
+  getContext?: () => ExtensionContext | null | undefined;
 }>;
+
+export class PiSubagentsContextUnavailableError extends Error {
+  readonly code = "PI_EXTENSION_CONTEXT_UNAVAILABLE";
+  readonly category = "context" as const;
+  readonly retryable = true;
+  readonly recoverable = true;
+
+  constructor(message = "No active Pi extension context for Agent delegation.") {
+    super(`PI_EXTENSION_CONTEXT_UNAVAILABLE: ${message}`);
+    this.name = "PiSubagentsContextUnavailableError";
+  }
+}
 
 export class PiSubagentsToolCapabilityError extends Error {
   readonly code = "TOOL_CAPABILITY_DENIED";
@@ -380,12 +401,168 @@ function abortError(): Error {
   return error;
 }
 
+type SlashSubagentParams = Record<string, unknown>;
+type SlashSubagentRequest = Readonly<{
+  requestId: string;
+  params: SlashSubagentParams;
+  ctx: ExtensionContext;
+}>;
+type SlashSubagentChild = Record<string, unknown>;
+type SlashSubagentToolResult = Readonly<{
+  isError?: boolean;
+  content?: unknown;
+  details?: { results?: readonly unknown[] };
+}>;
+type SlashSubagentResponse = Readonly<{
+  requestId: string;
+  result?: SlashSubagentToolResult;
+  isError?: boolean;
+  errorText?: string;
+}>;
+
+function slashChild(result: SlashSubagentToolResult | undefined): SlashSubagentChild | undefined {
+  const child = result?.details?.results?.[0];
+  return isRecord(child) ? child : undefined;
+}
+
+function firstText(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  for (const part of value) {
+    if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") continue;
+    if (part.text.trim().length > 0) return part.text.trim();
+  }
+  return undefined;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function slashUsage(value: unknown): SubagentDelegationUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const input = nonNegativeInteger(value.input);
+  const output = nonNegativeInteger(value.output);
+  const cacheRead = nonNegativeInteger(value.cacheRead);
+  const cacheWrite = nonNegativeInteger(value.cacheWrite);
+  const turns = nonNegativeInteger(value.turns);
+  const toolCalls = nonNegativeInteger(value.toolCalls);
+  const durationMs = nonNegativeInteger(value.durationMs);
+  const cost =
+    typeof value.cost === "number" && Number.isFinite(value.cost) && value.cost >= 0
+      ? value.cost
+      : undefined;
+  if (
+    input === undefined ||
+    output === undefined ||
+    cacheRead === undefined ||
+    cacheWrite === undefined ||
+    turns === undefined ||
+    toolCalls === undefined ||
+    durationMs === undefined ||
+    cost === undefined
+  ) {
+    return undefined;
+  }
+  return { input, output, cacheRead, cacheWrite, cost, turns, toolCalls, durationMs };
+}
+
+function contextError(value: string | undefined): boolean {
+  return (
+    value !== undefined &&
+    /active extension context|extension ctx is stale|extension context no longer active/i.test(
+      value,
+    )
+  );
+}
+
+function slashDelegationResponse(
+  request: SubagentDelegationRequest,
+  payload: SlashSubagentResponse,
+): SubagentDelegationResponse {
+  const result = payload.result;
+  const child = slashChild(result);
+  const error =
+    (typeof child?.error === "string" && child.error) ||
+    payload.errorText ||
+    firstText(result?.content) ||
+    "PiSubagents slash Agent Execution failed";
+  const contextUnavailable = contextError(error);
+  const timedOut = child?.timedOut === true;
+  const cancelled = /cancelled|canceled/i.test(error);
+  const interrupted = child?.interrupted === true || child?.stopped === true;
+  const structuredOutputFailed = child?.structuredOutputFailed === true;
+  const turnBudgetExceeded = child?.turnBudgetExceeded === true;
+  const toolBudgetBlocked = child?.toolBudgetBlocked === true;
+  const structuredOutputPresent = child !== undefined && Object.hasOwn(child, "structuredOutput");
+  const status: SubagentDelegationResponse["status"] = contextUnavailable
+    ? "unavailable_context"
+    : timedOut
+      ? "timed_out"
+      : cancelled
+        ? "cancelled"
+        : interrupted
+          ? "interrupted"
+          : structuredOutputFailed
+            ? "structured_output_failed"
+            : turnBudgetExceeded
+              ? "turn_budget_exhausted"
+              : toolBudgetBlocked
+                ? "tool_budget_exhausted"
+                : payload.isError === true || result?.isError === true || child?.error !== undefined
+                  ? "failed"
+                  : structuredOutputPresent
+                    ? "completed"
+                    : "failed";
+  const usage = slashUsage(child?.usage);
+  return {
+    requestId: request.requestId,
+    ownerRunId: request.ownerRunId,
+    nodeId: request.nodeId,
+    status,
+    ...(typeof child?.agent === "string" ? { agent: child.agent } : {}),
+    ...(typeof child?.model === "string" ? { model: child.model } : {}),
+    ...(typeof child?.thinking === "string" ? { thinking: child.thinking } : {}),
+    ...(usage === undefined ? {} : { usage }),
+    ...(status === "completed"
+      ? { result: { kind: "structured" as const, value: child?.structuredOutput } }
+      : { error }),
+  };
+}
+
+function slashRequest(
+  request: SubagentDelegationRequest,
+  context: ExtensionContext,
+): SlashSubagentRequest {
+  return {
+    requestId: request.requestId,
+    ctx: context,
+    params: {
+      agent: request.agent,
+      task: request.task,
+      context: request.context,
+      cwd: request.cwd,
+      ...(request.model === undefined ? {} : { model: request.model }),
+      ...(request.thinking === undefined ? {} : { thinking: request.thinking }),
+      ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+      ...(request.toolBudget === undefined ? {} : { toolBudget: request.toolBudget }),
+      ...(request.skill === undefined ? {} : { skill: request.skill }),
+      ...(request.artifacts === undefined ? {} : { artifacts: request.artifacts }),
+      output: false,
+      outputSchema: STEP_RESULT_SCHEMA,
+      acceptance: false,
+      async: false,
+      foregroundOnly: true,
+    },
+  };
+}
+
 export class PiSubagentsAdapter implements AgentRuntime {
   private readonly events: PiEventBus;
   private readonly cwd: string;
   private readonly sessionId: string | undefined;
   private readonly telemetryLevel: TelemetryLevel | undefined;
   private readonly buildPrompt: ((request: AgentExecutionRequestV1) => string) | undefined;
+  private readonly getContext: (() => ExtensionContext | null | undefined) | undefined;
 
   constructor(pi: Pick<ExtensionAPI, "events">, options: PiSubagentsAdapterOptions = {}) {
     const cwd = options.cwd ?? process.cwd();
@@ -400,6 +577,7 @@ export class PiSubagentsAdapter implements AgentRuntime {
     this.sessionId = options.sessionId;
     this.telemetryLevel = options.telemetryLevel;
     this.buildPrompt = options.buildPrompt;
+    this.getContext = options.getContext;
   }
 
   async run(
@@ -413,10 +591,24 @@ export class PiSubagentsAdapter implements AgentRuntime {
     if (prompt !== undefined && prompt.trim().length === 0) {
       throw new Error("PiSubagentsAdapter assembled prompt must not be empty");
     }
-    const execution = await this.executeWithCapabilityCeiling(validatedRequest, allowedTools, () =>
-      this.execute(validatedRequest, signal, prompt),
+    const context = this.activeContext();
+    const execution = await this.executeWithCapabilityCeiling(
+      validatedRequest,
+      allowedTools,
+      async () => {
+        if (context === undefined) return this.execute(validatedRequest, signal, prompt);
+        const structured = await this.execute(validatedRequest, signal, prompt);
+        // Keep the owned structured contract primary. Use the command-aware bridge
+        // only when that bridge explicitly cannot obtain its cached context.
+        return structured.response.status === "unavailable_context"
+          ? this.executeWithRequesterContext(validatedRequest, signal, prompt, context)
+          : structured;
+      },
     );
     const response = execution.response;
+    if (response.status === "unavailable_context" || contextError(response.error)) {
+      throw new PiSubagentsContextUnavailableError(response.error);
+    }
     if (response.status !== "completed") {
       throw new Error(
         `PiSubagents Agent Execution ${response.status}: ${response.error ?? "no error details"}`,
@@ -466,6 +658,33 @@ export class PiSubagentsAdapter implements AgentRuntime {
     } finally {
       capabilityCeiling.dispose();
     }
+  }
+
+  private activeContext(): ExtensionContext | undefined {
+    if (this.getContext === undefined) return undefined;
+    try {
+      const context = this.getContext();
+      if (context == null) throw new PiSubagentsContextUnavailableError();
+      void context.cwd;
+      void context.hasUI;
+      void context.sessionManager;
+      return context;
+    } catch (error) {
+      if (error instanceof PiSubagentsContextUnavailableError) throw error;
+      throw new PiSubagentsContextUnavailableError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private executeWithRequesterContext(
+    request: AgentExecutionRequestV1,
+    signal: AbortSignal,
+    prompt: string | undefined,
+    context: ExtensionContext,
+  ): Promise<AgentRuntimeExecution> {
+    const delegationRequest = createDelegationRequest(request, this.cwd, prompt);
+    return this.executeViaSlashBridge(delegationRequest, signal, context);
   }
 
   private execute(
@@ -536,6 +755,87 @@ export class PiSubagentsAdapter implements AgentRuntime {
       try {
         sent = true;
         this.events.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, delegationRequest);
+      } catch (error) {
+        rejectExecution(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  private executeViaSlashBridge(
+    delegationRequest: SubagentDelegationRequest,
+    signal: AbortSignal,
+    context: ExtensionContext,
+  ): Promise<AgentRuntimeExecution> {
+    if (signal.aborted) return Promise.reject(abortError());
+
+    const request = slashRequest(delegationRequest, context);
+    const observation = { toolsUsed: new Set<string>() };
+    return new Promise<AgentRuntimeExecution>((resolve, reject) => {
+      let sent = false;
+      let started = false;
+      let settled = false;
+      let unsubscribeStarted: (() => void) | undefined;
+      let unsubscribeResponse: (() => void) | undefined;
+      let unsubscribeUpdate: (() => void) | undefined;
+
+      const cleanup = (): void => {
+        unsubscribeStarted?.();
+        unsubscribeResponse?.();
+        unsubscribeUpdate?.();
+        signal.removeEventListener("abort", onAbort);
+      };
+      const resolveResponse = (payload: SlashSubagentResponse): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve({ response: slashDelegationResponse(delegationRequest, payload), observation });
+      };
+      const rejectExecution = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const onStarted = (payload: unknown): void => {
+        if (isRecord(payload) && payload.requestId === request.requestId) started = true;
+      };
+      const onResponse = (payload: unknown): void => {
+        if (!isRecord(payload) || payload.requestId !== request.requestId) return;
+        resolveResponse(payload as unknown as SlashSubagentResponse);
+      };
+      const onUpdate = (payload: unknown): void => {
+        if (!isRecord(payload) || payload.requestId !== request.requestId) return;
+        observeUpdate(
+          {
+            ...payload,
+            ownerRunId: delegationRequest.ownerRunId,
+            nodeId: delegationRequest.nodeId,
+          } as unknown as SubagentDelegationUpdate,
+          observation,
+        );
+      };
+      const onAbort = (): void => {
+        if (sent)
+          this.events.emit(PI_SUBAGENT_SLASH_CANCEL_EVENT, { requestId: request.requestId });
+        rejectExecution(abortError());
+      };
+
+      unsubscribeStarted = this.events.on(PI_SUBAGENT_SLASH_STARTED_EVENT, onStarted);
+      unsubscribeResponse = this.events.on(PI_SUBAGENT_SLASH_RESPONSE_EVENT, onResponse);
+      unsubscribeUpdate = this.events.on(PI_SUBAGENT_SLASH_UPDATE_EVENT, onUpdate);
+      signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        sent = true;
+        this.events.emit(PI_SUBAGENT_SLASH_REQUEST_EVENT, request);
+        queueMicrotask(() => {
+          if (!started && !settled) {
+            rejectExecution(
+              new PiSubagentsContextUnavailableError(
+                "PiSubagents slash execution bridge is unavailable.",
+              ),
+            );
+          }
+        });
       } catch (error) {
         rejectExecution(error instanceof Error ? error : new Error(String(error)));
       }
