@@ -89,11 +89,33 @@ export type StepResultIdentity = Readonly<{
 
 export type ResultCandidate = JsonObject;
 
+/**
+ * Planner semantic output. The Orchestrator assigns the Plan version when it
+ * adopts this candidate; the candidate itself contains semantic content only.
+ */
+export type PlanCandidate = JsonObject &
+  Readonly<{
+    summary?: string;
+    strategy?: string;
+    implementation_units?: readonly JsonValue[];
+    verification_checks?: readonly JsonValue[];
+    affected_areas?: readonly JsonValue[];
+    write_scope: readonly string[];
+    dependencies?: readonly JsonValue[];
+    constraints?: readonly JsonValue[];
+    assumptions?: readonly JsonValue[];
+    acceptance_criterion_coverage?: readonly JsonValue[];
+    related_decisions?: readonly JsonValue[];
+    unresolved_blockers?: readonly JsonValue[];
+  }>;
+
 export type StepResultV1 = Readonly<{
   identity: StepResultIdentity;
   outcome: AgentOutcome;
   mode?: AgentExecutionMode;
   summary: string;
+  /** Structured Planner semantic result; Markdown Artifacts remain evidence/reference. */
+  plan?: PlanCandidate;
   artifacts: readonly JsonValue[];
   uncertainty_candidates: readonly ResultCandidate[];
   decision_requests: readonly ResultCandidate[];
@@ -247,6 +269,7 @@ const nonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 const stringArraySchema = { type: "array", items: nonEmptyStringSchema } as const;
 const nonEmptyStringArraySchema = { ...stringArraySchema, minItems: 1 } as const;
 const jsonValueSchema = {} as const;
+const jsonArraySchema = { type: "array", items: jsonValueSchema } as const;
 const evidenceSchema = {
   anyOf: [
     nonEmptyStringSchema,
@@ -284,7 +307,6 @@ const candidateCommonProperties = {
   check: nonEmptyStringSchema,
   result: jsonValueSchema,
   command: nonEmptyStringSchema,
-  write_scope: stringArraySchema,
   skill: nonEmptyStringSchema,
   skill_id: nonEmptyStringSchema,
   version: nonEmptyStringSchema,
@@ -331,6 +353,34 @@ const PLAN_DEVIATION_KEYS = [
   "affected_areas",
 ];
 const SKILL_REQUEST_KEYS = [...CANDIDATE_COMMON_KEYS, "skillId"];
+const PLAN_KEYS = [
+  "summary",
+  "strategy",
+  "implementation_units",
+  "verification_checks",
+  "affected_areas",
+  "write_scope",
+  "dependencies",
+  "constraints",
+  "assumptions",
+  "acceptance_criterion_coverage",
+  "related_decisions",
+  "unresolved_blockers",
+] as const;
+const planCandidateProperties = {
+  summary: nonEmptyStringSchema,
+  strategy: nonEmptyStringSchema,
+  implementation_units: jsonArraySchema,
+  verification_checks: jsonArraySchema,
+  affected_areas: jsonArraySchema,
+  write_scope: stringArraySchema,
+  dependencies: jsonArraySchema,
+  constraints: jsonArraySchema,
+  assumptions: jsonArraySchema,
+  acceptance_criterion_coverage: jsonArraySchema,
+  related_decisions: jsonArraySchema,
+  unresolved_blockers: jsonArraySchema,
+} as const;
 
 function candidateObjectSchema(
   description: string,
@@ -476,6 +526,12 @@ const findingRecheckBaseProperties = {
   state: enumSchema(STEP_RESULT_FINDING_STATES),
   disposition: enumSchema(STEP_RESULT_FINDING_DISPOSITIONS),
 } as const;
+const planCandidateSchema = candidateObjectSchema(
+  "Planner semantic Plan content. The Orchestrator assigns the Plan version when it adopts the candidate.",
+  planCandidateProperties,
+  ["write_scope"],
+);
+
 const findingRecheckSchema = {
   oneOf: [
     candidateObjectSchema(
@@ -670,6 +726,7 @@ export const STEP_RESULT_AGENT_OUTPUT_CONTRACT = {
     outcome: enumSchema(AGENT_OUTCOMES),
     mode: enumSchema(AGENT_EXECUTION_MODES),
     summary: nonEmptyStringSchema,
+    plan: planCandidateSchema,
     artifacts: { type: "array", items: artifactItemSchema },
     uncertainty_candidates: { type: "array", items: uncertaintyCandidateSchema },
     decision_requests: { type: "array", items: decisionRequestSchema },
@@ -725,6 +782,8 @@ export const STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS = [
   `Uncertainty candidate category must be one of: ${STEP_RESULT_UNCERTAINTY_CATEGORIES.join(", ")}.`,
   `Finding candidates require severity (${STEP_RESULT_FINDING_SEVERITIES.join(", ")}) and confidence (${STEP_RESULT_FINDING_CONFIDENCES.join(", ")}); do not choose state or disposition for a new Finding.`,
   "Finding rechecks require exactly one existing findingId or finding_id F-* reference and may use only the declared recheck action/state/disposition values.",
+  "Planning Executions MUST return structured `plan` content with `write_scope`; the Orchestrator assigns the Plan version when it adopts the candidate.",
+  "The structured Plan `write_scope` is the only Planner source for Worker Write Scope. Do not put it in observations/runtime or rely on Markdown parsing.",
   `execution_checks require type (${STEP_RESULT_VERIFICATION_CHECK_TYPES.join(", ")}), status (${STEP_RESULT_VERIFICATION_CHECK_STATUSES.join(", ")}), and required boolean.`,
   "Artifacts supplied by an Agent are analysis/research drafts with type, purpose, and content; the Orchestrator adds front matter and finalizes them. Do not fabricate a finalized path/status.",
   `Observation kind/classification, when supplied, must use: ${STEP_RESULT_OBSERVATION_CLASSIFICATIONS.join(", ")}.`,
@@ -846,6 +905,37 @@ function jsonArray(input: unknown, contract: string, path: string): readonly Jso
 function stringArray(input: unknown, contract: string, path: string): readonly string[] {
   const value = arrayValue(input, contract, path);
   return value.map((entry, index) => nonEmptyString(entry, contract, `${path}[${index}]`));
+}
+
+function planCandidate(input: unknown): PlanCandidate | undefined {
+  if (input === undefined) return undefined;
+  const candidate = jsonObject(input, RESULT_CONTRACT, "plan");
+  assertKeys(candidate, PLAN_KEYS, RESULT_CONTRACT, "plan");
+  if (!Object.hasOwn(candidate, "write_scope")) {
+    fail(RESULT_CONTRACT, "plan.write_scope", "a string array");
+  }
+  stringArray(candidate.write_scope, RESULT_CONTRACT, "plan.write_scope");
+  for (const key of [
+    "implementation_units",
+    "verification_checks",
+    "affected_areas",
+    "dependencies",
+    "constraints",
+    "assumptions",
+    "acceptance_criterion_coverage",
+    "related_decisions",
+    "unresolved_blockers",
+  ] as const) {
+    if (candidate[key] !== undefined) {
+      jsonArray(candidate[key], RESULT_CONTRACT, `plan.${key}`);
+    }
+  }
+  for (const key of ["summary", "strategy"] as const) {
+    if (candidate[key] !== undefined) {
+      nonEmptyString(candidate[key], RESULT_CONTRACT, `plan.${key}`);
+    }
+  }
+  return candidate as PlanCandidate;
 }
 
 function skillReferences(
@@ -1396,6 +1486,7 @@ export function parseStepResultV1(input: unknown): StepResultV1 {
       "outcome",
       "mode",
       "summary",
+      "plan",
       "artifacts",
       "uncertainty_candidates",
       "decision_requests",
@@ -1420,6 +1511,7 @@ export function parseStepResultV1(input: unknown): StepResultV1 {
 
   const outcome = outcomeValue(root.outcome);
   nonEmptyString(root.summary, RESULT_CONTRACT, "summary");
+  planCandidate(root.plan);
   artifactArray(root.artifacts, RESULT_CONTRACT, "artifacts");
 
   uncertaintyCandidateArray(root.uncertainty_candidates, "uncertainty_candidates");

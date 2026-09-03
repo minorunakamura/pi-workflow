@@ -88,6 +88,7 @@ function completedStepResult(request: SubagentDelegationRequest): Record<string,
       request.agent === "verifier"
         ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
         : [],
+    ...(request.agent === "planner" ? { plan: { write_scope: ["src"] } } : {}),
     observations: [],
     blocked: null,
     failure: null,

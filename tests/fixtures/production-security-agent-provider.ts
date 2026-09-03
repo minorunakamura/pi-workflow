@@ -115,7 +115,8 @@ function resultFor(request: SecurityRequest): Record<string, unknown> {
     execution_checks: verifier
       ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
       : [],
-    observations: planner ? [{ write_scope: ["src"] }] : [],
+    ...(planner ? { plan: { write_scope: ["src"] } } : {}),
+    observations: [],
     blocked: null,
     failure: null,
     runtime: {},

@@ -134,9 +134,13 @@ describe("STORY-13-08 production security composition", () => {
                 },
             );
           const scoutRetry = audits.find(({ agent, call }) => agent === "scout" && call === 2);
+          const workerInitial = audits.find(({ agent, call }) => agent === "worker" && call === 1);
           const verifierFinal = audits.find(
             ({ agent, call }) => agent === "verifier" && call === 3,
           );
+
+          expect(workerInitial).toMatchObject({ mode: "write" });
+          expect(workerInitial?.advertisedTools).toEqual(expect.arrayContaining(["edit", "write"]));
 
           expect(scoutRetry).toMatchObject({ mode: "read-only" });
           expect(scoutRetry?.advertisedTools).toEqual(

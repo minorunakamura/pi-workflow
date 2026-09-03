@@ -143,6 +143,11 @@ describe("Agent execution contracts", () => {
     const properties = schemaProperties(root);
     expect(schemaEnum(properties.outcome)).toEqual(["completed", "blocked", "failed"]);
 
+    const plan = schemaRecord(properties.plan);
+    expect(schemaProperties(plan).write_scope).toMatchObject({ type: "array" });
+    expect(plan.required).toEqual(["write_scope"]);
+    expect(plan.additionalProperties).toBe(false);
+
     const requirements = schemaProperties(properties.requirement_candidates);
     const acceptance = schemaRecord(requirements.acceptance_criteria);
     const constraints = schemaRecord(requirements.constraints);
@@ -259,6 +264,37 @@ describe("Agent execution contracts", () => {
     expect(() => StepResultV1Schema.parse({ ...validResult(), outcome: "partial" })).toThrow(
       /outcome.*completed, blocked, failed/,
     );
+  });
+
+  it("accepts structured Planner Plan content and keeps its Write Scope machine-readable", () => {
+    const parsed = StepResultV1Schema.parse({
+      ...validResult(),
+      plan: {
+        summary: "Implement greeting behavior",
+        strategy: "Add the script and node:test coverage.",
+        implementation_units: [{ localId: "greeting" }],
+        verification_checks: [{ localId: "greeting-tests" }],
+        affected_areas: ["scripts"],
+        write_scope: ["scripts/greet.mjs", "scripts/greet.test.mjs"],
+        dependencies: [],
+        constraints: ["no external dependencies"],
+        assumptions: [],
+        acceptance_criterion_coverage: [],
+        related_decisions: [],
+        unresolved_blockers: [],
+      },
+    });
+
+    expect(parsed.plan?.write_scope).toEqual(["scripts/greet.mjs", "scripts/greet.test.mjs"]);
+  });
+
+  it("rejects Write Scope hidden in observations", () => {
+    expect(() =>
+      StepResultV1Schema.parse({
+        ...validResult(),
+        observations: [{ write_scope: ["src"] }],
+      }),
+    ).toThrow(/observations\[0\].write_scope/);
   });
 
   it("accepts a semantic candidate without an Agent-generated identity", () => {

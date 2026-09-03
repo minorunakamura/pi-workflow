@@ -50,6 +50,8 @@ function result(
     planDeviation?: boolean;
     requestAmendment?: boolean;
     writeScope?: readonly string[];
+    withoutPlan?: boolean;
+    planArtifact?: boolean;
   }> = {},
 ): Record<string, unknown> {
   const verificationFailed = request.agent === "verifier" && options.verificationFailed === true;
@@ -61,7 +63,16 @@ function result(
     },
     outcome: verificationFailed ? "failed" : "completed",
     summary: `completed:${request.agent}`,
-    artifacts: [],
+    artifacts:
+      request.agent === "planner" && options.planArtifact === true
+        ? [
+            {
+              type: "analysis",
+              purpose: "worker-plan",
+              content: "## Write Scope\n\n- scripts/greet.mjs\n- scripts/greet.test.mjs\n",
+            },
+          ]
+        : [],
     uncertainty_candidates: [],
     decision_requests: [],
     requirement_candidates: {
@@ -95,8 +106,10 @@ function result(
             },
           ]
         : [],
-    observations:
-      options.writeScope === undefined ? [] : [{ write_scope: [...options.writeScope] }],
+    ...(request.agent === "planner" && options.withoutPlan !== true
+      ? { plan: { write_scope: [...(options.writeScope ?? ["src"])] } }
+      : {}),
+    observations: [],
     blocked: null,
     failure: verificationFailed ? { reason: "production verification failed" } : null,
     runtime: {},
@@ -337,7 +350,8 @@ describe("workflow Extension production composition", () => {
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
         const request = payload as SubagentDelegationRequest;
         requests.push(request);
-        const writeScope = request.agent === "planner" ? ["src"] : undefined;
+        const writeScope =
+          request.agent === "planner" ? ["scripts/greet.test.mjs", "scripts/greet.mjs"] : undefined;
         events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
           requestId: request.requestId,
           ownerRunId: request.ownerRunId,
@@ -345,7 +359,10 @@ describe("workflow Extension production composition", () => {
           status: "completed",
           result: {
             kind: "structured",
-            value: result(request, writeScope === undefined ? {} : { writeScope }),
+            value:
+              writeScope === undefined
+                ? result(request)
+                : result(request, { writeScope, planArtifact: true }),
           },
         } satisfies SubagentDelegationResponse);
       });
@@ -368,10 +385,31 @@ describe("workflow Extension production composition", () => {
 
       const state = await new FileRunReader(repositoryRoot).load("run-001" as RunId);
       const workerRequest = requests.find(({ agent }) => agent === "worker");
-      expect(workerRequest?.task).toContain('"repositoryTargets":["src"]');
+      expect(workerRequest?.task).toContain(
+        '"repositoryTargets":["scripts/greet.mjs","scripts/greet.test.mjs"]',
+      );
       expect(workerRequest?.task).toContain('"resolved":["read","edit"]');
       expect(workerRequest?.task).toContain('"allow":["read","edit"]');
       expect(workerRequest?.task).not.toContain('"repositoryTargets":["."]');
+      expect(state.run.current_plan).toMatchObject({
+        version: 1,
+        requirement_revision: 1,
+        write_scope: ["scripts/greet.mjs", "scripts/greet.test.mjs"],
+      });
+      const reloaded = await new FileRunReader(repositoryRoot).load("run-001" as RunId);
+      expect(reloaded.run.current_plan?.write_scope).toEqual([
+        "scripts/greet.mjs",
+        "scripts/greet.test.mjs",
+      ]);
+      await expect(
+        new FileArtifactStore(repositoryRoot).read({
+          runId: "run-001" as RunId,
+          path: "analysis/worker-plan-exec-002.md",
+          status: "complete",
+        }),
+      ).resolves.toMatchObject({
+        body: expect.stringContaining("scripts/greet.mjs"),
+      });
       expect(state.run.repository).toMatchObject({
         classification: "unrelated",
         baseline_root: baseline.root,
@@ -392,6 +430,84 @@ describe("workflow Extension production composition", () => {
         "untracked working-tree file\n",
       );
       expect(state.run).toMatchObject({ status: "completed", finalized: true });
+    });
+  });
+
+  it("blocks a Plan whose Write Scope exists only in its Artifact", async () => {
+    const packageSkills = loadSkillsFromDir({
+      dir: resolve(PROJECT_ROOT, "skills"),
+      source: "pi-workflow",
+    }).skills.map((skill) => ({
+      ...skill,
+      sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+        source: "pi-workflow",
+        scope: "project",
+        origin: "package",
+      }),
+    }));
+
+    await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
+      const events = createEventBus();
+      const requests: SubagentDelegationRequest[] = [];
+      events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+        const request = payload as SubagentDelegationRequest;
+        requests.push(request);
+        const value =
+          request.agent === "planner"
+            ? result(request, { withoutPlan: true, planArtifact: true })
+            : result(request);
+        events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+          requestId: request.requestId,
+          ownerRunId: request.ownerRunId,
+          nodeId: request.nodeId,
+          status: "completed",
+          result: { kind: "structured", value },
+        } satisfies SubagentDelegationResponse);
+      });
+
+      const registrations = new Map<string, RegisteredCommand>();
+      workflowExtension({
+        registerCommand(name, options) {
+          registrations.set(name, options);
+        },
+        events,
+        getAllTools: tools,
+      });
+      const notifications: string[] = [];
+      await registrations
+        .get("wf-feature")!
+        .handler(
+          "missing structured plan scope",
+          commandContext(repositoryRoot, packageSkills, notifications),
+        );
+
+      const state = await new FileRunReader(repositoryRoot).load("run-001" as RunId);
+      expect(requests.map(({ agent }) => agent)).toEqual(["scout", "planner"]);
+      expect(state.run).toMatchObject({
+        status: "blocked",
+        finalized: false,
+        blocked: {
+          classification: "recovery-required",
+          reference: "StepResultV1.plan.write_scope",
+        },
+        current_plan: null,
+      });
+      expect(notifications.join("\n")).toContain(
+        "Planner completed without a non-empty structured Plan Write Scope",
+      );
+      const planner = state.snapshot.steps.steps.find(({ agent }) => agent === "planner");
+      expect(planner?.result?.artifacts).toEqual([
+        { runId: "run-001", path: "analysis/worker-plan-exec-002.md", status: "complete" },
+      ]);
+      await expect(
+        new FileArtifactStore(repositoryRoot).read({
+          runId: "run-001" as RunId,
+          path: "analysis/worker-plan-exec-002.md",
+          status: "complete",
+        }),
+      ).resolves.toMatchObject({
+        body: expect.stringContaining("scripts/greet.test.mjs"),
+      });
     });
   });
 
@@ -772,6 +888,9 @@ describe("workflow Extension production composition", () => {
         "verifier",
         "reviewer",
       ]);
+      expect(requests.find(({ agent }) => agent === "worker")?.task).toContain(
+        '"repositoryTargets":["src"]',
+      );
     });
   });
 

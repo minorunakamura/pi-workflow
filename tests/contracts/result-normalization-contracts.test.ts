@@ -7,6 +7,7 @@ import {
   type StepResultV1,
 } from "../../src/contracts/execution/agent-execution.js";
 import {
+  normalizePlanCandidate,
   normalizeResultCandidates,
   normalizeStepResult,
   validateStepResult,
@@ -243,6 +244,23 @@ describe("Result normalization contract", () => {
       id: "U-002",
       category: "behavior",
       summary: "Current behavior is unclear",
+    });
+  });
+
+  it("normalizes structured Planner Plan content without using observations", () => {
+    const parsed = StepResultV1Schema.parse({
+      ...result(),
+      plan: {
+        write_scope: ["scripts/greet.test.mjs", "scripts/greet.mjs"],
+        implementation_units: [],
+        verification_checks: [],
+      },
+    });
+
+    expect(normalizePlanCandidate(parsed.plan)).toEqual({
+      write_scope: ["scripts/greet.test.mjs", "scripts/greet.mjs"],
+      implementation_units: [],
+      verification_checks: [],
     });
   });
 

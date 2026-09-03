@@ -5,6 +5,7 @@ import {
   StepResultV1Schema,
   type AgentExecutionRequestV1,
   type JsonValue,
+  type PlanCandidate,
   type ResultCandidate,
   type StepResultV1,
 } from "../../contracts/execution/agent-execution.js";
@@ -85,6 +86,8 @@ export type NormalizedFindingRecheck = ResultCandidate &
     id: FindingId;
   }>;
 
+export type NormalizedPlan = PlanCandidate;
+
 export type NormalizedResultCandidates = Readonly<{
   uncertainty_candidates: readonly NormalizedCandidate<UncertaintyId>[];
   decision_requests: readonly NormalizedCandidate<DecisionId>[];
@@ -109,6 +112,7 @@ export type ResultArtifactValidation = Readonly<{
 export type ResultNormalizationResult = Readonly<{
   state: WorkflowState;
   result: StepResultV1;
+  plan?: NormalizedPlan;
   candidates: NormalizedResultCandidates;
   artifacts: ResultArtifactValidation;
 }>;
@@ -117,6 +121,13 @@ const noPostconditions = (state: WorkflowState): WorkflowState => state;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function normalizePlanCandidate(
+  plan: PlanCandidate | undefined,
+): NormalizedPlan | undefined {
+  if (plan === undefined) return undefined;
+  return { ...plan, write_scope: [...plan.write_scope] };
 }
 
 function fail(code: ResultNormalizationErrorCode, message: string): never {
@@ -623,7 +634,9 @@ export async function normalizeStepResult(
 ): Promise<ResultNormalizationResult> {
   const validated = await validateStepResult(input, options);
   const validatedInput: ResultValidationInput = { ...input, result: validated };
-  const result = await finalizeAgentArtifactDrafts(validatedInput, validated, options);
+  const finalized = await finalizeAgentArtifactDrafts(validatedInput, validated, options);
+  const plan = normalizePlanCandidate(finalized.plan);
+  const result = plan === undefined ? finalized : { ...finalized, plan };
   const normalizedInput: ResultValidationInput = { ...validatedInput, result };
   const state =
     options.postconditions === undefined
@@ -635,5 +648,11 @@ export async function normalizeStepResult(
     ...(options.allocator === undefined ? {} : { allocator: options.allocator }),
   });
   const artifacts = await validateResultArtifacts({ ...normalizedInput, state }, options);
-  return { state, result, candidates, artifacts };
+  return {
+    state,
+    result,
+    ...(plan === undefined ? {} : { plan }),
+    candidates,
+    artifacts,
+  };
 }

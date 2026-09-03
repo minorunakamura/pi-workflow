@@ -162,7 +162,8 @@ function resultFor(request: PackedRequest): Record<string, unknown> {
     execution_checks: verifier
       ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
       : [],
-    observations: planner ? [{ write_scope: ["src"] }] : [],
+    ...(planner ? { plan: { write_scope: ["src"] } } : {}),
+    observations: [],
     blocked: null,
     failure: null,
     runtime: {},
@@ -470,6 +471,12 @@ describe("packed Pi Package production Agent runtime", () => {
         "verifier",
         "reviewer",
       ]);
+      const workerTask = requests.find(({ agent }) => agent === "worker")?.task ?? "";
+      expect(workerTask).toContain('"repositoryTargets":["src"]');
+      expect(workerTask).toMatch(/"resolved":\[[^\]]*"edit"/);
+      expect(workerTask).toMatch(/"resolved":\[[^\]]*"write"/);
+      expect(workerTask).toMatch(/"allow":\[[^\]]*"edit"/);
+      expect(workerTask).toMatch(/"allow":\[[^\]]*"write"/);
       expect(responses).toHaveLength(requests.length);
       expect(
         responses.every(
