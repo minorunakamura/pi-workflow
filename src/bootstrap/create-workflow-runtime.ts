@@ -1306,7 +1306,7 @@ function productionPostconditions(
     input.step.type !== "planning" || stepStatus !== "completed"
       ? currentPlan
       : {
-          ...(currentPlan ?? {}),
+          ...currentPlan,
           ...(isReplan ? { version: planVersion + 1 } : { version: planVersion || 1 }),
           write_scope: plannedWriteScope(input.result) ?? [],
           applicability: { status: "current" as const },
