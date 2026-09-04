@@ -52,6 +52,15 @@ function result(
   options: Readonly<{
     verificationFailed?: boolean;
     verificationChecks?: boolean;
+    uncertaintyCandidate?: boolean;
+    uncertaintyCategory?:
+      | "requirement"
+      | "behavior"
+      | "design"
+      | "external"
+      | "impact"
+      | "verification";
+    uncertaintyRecheck?: boolean;
     finding?: boolean;
     recheck?: boolean;
     planDeviation?: boolean;
@@ -80,7 +89,33 @@ function result(
             },
           ]
         : [],
-    uncertainty_candidates: [],
+    uncertainty_candidates:
+      request.agent === "scout" && options.uncertaintyCandidate === true
+        ? [
+            {
+              category: options.uncertaintyCategory ?? "verification",
+              question: "Is Node test execution available for this repository?",
+              basis: "Scout could not execute the requested command yet.",
+              impact:
+                "The verification path cannot be trusted until command execution is observed.",
+            },
+          ]
+        : [],
+    ...(request.agent === "verifier" && options.uncertaintyRecheck === true
+      ? {
+          uncertainty_rechecks: [
+            {
+              uncertaintyId: "U-001",
+              action: "resolve",
+              evidence: [
+                "node scripts/greet.mjs Alice: passed",
+                "node scripts/greet.mjs: passed",
+                "node --test test/greet.test.mjs: passed",
+              ],
+            },
+          ],
+        }
+      : {}),
     decision_requests: [],
     requirement_candidates: {
       acceptance_criteria: [],
@@ -353,6 +388,197 @@ describe("workflow Extension production composition", () => {
           "run.completed",
         ]),
       );
+    });
+  });
+
+  it("projects accepted verification evidence onto the referenced Uncertainty", async () => {
+    const packageSkills = loadSkillsFromDir({
+      dir: resolve(PROJECT_ROOT, "skills"),
+      source: "pi-workflow",
+    }).skills.map((skill) => ({
+      ...skill,
+      sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+        source: "pi-workflow",
+        scope: "project",
+        origin: "package",
+      }),
+    }));
+
+    await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
+      const events = createEventBus();
+      installVerificationEvidence(events);
+      const requests: SubagentDelegationRequest[] = [];
+      events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+        const request = payload as SubagentDelegationRequest;
+        requests.push(request);
+        const options =
+          request.agent === "scout"
+            ? { uncertaintyCandidate: true }
+            : request.agent === "verifier"
+              ? { uncertaintyRecheck: true }
+              : {};
+        events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+          requestId: request.requestId,
+          ownerRunId: request.ownerRunId,
+          nodeId: request.nodeId,
+          status: "completed",
+          result: { kind: "structured", value: result(request, options) },
+        } satisfies SubagentDelegationResponse);
+      });
+
+      const registrations = new Map<string, RegisteredCommand>();
+      workflowExtension({
+        registerCommand(name, options) {
+          registrations.set(name, options);
+        },
+        events,
+        getAllTools: tools,
+      });
+      const notifications: string[] = [];
+      await registrations
+        .get("wf-feature")!
+        .handler(
+          "verification resolves uncertainty",
+          commandContext(repositoryRoot, packageSkills, notifications),
+        );
+
+      const state = await new FileRunReader(repositoryRoot).load("run-001" as RunId);
+      expect(state.run).toMatchObject({ status: "completed", finalized: true });
+      expect(requests.map(({ agent }) => agent)).toEqual([
+        "scout",
+        "planner",
+        "worker",
+        "verifier",
+        "reviewer",
+      ]);
+      expect(state.snapshot.uncertainties.uncertainties).toHaveLength(1);
+      const uncertainty = state.snapshot.uncertainties.uncertainties[0];
+      expect(uncertainty).toMatchObject({
+        id: "U-001",
+        status: "resolved",
+        category: "verification",
+        question: "Is Node test execution available for this repository?",
+        created_by: { step_id: "step-001", execution_id: "exec-001", agent_id: "scout" },
+      });
+      expect(uncertainty?.resolution_attempts).toHaveLength(1);
+      expect(uncertainty?.resolution).toMatchObject({
+        status: "resolved",
+        authority: "orchestrator",
+        step_id: "step-004",
+        execution_id: "exec-004",
+        evidence: [
+          {
+            type: "verification",
+            verification_run_id: "VR-001",
+            execution_id: "exec-004",
+            check_index: 1,
+            check_type: "test",
+            artifact: { path: "verification/VR-001.md", status: "complete" },
+          },
+        ],
+      });
+      const eventLog = await new JsonlEventReader(repositoryRoot).readAfter("run-001" as RunId, 0);
+      expect(eventLog.map(({ type }) => type)).toEqual(
+        expect.arrayContaining(["uncertainty.created", "uncertainty.resolved", "run.completed"]),
+      );
+      expect(eventLog.find(({ type }) => type === "uncertainty.resolved")?.data).toMatchObject({
+        uncertainty_id: "U-001",
+        resolution_evidence: [
+          { verification_run_id: "VR-001", artifact: { path: "verification/VR-001.md" } },
+        ],
+      });
+      await expect(
+        new FileRunReader(repositoryRoot).load("run-001" as RunId),
+      ).resolves.toMatchObject({
+        snapshot: {
+          uncertainties: {
+            uncertainties: [
+              {
+                status: "resolved",
+                resolution: { evidence: [{ verification_run_id: "VR-001" }] },
+              },
+            ],
+          },
+        },
+      });
+    });
+  });
+
+  it("keeps an impact Uncertainty blocking despite unrelated Verification evidence", async () => {
+    const packageSkills = loadSkillsFromDir({
+      dir: resolve(PROJECT_ROOT, "skills"),
+      source: "pi-workflow",
+    }).skills.map((skill) => ({
+      ...skill,
+      sourceInfo: createSyntheticSourceInfo(skill.filePath, {
+        source: "pi-workflow",
+        scope: "project",
+        origin: "package",
+      }),
+    }));
+
+    await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
+      const events = createEventBus();
+      installVerificationEvidence(events);
+      const requests: SubagentDelegationRequest[] = [];
+      events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+        const request = payload as SubagentDelegationRequest;
+        requests.push(request);
+        const firstScout =
+          request.agent === "scout" &&
+          requests.filter(({ agent }) => agent === "scout").length === 1;
+        events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+          requestId: request.requestId,
+          ownerRunId: request.ownerRunId,
+          nodeId: request.nodeId,
+          status: "completed",
+          result: {
+            kind: "structured",
+            value: result(
+              request,
+              firstScout
+                ? { uncertaintyCandidate: true, uncertaintyCategory: "impact" }
+                : request.agent === "verifier"
+                  ? { uncertaintyRecheck: true }
+                  : {},
+            ),
+          },
+        } satisfies SubagentDelegationResponse);
+      });
+
+      const registrations = new Map<string, RegisteredCommand>();
+      workflowExtension({
+        registerCommand(name, options) {
+          registrations.set(name, options);
+        },
+        events,
+        getAllTools: tools,
+      });
+      const notifications: string[] = [];
+      await registrations
+        .get("wf-feature")!
+        .handler(
+          "unresolved uncertainty",
+          commandContext(repositoryRoot, packageSkills, notifications),
+        );
+
+      const state = await new FileRunReader(repositoryRoot).load("run-001" as RunId);
+      expect(state.run).toMatchObject({ status: "blocked", finalized: false, outcome: null });
+      expect(state.snapshot.uncertainties.uncertainties[0]).toMatchObject({
+        id: "U-001",
+        status: "escalated",
+      });
+      expect(state.snapshot.uncertainties.uncertainties[0]?.resolution_attempts).toHaveLength(3);
+      expect(
+        state.snapshot.steps.steps.filter(({ trigger }) => trigger === "uncertainty"),
+      ).toHaveLength(2);
+      const eventTypes = (
+        await new JsonlEventReader(repositoryRoot).readAfter("run-001" as RunId, 0)
+      ).map(({ type }) => type);
+      expect(eventTypes).toEqual(
+        expect.arrayContaining(["uncertainty.resolving", "uncertainty.escalated", "run.blocked"]),
+      );
+      expect(notifications.join("\n")).not.toContain("status=completed; finalized=true");
     });
   });
 

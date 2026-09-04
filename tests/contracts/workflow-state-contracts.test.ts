@@ -143,6 +143,39 @@ describe("workflow state contracts", () => {
     expect(SnapshotManifestV1Schema.parse(validManifest())).toEqual(validManifest());
   });
 
+  it("retains Uncertainty provenance, attempts, and resolution evidence in authoritative state", () => {
+    const snapshot = {
+      ...validUncertaintiesSnapshot(),
+      uncertainties: [
+        {
+          id: "U-001",
+          status: "resolved",
+          category: "verification",
+          question: "Is Node test execution available?",
+          basis: "Scout could not run it",
+          impact: "Verification was initially unproven",
+          created_by: { step_id: "step-001", execution_id: "exec-001", agent_id: "scout" },
+          created_at: "2026-09-04T00:00:00.000Z",
+          resolution_attempts: [
+            {
+              step_id: "step-004",
+              execution_id: "exec-004",
+              status: "resolved",
+              evidence: { execution_id: "exec-004", check_index: 1 },
+            },
+          ],
+          resolution: {
+            status: "resolved",
+            authority: "orchestrator",
+            evidence: [{ verification_run_id: "VR-001", artifact_path: "verification/VR-001.md" }],
+          },
+        },
+      ],
+    };
+
+    expect(UncertaintiesSnapshotV1Schema.parse(snapshot)).toEqual(snapshot);
+  });
+
   it("keeps finalized separate from the Run status", () => {
     expect(RunYamlV1Schema.parse(validRunYaml()).finalized).toBe(false);
     expect(

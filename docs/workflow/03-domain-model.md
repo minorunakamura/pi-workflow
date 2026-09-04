@@ -165,7 +165,7 @@ requirement | behavior | design | external | impact | verification
 
 An accepted Uncertainty means the unknown remains but its residual risk/limitation has been explicitly accepted. It does not mean the missing fact became known.
 
-Resolution attempts are bounded by policy. When the budget is exhausted, the Orchestrator escalates or ultimately fails/blocks according to authority and policy.
+An authoritative Uncertainty retains its question/unknown, basis, impact, creation provenance, bounded resolution attempts, and resolution evidence references when those details are available. `resolved` requires evidence that answers that Uncertainty; changing the status without traceable evidence is invalid. Resolution attempts are bounded by policy. When the budget is exhausted, the Orchestrator escalates or ultimately fails/blocks according to authority and policy.
 
 ## Decision
 

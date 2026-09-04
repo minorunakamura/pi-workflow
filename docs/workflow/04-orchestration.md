@@ -73,6 +73,8 @@ Uncertainty routing:
 | `requirement` | Existing evidence first, then Orchestrator/User clarification |
 | `verification` | Verifier/research/re-plan depending on cause |
 
+A later Agent may return an `uncertainty_rechecks` candidate that references one existing `U-*` and cites concrete evidence; this is a proposal, not an Agent-owned status mutation. The Orchestrator validates the reference and evidence, then alone may project `open|resolving` to `resolved`. Phase 1 may deterministically resolve verification/behavior Uncertainty only from a matching accepted Verification Run and passed required Check; unrelated evidence does not qualify. `accepted` remains an explicit residual-risk disposition and is not produced by this path.
+
 Resolution attempts are bounded. Scope-local investigation/research may be inserted automatically when within D0/D1. D2 remains Orchestrator authority. D3 always requires the user.
 
 ## Decisions and Escalation

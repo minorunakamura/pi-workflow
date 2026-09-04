@@ -73,6 +73,7 @@ Stable result groups include:
 summary: "..."
 artifacts: []
 uncertainty_candidates: []
+uncertainty_rechecks: []
 decision_requests: []
 requirement_candidates:
   acceptance_criteria: []
@@ -89,10 +90,13 @@ failure: null
 runtime: {}
 ```
 
+`uncertainty_rechecks` is an additive field; legacy wire payloads that omit it are normalized to an empty array before State processing.
+
 - **MUST:** Stable array fields be present even when empty.
 - **MUST:** A `failed` outcome contain structured failure information.
 - **MUST:** A `blocked` outcome identify the blocking reason/ref.
 - **MUST NOT:** Agent candidates use authoritative `U-*`, `D-*`, `F-*`, or other State IDs; the Orchestrator allocates them.
+- **MUST:** An `uncertainty_rechecks` item may reference an existing `U-*` only, use `action: resolve`, and cite concrete evidence; it does not change authoritative status.
 - **MUST:** The Orchestrator validate schema, identity, role restrictions, references, permissions, repository postconditions, Artifact presence, and size before accepting a result.
 
 ## Agent Definitions

@@ -240,9 +240,11 @@ reference validation
   ↓
 permission/repository postconditions
   ↓
-normalize candidates / allocate IDs
+normalize candidates / allocate IDs and validate existing-U rechecks
   ↓
 finalize Plan/CS/VR/RR/etc. Artifacts
+  ↓
+Orchestrator projects evidence-backed Uncertainty resolution
   ↓
 next State transition
 ```
@@ -730,6 +732,7 @@ Outcome finalization + terminal State commit
 
 - **MUST:** A Worker `completed` result not be accepted as proof of implementation without actual repository observation and Change Set finalization.
 - **MUST:** Required Verification/Review Artifacts be finalized through the production Orchestrator path before completion eligibility is evaluated.
+- **MUST:** Evidence-backed `U-*` resolution is projected only after the relevant finalized evidence is available; unresolved or unsupported Uncertainty remains blocking.
 - **MUST:** Open blocking/fix-required Findings, failed required verification, stale evidence, unresolved drift, or another failed Completion Gate prevent successful terminalization.
 - **MUST:** Dynamic triggers required by the orchestration specification, including verification failure, review finding, plan deviation, request amendment, repository drift, runtime failure, and recovery, reach the production Orchestrator control loop rather than existing only in fake/component compositions.
 - **MUST NOT:** Raw Agent results or test-only postcondition hooks bypass authoritative finalizers in the installed/default release path.

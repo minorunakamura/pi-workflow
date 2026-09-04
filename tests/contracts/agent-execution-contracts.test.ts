@@ -198,6 +198,16 @@ describe("Agent execution contracts", () => {
       STEP_RESULT_UNCERTAINTY_CATEGORIES,
     );
 
+    const uncertaintyRechecks = schemaRecord(properties.uncertainty_rechecks);
+    const uncertaintyVariants = schemaRecord(uncertaintyRechecks.items).oneOf;
+    if (!Array.isArray(uncertaintyVariants)) {
+      throw new Error("Expected Uncertainty recheck schema variants");
+    }
+    expect(uncertaintyVariants.map((variant) => schemaRecord(variant).required)).toEqual([
+      ["uncertaintyId", "action"],
+      ["uncertainty_id", "action"],
+    ]);
+
     const findings = schemaRecord(properties.finding_candidates);
     expect(schemaEnum(schemaProperties(findings.items).severity)).toEqual(FINDING_SEVERITIES);
     expect(schemaEnum(schemaProperties(findings.items).confidence)).toEqual(FINDING_CONFIDENCES);
@@ -307,6 +317,43 @@ describe("Agent execution contracts", () => {
       { category: "behavior", summary: "Current behavior is unclear" },
     ]);
     expect(parsed.uncertainty_candidates[0]).not.toHaveProperty("id");
+  });
+
+  it("accepts only an evidence-backed recheck reference for an existing Uncertainty", () => {
+    const parsed = StepResultV1Schema.parse({
+      ...validResult(),
+      uncertainty_rechecks: [
+        {
+          uncertaintyId: "U-001",
+          action: "resolve",
+          evidence: { execution_id: "exec-001", check_index: 1 },
+        },
+      ],
+    });
+
+    expect(parsed.uncertainty_rechecks).toEqual([
+      {
+        uncertaintyId: "U-001",
+        action: "resolve",
+        evidence: { execution_id: "exec-001", check_index: 1 },
+      },
+    ]);
+    expect(() =>
+      StepResultV1Schema.parse({
+        ...validResult(),
+        uncertainty_rechecks: [
+          { uncertaintyId: "U-001", action: "resolve", evidence: "not a concrete reference" },
+        ],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      StepResultV1Schema.parse({
+        ...validResult(),
+        uncertainty_rechecks: [
+          { uncertaintyId: "U-001", action: "accept", evidence: { execution_id: "exec-001" } },
+        ],
+      }),
+    ).toThrow(/uncertainty_rechecks.*action.*resolve/);
   });
 
   it("rejects authoritative State IDs in every Agent candidate group", () => {
