@@ -102,7 +102,13 @@ function check(
     status,
     required,
     type,
-    evidence: { command: `check-${status}` },
+    evidence: {
+      source: "verification-tool",
+      command: `check-${status}`,
+      status,
+      exit_code: status === "passed" ? 0 : status === "failed" ? 1 : null,
+      ...(status === "unavailable" ? { reason: "not-run" } : {}),
+    },
   };
 }
 
@@ -164,6 +170,103 @@ describe("VerifierFinalizer integration", () => {
       });
       expect(artifact.body).toContain('"result": "passed"');
       expect(artifact.body).toContain("requirement_revision");
+    });
+  });
+
+  it("accepts sufficient inspection evidence without command execution", async () => {
+    await withTempRepository({ "src/target.txt": "unchanged\\n" }, async (repositoryRoot) => {
+      await initializeGit(repositoryRoot);
+      const input = request("exec-006");
+      const repository = new GitRepositoryAdapter(repositoryRoot);
+      const snapshot = await repository.captureSnapshot();
+      const inspection = {
+        source: "repository-inspection",
+        inspection_performed: true,
+        evidence_refs: ["repository current snapshot", "src/target.txt"],
+        observed: { changed_files: [], dependency_files_changed: [] },
+      };
+      const finalized = await finalizer(repositoryRoot).finalize({
+        request: input,
+        result: resultFor(input, [
+          { type: "inspection", status: "passed", required: true, evidence: inspection },
+        ]),
+        before: snapshot,
+        after: snapshot,
+        executionStateRevision: 1,
+      });
+
+      expect(finalized.verificationRun).toMatchObject({
+        result: "passed",
+        strength: "weak",
+        accepted: true,
+        checks: [{ type: "inspection", status: "passed", required: true }],
+      });
+    });
+  });
+
+  it("rejects missing or unavailable evidence for a claimed passed check", async () => {
+    await withTempRepository({ "src/target.txt": "unchanged\\n" }, async (repositoryRoot) => {
+      await initializeGit(repositoryRoot);
+      const input = request("exec-007");
+      const repository = new GitRepositoryAdapter(repositoryRoot);
+      const snapshot = await repository.captureSnapshot();
+      for (const evidence of [
+        undefined,
+        { source: "verification-tool", command: null, status: "unavailable", reason: "not-run" },
+      ]) {
+        await expect(
+          finalizer(repositoryRoot).finalize({
+            request: input,
+            result: resultFor(input, [
+              {
+                type: "inspection",
+                status: "passed",
+                required: true,
+                ...(evidence === undefined ? {} : { evidence }),
+              },
+            ]),
+            before: snapshot,
+            after: snapshot,
+            executionStateRevision: 1,
+          }),
+        ).rejects.toMatchObject({ code: "CHECK_INVALID" });
+      }
+    });
+  });
+
+  it("keeps required unavailable checks incomplete and optional unavailable checks acceptable", async () => {
+    await withTempRepository({ "src/target.txt": "unchanged\\n" }, async (repositoryRoot) => {
+      await initializeGit(repositoryRoot);
+      const repository = new GitRepositoryAdapter(repositoryRoot);
+      const snapshot = await repository.captureSnapshot();
+      const verifierFinalizer = finalizer(repositoryRoot);
+      const requiredInput = request("exec-008");
+      const required = await verifierFinalizer.finalize({
+        request: requiredInput,
+        result: resultFor(requiredInput, [check("passed", true), check("unavailable", true)]),
+        before: snapshot,
+        after: snapshot,
+        executionStateRevision: 1,
+      });
+      expect(required.verificationRun).toMatchObject({
+        result: "incomplete",
+        accepted: false,
+        strength: "partial",
+      });
+
+      const optionalInput = request("exec-009");
+      const optional = await verifierFinalizer.finalize({
+        request: optionalInput,
+        result: resultFor(optionalInput, [check("passed", true), check("unavailable", false)]),
+        before: snapshot,
+        after: snapshot,
+        executionStateRevision: 1,
+      });
+      expect(optional.verificationRun).toMatchObject({
+        result: "passed",
+        accepted: true,
+        strength: "partial",
+      });
     });
   });
 
@@ -249,18 +352,15 @@ describe("VerifierFinalizer integration", () => {
         }),
       ).rejects.toMatchObject({ code: "CHECK_INVALID" });
 
-      const noEvidence = await finalizer(repositoryRoot).finalize({
-        request: input,
-        result: resultFor(input, [{ status: "passed", required: true, type: "test" }]),
-        before: snapshot,
-        after: snapshot,
-        executionStateRevision: 1,
-      });
-      expect(noEvidence.verificationRun).toMatchObject({
-        status: "partial",
-        result: "incomplete",
-        accepted: false,
-      });
+      await expect(
+        finalizer(repositoryRoot).finalize({
+          request: input,
+          result: resultFor(input, [{ status: "passed", required: true, type: "test" }]),
+          before: snapshot,
+          after: snapshot,
+          executionStateRevision: 1,
+        }),
+      ).rejects.toMatchObject({ code: "CHECK_INVALID" });
 
       const writeRequest = request("exec-005", {
         tools: { resolved: ["repository-write"], policy: {} },

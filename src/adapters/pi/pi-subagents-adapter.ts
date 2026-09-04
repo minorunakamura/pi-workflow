@@ -400,7 +400,7 @@ function installVerifierAgentOverride(request: AgentExecutionRequestV1): () => v
       "---",
       "",
       "You are the Workflow Verifier Agent.",
-      "Execute the supplied Verification Checks with the verification Tool, record runtime evidence, and distinguish passed, failed, skipped, and unavailable checks. The Tool accepts only an exact Orchestrator-approved command from the current Plan; never use bash, powershell, edit, or write. Do not modify source, create Findings, or widen the execution permissions.",
+      "Execute and observe the supplied Verification Checks, record runtime evidence, and distinguish passed, failed, skipped, and unavailable checks. Use the verification Tool only for exact Orchestrator-approved command checks; use the read-only read, grep, find, and ls Tools for inspection/manual checks and report the observed evidence. Never use bash, powershell, edit, or write. Do not modify source, create Findings, or widen the execution permissions.",
       "",
     ].join("\n"),
     { encoding: "utf8", mode: 0o600 },

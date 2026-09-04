@@ -6,6 +6,7 @@ import {
   type JsonObject,
   type JsonValue,
   type StepResultV1,
+  type VerificationInspectionEvidenceV1,
 } from "../../contracts/execution/agent-execution.js";
 import {
   ArtifactFrontMatterV1Schema,
@@ -60,6 +61,9 @@ export type VerificationCheck = JsonObject &
     evidence?: JsonValue;
   }>;
 
+/** Deterministic evidence supplied by the Orchestrator for non-command checks. */
+export type VerificationInspectionEvidence = VerificationInspectionEvidenceV1;
+
 export type VerifierRepositoryObservation = Readonly<{
   mutated: boolean;
   changedFiles: readonly string[];
@@ -96,6 +100,7 @@ export type VerifierFinalizerInput = Readonly<{
   evidence?: readonly JsonValue[];
   limitations?: readonly JsonValue[];
   strength?: VerificationStrength;
+  inspectionEvidence?: readonly VerificationInspectionEvidence[];
 }>;
 
 export type VerifierFinalization = Readonly<{
@@ -299,18 +304,140 @@ function checkType(value: unknown, index: number): VerificationCheckType {
   return value as VerificationCheckType;
 }
 
-function parseChecks(result: StepResultV1): readonly VerificationCheck[] {
-  return result.execution_checks.map((candidate, index) => {
-    const status = checkStatus(candidate.status, index);
-    const type = checkType(candidate.type, index);
+function evidenceStatus(value: JsonValue | undefined): VerificationCheckStatus | undefined {
+  if (!isRecord(value)) return undefined;
+  const status = value.status;
+  if (
+    typeof status === "string" &&
+    (VERIFICATION_CHECK_STATUSES as readonly string[]).includes(status)
+  ) {
+    return status as VerificationCheckStatus;
+  }
+  return isRecord(value.value) ? evidenceStatus(value.value as JsonValue) : undefined;
+}
+
+function evidenceExitCode(value: JsonValue | undefined): number | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.exit_code === "number" && Number.isSafeInteger(value.exit_code)) {
+    return value.exit_code;
+  }
+  return isRecord(value.value) ? evidenceExitCode(value.value as JsonValue) : undefined;
+}
+
+function inspectionEvidenceIsSufficient(value: JsonValue | undefined): boolean {
+  if (!isRecord(value) || value.inspection_performed !== true) return false;
+  const refs = value.evidence_refs;
+  const observed = value.observed;
+  return (
+    Array.isArray(refs) &&
+    refs.length > 0 &&
+    refs.every((ref) => typeof ref === "string" && ref.trim().length > 0) &&
+    isRecord(observed) &&
+    Object.keys(observed).length > 0
+  );
+}
+
+function executedEvidenceIsSufficient(
+  type: VerificationCheckType,
+  status: VerificationCheckStatus,
+  evidence: JsonValue | undefined,
+): boolean {
+  const reported = evidenceStatus(evidence);
+  if (reported !== undefined && reported !== status) return false;
+  if (type === "inspection" || type === "manual") {
+    return (status === "passed" || status === "failed") && inspectionEvidenceIsSufficient(evidence);
+  }
+  const exitCode = evidenceExitCode(evidence);
+  return (
+    (status === "passed" && exitCode === 0) ||
+    (status === "failed" && exitCode !== undefined && exitCode !== 0)
+  );
+}
+
+function validateCheckSemantics(
+  status: VerificationCheckStatus,
+  type: VerificationCheckType,
+  evidence: JsonValue | undefined,
+  index: number,
+): void {
+  const reported = evidenceStatus(evidence);
+  if (status === "passed" || status === "failed") {
+    if (!executedEvidenceIsSufficient(type, status, evidence)) {
+      throw new VerifierFinalizationError(
+        "CHECK_INVALID",
+        `execution_checks[${index}] ${status} requires sufficient ${type} evidence`,
+      );
+    }
+    return;
+  }
+  if (reported === "passed" || reported === "failed") {
+    throw new VerifierFinalizationError(
+      "CHECK_INVALID",
+      `execution_checks[${index}] ${status} conflicts with executed evidence ${reported}`,
+    );
+  }
+}
+
+function inspectionEvidenceMap(
+  values: readonly VerificationInspectionEvidence[],
+): ReadonlyMap<number, VerificationInspectionEvidence> {
+  const entries = new Map<number, VerificationInspectionEvidence>();
+  for (const [index, rawValue] of values.entries()) {
+    const value = isRecord(rawValue)
+      ? (rawValue as unknown as VerificationInspectionEvidence)
+      : undefined;
+    if (
+      value === undefined ||
+      !Number.isSafeInteger(value.check_index) ||
+      value.check_index < 1 ||
+      entries.has(value.check_index) ||
+      (value.type !== "inspection" && value.type !== "manual") ||
+      (value.status !== "passed" && value.status !== "failed" && value.status !== "unavailable") ||
+      typeof value.required !== "boolean" ||
+      !isRecord(value.evidence)
+    ) {
+      throw new VerifierFinalizationError(
+        "CHECK_INVALID",
+        `inspectionEvidence[${index}] is invalid`,
+      );
+    }
+    jsonValue(value.evidence, `inspectionEvidence[${index}].evidence`);
+    entries.set(value.check_index, value);
+  }
+  return entries;
+}
+
+function parseChecks(
+  result: StepResultV1,
+  suppliedInspectionEvidence: readonly VerificationInspectionEvidence[] = [],
+): readonly VerificationCheck[] {
+  const inspectionEvidence = inspectionEvidenceMap(suppliedInspectionEvidence);
+  const usedInspectionEvidence = new Set<number>();
+  const checks = result.execution_checks.map((candidate, index) => {
+    const candidateStatus = checkStatus(candidate.status, index);
+    const candidateType = checkType(candidate.type, index);
     if (typeof candidate.required !== "boolean") {
       throw new VerifierFinalizationError(
         "CHECK_INVALID",
         `execution_checks[${index}].required must be a boolean`,
       );
     }
-    const evidence = Object.hasOwn(candidate, "evidence") ? candidate.evidence : undefined;
+    const supplied = inspectionEvidence.get(index + 1);
+    if (supplied !== undefined) {
+      if (candidateType !== supplied.type || candidate.required !== supplied.required) {
+        throw new VerifierFinalizationError(
+          "CHECK_INVALID",
+          `inspectionEvidence[${index}] does not match the planned check`,
+        );
+      }
+      usedInspectionEvidence.add(index + 1);
+    }
+    const status = supplied?.status ?? candidateStatus;
+    const type = candidateType;
+    const evidence =
+      supplied?.evidence ?? (Object.hasOwn(candidate, "evidence") ? candidate.evidence : undefined);
     if (evidence !== undefined) jsonValue(evidence, `execution_checks[${index}].evidence`);
+    validateCheckSemantics(status, type, evidence, index);
     return {
       ...candidate,
       check_index: index + 1,
@@ -320,6 +447,15 @@ function parseChecks(result: StepResultV1): readonly VerificationCheck[] {
       ...(evidence === undefined ? {} : { evidence }),
     };
   });
+  for (const checkIndex of inspectionEvidence.keys()) {
+    if (!usedInspectionEvidence.has(checkIndex)) {
+      throw new VerifierFinalizationError(
+        "CHECK_INVALID",
+        `inspectionEvidence references unknown check ${checkIndex}`,
+      );
+    }
+  }
+  return checks;
 }
 
 function repositoryObservation(diff: RepositoryDiff): VerifierRepositoryObservation {
@@ -356,21 +492,30 @@ function strengthFor(
   checks: readonly VerificationCheck[],
   override: VerificationStrength | undefined,
 ): VerificationStrength {
-  if (override !== undefined) {
-    if (!(VERIFICATION_STRENGTHS as readonly string[]).includes(override)) {
-      throw new VerifierFinalizationError(
-        "RESULT_INVALID",
-        `Unsupported Verification strength: ${override}`,
-      );
-    }
-    return override;
+  let derived: VerificationStrength;
+  if (checks.length === 0) derived = "none";
+  else if (checks.some(({ status }) => status === "skipped" || status === "unavailable")) {
+    derived = "partial";
+  } else if (checks.every(({ type }) => type === "inspection" || type === "manual")) {
+    derived = "weak";
+  } else {
+    derived = checks.every(({ evidence }) => evidence !== undefined) ? "strong" : "partial";
   }
-  if (checks.length === 0) return "none";
-  if (checks.some(({ status }) => status === "skipped" || status === "unavailable")) {
-    return "partial";
+
+  if (override === undefined) return derived;
+  if (!(VERIFICATION_STRENGTHS as readonly string[]).includes(override)) {
+    throw new VerifierFinalizationError(
+      "RESULT_INVALID",
+      `Unsupported Verification strength: ${override}`,
+    );
   }
-  if (checks.every(({ type }) => type === "inspection" || type === "manual")) return "weak";
-  return checks.every(({ evidence }) => evidence !== undefined) ? "strong" : "partial";
+  if (override === "strong" && derived !== "strong") {
+    throw new VerifierFinalizationError(
+      "CHECK_INVALID",
+      "Verification strength strong requires complete, sufficient evidence",
+    );
+  }
+  return override;
 }
 
 function evidenceFor(
@@ -495,7 +640,7 @@ export class VerifierFinalizer {
             );
           })()
         : await this.repository.diff(input.before, input.after));
-    const checks = parseChecks(result);
+    const checks = parseChecks(result, input.inspectionEvidence);
     const repository = repositoryObservation(diff);
     const evidence = evidenceFor(checks, input.evidence);
     const verificationResult = repository.mutated
@@ -568,6 +713,7 @@ export type VerifierExecutionInput = Readonly<{
   evidence?: readonly JsonValue[];
   limitations?: readonly JsonValue[];
   strength?: VerificationStrength;
+  inspectionEvidence?: readonly VerificationInspectionEvidence[];
 }>;
 
 export type VerifierExecutionResult = Readonly<{
@@ -608,6 +754,9 @@ export class VerifierExecutor {
       ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
       ...(input.limitations === undefined ? {} : { limitations: input.limitations }),
       ...(input.strength === undefined ? {} : { strength: input.strength }),
+      ...(input.inspectionEvidence === undefined
+        ? {}
+        : { inspectionEvidence: input.inspectionEvidence }),
     });
     return { result, before, after, diff, finalization };
   }

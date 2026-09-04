@@ -8,7 +8,6 @@ import {
 import type {
   AgentExecutionRequestV1,
   JsonObject,
-  JsonValue,
   StepResultV1,
 } from "../../contracts/execution/agent-execution.js";
 import { redactSecrets } from "../../telemetry/redaction.js";
@@ -192,10 +191,20 @@ function commandFromPlanCheck(value: unknown): string | undefined {
   return undefined;
 }
 
-function checkType(value: unknown): VerificationCheckType {
-  return typeof value === "string" &&
+function checkType(value: unknown, check?: Record<string, unknown>): VerificationCheckType {
+  if (
+    typeof value === "string" &&
     VERIFICATION_CHECK_TYPES.includes(value as VerificationCheckType)
-    ? (value as VerificationCheckType)
+  ) {
+    return value as VerificationCheckType;
+  }
+  const description = [check?.name, check?.check, check?.command, check?.expected]
+    .filter((entry): entry is string => typeof entry === "string")
+    .join(" ");
+  return /(?:inspection|inspect|diff|dependency|依存|変更|差分|ファイル内容|package|lockfile|import|scope)/iu.test(
+    description,
+  )
+    ? "inspection"
     : "test";
 }
 
@@ -219,12 +228,14 @@ export function createVerificationCommandPolicy(
   }>,
 ): VerificationCommandPolicy {
   const checks = input.checks.map((value, index) => {
-    const command = commandFromPlanCheck(value);
-    const parsed = command === undefined ? undefined : parseApprovedVerificationCommand(command);
     const record = isRecord(value) ? value : undefined;
+    const type = checkType(record?.type, record);
+    const command =
+      type === "inspection" || type === "manual" ? undefined : commandFromPlanCheck(value);
+    const parsed = command === undefined ? undefined : parseApprovedVerificationCommand(command);
     return {
       key: planCheckKey(index),
-      type: checkType(record?.type),
+      type,
       required: checkRequired(record?.required),
       ...(command === undefined ? {} : { command }),
       ...(parsed === undefined
@@ -687,17 +698,14 @@ function actualEvidence(
 function checkEvidence(
   check: VerificationCommandPolicyCheck,
   record: VerificationEvidenceRecord | undefined,
-  modelEvidence?: JsonValue,
 ): JsonObject {
   if (record === undefined) {
-    return modelEvidence !== undefined && check.command === undefined
-      ? { source: "verifier", value: modelEvidence }
-      : {
-          source: "verification-tool",
-          command: check.command ?? null,
-          status: "unavailable",
-          reason: check.reason ?? "not-run",
-        };
+    return {
+      source: "verification-tool",
+      command: check.command ?? null,
+      status: "unavailable",
+      reason: check.reason ?? "not-run",
+    };
   }
   return {
     source: "verification-tool",
@@ -722,27 +730,14 @@ export function applyVerificationEvidence(
   const policy = verificationPolicyForRequest(request);
   if (policy === undefined) return result;
   const records = readVerificationEvidence(policy);
-  const executionChecks = policy.checks.map((check, index) => {
+  const executionChecks = policy.checks.map((check) => {
     const record = actualEvidence(check, records);
-    const modelCheck = result.execution_checks[index];
-    const modelStatus =
-      isRecord(modelCheck) && typeof modelCheck.status === "string" ? modelCheck.status : undefined;
-    const modelEvidence =
-      isRecord(modelCheck) && modelCheck.evidence !== undefined ? modelCheck.evidence : undefined;
     return {
       localId: check.key,
       type: check.type,
-      status:
-        record?.status ??
-        (check.command === undefined &&
-        (modelStatus === "passed" ||
-          modelStatus === "failed" ||
-          modelStatus === "skipped" ||
-          modelStatus === "unavailable")
-          ? modelStatus
-          : "unavailable"),
+      status: record?.status ?? "unavailable",
       required: check.required,
-      evidence: checkEvidence(check, record, modelEvidence),
+      evidence: checkEvidence(check, record),
     };
   });
   const commands = records

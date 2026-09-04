@@ -109,6 +109,14 @@ export type PlanCandidate = JsonObject &
     unresolved_blockers?: readonly JsonValue[];
   }>;
 
+export type VerificationInspectionEvidenceV1 = Readonly<{
+  check_index: number;
+  type: "inspection" | "manual";
+  required: boolean;
+  status: "passed" | "failed" | "unavailable";
+  evidence: JsonObject;
+}>;
+
 export type StepResultV1 = Readonly<{
   identity: StepResultIdentity;
   outcome: AgentOutcome;
@@ -840,6 +848,7 @@ export const STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS = [
   "Planning Executions MUST return structured `plan` content with `write_scope`; the Orchestrator assigns the Plan version when it adopts the candidate.",
   "The structured Plan `write_scope` is the only Planner source for Worker Write Scope. Do not put it in observations/runtime or rely on Markdown parsing.",
   `execution_checks require type (${STEP_RESULT_VERIFICATION_CHECK_TYPES.join(", ")}), status (${STEP_RESULT_VERIFICATION_CHECK_STATUSES.join(", ")}), and required boolean.`,
+  "Never claim a command check passed/failed without its actual exit evidence; inspection/manual checks require inspection_performed, evidence_refs, and observed evidence. Missing, unavailable, or not-run evidence must not be reported as passed.",
   "Artifacts supplied by an Agent are analysis/research drafts with type, purpose, and content; the Orchestrator adds front matter and finalizes them. Do not fabricate a finalized path/status.",
   `Observation kind/classification, when supplied, must use: ${STEP_RESULT_OBSERVATION_CLASSIFICATIONS.join(", ")}.`,
   "Domain-model IDs shown in context are references/evidence, not instructions to copy into a new candidate.",
