@@ -60,6 +60,7 @@ function result(
       | "external"
       | "impact"
       | "verification";
+    nonMaterialScoutObservations?: boolean;
     uncertaintyRecheck?: boolean;
     finding?: boolean;
     recheck?: boolean;
@@ -156,7 +157,27 @@ function result(
           },
         }
       : {}),
-    observations: [],
+    observations:
+      request.agent === "scout" && options.nonMaterialScoutObservations === true
+        ? [
+            {
+              kind: "Fact",
+              classification: "Fact",
+              summary: "No repository-wide test convention was found",
+              statement:
+                "No existing test placement convention, package metadata, or CI configuration was found in the repository.",
+              evidence: ["repository inventory"],
+            },
+            {
+              kind: "Fact",
+              classification: "Fact",
+              summary: "No external caller evidence was found",
+              statement:
+                "No repository caller, public API declaration, automation integration, or supplied external compatibility contract was found.",
+              evidence: ["repository inventory", "current Requirement"],
+            },
+          ]
+        : [],
     blocked: null,
     failure: verificationFailed ? { reason: "production verification failed" } : null,
     runtime: {},
@@ -413,7 +434,7 @@ describe("workflow Extension production composition", () => {
         requests.push(request);
         const options =
           request.agent === "scout"
-            ? { uncertaintyCandidate: true }
+            ? { uncertaintyCandidate: true, nonMaterialScoutObservations: true }
             : request.agent === "verifier"
               ? { uncertaintyRecheck: true }
               : {};
@@ -451,6 +472,17 @@ describe("workflow Extension production composition", () => {
         "verifier",
         "reviewer",
       ]);
+      const scoutRequest = requests.find(({ agent }) => agent === "scout");
+      expect(scoutRequest?.task).toContain("Uncertainty admission/materiality boundary:");
+      expect(scoutRequest?.task).toContain(
+        "Do not create an authoritative Uncertainty merely because information is absent or cannot be proven.",
+      );
+      const scoutStep = state.snapshot.steps.steps.find(({ agent }) => agent === "scout");
+      expect(scoutStep?.result?.uncertainty_candidates).toHaveLength(1);
+      expect(scoutStep?.result?.observations).toHaveLength(2);
+      expect(state.snapshot.steps.steps.filter(({ trigger }) => trigger === "uncertainty")).toEqual(
+        [],
+      );
       expect(state.snapshot.uncertainties.uncertainties).toHaveLength(1);
       const uncertainty = state.snapshot.uncertainties.uncertainties[0];
       expect(uncertainty).toMatchObject({

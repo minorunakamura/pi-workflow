@@ -62,13 +62,19 @@ describe("agent definitions", () => {
   it("keeps forbidden behavior and Scout primary Skills explicit", () => {
     expect(definitionsById.get("scout")).toMatchObject({
       primarySkills: ["how", "why", "blast-radius"],
-      requirements: {
-        mustNot: [
-          "Produce the final implementation design, final Plan, or source change.",
-          "Mutate repository source.",
-        ],
-      },
     });
+    expect(definitionsById.get("scout")?.requirements.must).toEqual([
+      "Distinguish facts/evidence from inference and assumptions.",
+      "Identify unresolved questions and evidence gaps.",
+      "Surface an Uncertainty candidate only when it is material to the current Requirement/Run: a different answer could change correctness, requested behavior, scope, architecture/design authority, verification, security/safety, concrete compatibility, completion eligibility, or required authority.",
+      "Treat a required current-Requirement behavior or verification check unavailable to this Execution as material and surface it for later authorized evidence.",
+    ]);
+    expect(definitionsById.get("scout")?.requirements.mustNot).toEqual([
+      "Produce the final implementation design, final Plan, or source change.",
+      "Mutate repository source.",
+      "Create an Uncertainty merely because information is absent, a convention/caller/CI/external contract was not found, or a hypothetical external risk cannot be ruled out.",
+      "Turn a D0 local choice or D1 Plan-bounded choice into a blocking Uncertainty when it remains within current authority and does not materially change the current Requirement.",
+    ]);
     expect(definitionsById.get("worker")?.requirements.mustNot).toEqual([
       "Perform Git write operations such as commit, push, merge, rebase, reset, restore, clean, or branch mutation under normal Phase 1 policy.",
       "Make material off-plan D2/D3 choices autonomously.",

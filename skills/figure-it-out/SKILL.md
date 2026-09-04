@@ -32,8 +32,9 @@ Read the immutable Agent Execution Request, objective, completion criteria, auth
 2. Form the smallest plausible hypotheses and select the least-privilege permitted inspection, search, query, or check that can distinguish them. Do not add capability or broaden the boundary.
 3. Execute one bounded probe at a time. Record its input, Tool or command, relevant output, source/ref, and time or basis. A source mutation is forbidden unless the invoking Agent's existing Write Scope explicitly authorizes that experiment; this Skill never grants it.
 4. Compare the evidence with the success criterion, corroborate or reproduce the result when needed, and update or reject the hypothesis.
-5. Repeat only while the evidence materially reduces uncertainty and the attempt budget remains. Keep the conclusion local to the original objective.
-6. Return the conclusion, rejected hypotheses, residual uncertainty, and the next bounded action if one is authorized.
+5. Repeat only while the evidence materially reduces uncertainty and the attempt budget remains. Keep the conclusion local to the original objective. Surface a residual Uncertainty candidate only when the unknown is material to the current objective/Requirement; otherwise record the evidence boundary or bounded assumption only when semantically useful.
+6. Do not treat absent evidence, an unobserved caller, or a hypothetical external risk as a blocking Uncertainty without a concrete material tie, and do not convert every non-material unknown into a Requirement assumption.
+7. Return the conclusion, rejected hypotheses, residual material uncertainty, and the next bounded action if one is authorized.
 
 ## Expected Output and Evidence
 
@@ -42,11 +43,11 @@ Return a concise diagnostic handoff in the normal `step-result-v1` fields contai
 - `summary` with the local conclusion or explicit unresolved unknown;
 - hypothesis and probe records, including command/source refs and actual output status;
 - `execution_checks` with `passed`, `failed`, `skipped`, or `unavailable` status;
-- assumptions and residual `uncertainty_candidates`;
+- assumptions and residual `uncertainty_candidates` only when the residual unknown is material to the current objective/Requirement;
 - `blocked` when required access, capability, or environment is unavailable, or `failed` when an attempted probe fails.
 
 Do not claim resolution from an unexecuted or ambiguous probe and do not create an authoritative State ID.
 
 ## Constraints and Stopping / Escalation
 
-Use only the Agent Request's authority, permissions, Tools, mode, and Write Scope. Do not ask the User, create Steps, mutate Workflow State or graph, choose a material design/Requirement/Decision, or widen scope. Stop when the unknown is answered, evidence conflicts, the probe is unsafe or unavailable, the attempt budget is exhausted, progress stops, or greater authority is needed. Return the uncertainty or escalation reason instead of repeated guessing or unbounded exploration. Selected Skills do not chain into a new workflow.
+Use only the Agent Request's authority, permissions, Tools, mode, and Write Scope. Do not ask the User, create Steps, mutate Workflow State or graph, choose a material design/Requirement/Decision, or widen scope. Stop when the unknown is answered, evidence conflicts, the probe is unsafe or unavailable, the attempt budget is exhausted, progress stops, or greater authority is needed. Return a material uncertainty or escalation reason instead of repeated guessing or unbounded exploration; do not promote non-material absence of evidence. Selected Skills do not chain into a new workflow.

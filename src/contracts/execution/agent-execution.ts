@@ -269,6 +269,18 @@ export const STEP_RESULT_ARTIFACT_STATUSES = ["complete", "partial"] as const;
 const REQUIREMENT_CANDIDATE_OPERATIONS = STEP_RESULT_REQUIREMENT_CANDIDATE_OPERATIONS;
 const REQUIREMENT_CANDIDATE_EFFECTS = STEP_RESULT_REQUIREMENT_CANDIDATE_EFFECTS;
 
+const UNCERTAINTY_ADMISSION_GUIDANCE = [
+  "Uncertainty admission/materiality boundary:",
+  "Do not create an authoritative Uncertainty merely because information is absent or cannot be proven.",
+  "Create an uncertainty_candidates item only when the unresolved question is relevant to the current Requirement/Run and a different answer could materially change correctness, requested behavior, scope, architecture/design authority, verification, security/safety, concrete compatibility, completion eligibility, or required authority.",
+  "Before creating a candidate, check those material dimensions; if none would change, do not emit an uncertainty_candidates item.",
+  "A required current-Requirement behavior or verification check unavailable to this Execution is material; emit an Uncertainty candidate for the later authorized evidence instead of silently treating the gap as complete.",
+  "A D0 local choice or D1 Plan-bounded choice that stays within current authority and does not cause such a material change is not an Uncertainty; record an observation or semantically appropriate bounded assumption/Plan choice only when needed, and otherwise omit it.",
+  "An absence-of-evidence observation (for example no convention, CI, caller, or external contract found) is not proof of absence and is not a blocking Uncertainty by itself.",
+  "Do not turn a hypothetical external caller/impact into a current Uncertainty without repository evidence, supplied external evidence, or an explicit current compatibility requirement.",
+  "Do not convert every non-material unknown into a Requirement assumption merely to avoid an Uncertainty.",
+].join("\n");
+
 const nonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 const stringArraySchema = { type: "array", items: nonEmptyStringSchema } as const;
 const nonEmptyStringArraySchema = { ...stringArraySchema, minItems: 1 } as const;
@@ -407,7 +419,7 @@ function candidateObjectSchema(
 }
 
 const uncertaintyCandidateSchema = candidateObjectSchema(
-  "Uncertainty candidate: semantic evidence only; the Orchestrator allocates U-* and status.",
+  "Material Uncertainty candidate only: the unresolved question must be relevant to the current Requirement/Run; semantic evidence only; the Orchestrator allocates U-* and status.",
   {
     ...candidateCommonProperties,
     category: enumSchema(STEP_RESULT_UNCERTAINTY_CATEGORIES),
@@ -722,6 +734,7 @@ export const STEP_RESULT_AGENT_OUTPUT_CONTRACT = {
     "StepResultV1 from an Agent. Field shapes and finite values below are the LLM-facing contract; runtime validation remains authoritative.",
   candidateGroups: STEP_RESULT_AGENT_OUTPUT_GROUPS,
   candidateIdentity: "semantic-only; no Agent-generated authoritative identity",
+  uncertaintyAdmission: UNCERTAINTY_ADMISSION_GUIDANCE,
   forbiddenFields: ["id", "authoritative_id", "state_id"],
   forbiddenAuthoritativePrefixes: [
     "U-*",
@@ -820,6 +833,7 @@ export const STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS = [
   `Requirement Candidate effect must be exactly one of: ${STEP_RESULT_REQUIREMENT_CANDIDATE_EFFECTS.join(", ")}.`,
   "Acceptance Criterion clarify may use an existing AC-* targetId; Constraint clarify may use an existing C-* targetId; Assumption clarify uses targetIndex. These are references, not new identities.",
   `Uncertainty candidate category must be one of: ${STEP_RESULT_UNCERTAINTY_CATEGORIES.join(", ")}.`,
+  UNCERTAINTY_ADMISSION_GUIDANCE,
   "Use uncertainty_rechecks with exactly one existing uncertaintyId or uncertainty_id and action=resolve only when concrete evidence can be cited; the Orchestrator owns the status transition.",
   `Finding candidates require severity (${STEP_RESULT_FINDING_SEVERITIES.join(", ")}) and confidence (${STEP_RESULT_FINDING_CONFIDENCES.join(", ")}); do not choose state or disposition for a new Finding.`,
   "Finding rechecks require exactly one existing findingId or finding_id F-* reference and may use only the declared recheck action/state/disposition values.",

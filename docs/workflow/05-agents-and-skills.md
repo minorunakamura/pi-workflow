@@ -115,7 +115,9 @@ runtime: {}
 
 - **MUST:** Distinguish facts/evidence from inference and assumptions.
 - **MUST:** Identify unresolved questions and evidence gaps.
+- **MUST:** Apply the Uncertainty admission boundary and surface only candidates material to the current Requirement/Run; a required current-Requirement behavior or verification check unavailable to the Execution remains material.
 - **MUST NOT:** Produce the final implementation design, final Plan, or source change.
+- **MUST NOT:** Promote absent convention/caller/CI/external-contract evidence or hypothetical external impact into a blocking Uncertainty without a concrete material tie.
 - **MUST NOT:** Mutate repository source.
 
 ### Researcher
@@ -274,6 +276,10 @@ A Skill may prepare Artifact content, but it MUST NOT treat a draft or unvalidat
 
 The outcome describes the procedure, not final Workflow acceptance: `completed` requires the requested procedure's output and supporting Evidence, `blocked` means a required input, capability, authority, or external resolution is unavailable, and `failed` means an attempted procedure/check could not safely produce its output. A usable incomplete handoff is represented as a `partial` Artifact with explicit limitations, not as a new Step status. A selected set of Skills is not an implicit workflow: these procedures do not call one another, create runtime Steps, or impose an execution order.
 
+### Uncertainty admission boundary
+
+An unknown or evidence gap MUST NOT become an authoritative `Uncertainty` merely because information is absent or completeness would benefit. Before returning an `uncertainty_candidates` item, the Agent MUST establish that the unknown is relevant to the current Requirement/Run and that a different answer could materially change correctness, requested behavior, scope, architecture/design authority, verification, security/safety, concrete compatibility, completion eligibility, or required authority. If none of those material dimensions would change, the Agent MUST NOT emit an `uncertainty_candidates` item. A required current-Requirement behavior or verification check unavailable to the Execution is material and MUST be surfaced for later authorized evidence. Absence of evidence alone—such as no convention, CI, caller, or external contract found—is an observation or scope limitation, not a blocking Uncertainty. A D0 local choice or D1 Plan-bounded choice that stays within authority and does not materially change the current Requirement is not an Uncertainty. A hypothetical external caller or impact without repository/supplied evidence or an explicit current compatibility requirement is not automatically material. This boundary routes non-material facts/choices to observations or semantically appropriate bounded Plan assumptions without requiring automatic Requirement-assumption persistence; it does not add a new State entity, status, or authority level.
+
 ### `how`
 
 **Responsibility**
@@ -295,11 +301,11 @@ Use for a bounded behavior question or behavior uncertainty, normally in a Scout
 
 **Expected output / Evidence**
 
-Return an analysis handoff (normally an `analysis` Artifact with purpose `how`) containing a `## Handoff Summary`, a behavior map, source/Artifact refs, relevant command or test results, and scope limitations. Put factual observations in `observations`; put unproven behavior, contradictions, or missing access in `uncertainty_candidates`, with assumptions called out explicitly. Do not return a final Plan or design recommendation.
+Return an analysis handoff (normally an `analysis` Artifact with purpose `how`) containing a `## Handoff Summary`, a behavior map, source/Artifact refs, relevant command or test results, and scope limitations. Put factual observations in `observations`; put unresolved behavior, contradictions, or missing access in `uncertainty_candidates` only when they are material to the current Requirement/Run, with assumptions called out explicitly. Do not return a final Plan or design recommendation.
 
 **Constraints / stopping conditions**
 
-`how` is read-only under its Phase 1 allowlist and cannot mutate source, create Steps, change State, or choose a Decision. Stop and surface a behavior Uncertainty or `blocked` result when the entry point, relevant branch, current evidence, or required Tool is unavailable, or when evidence conflicts materially. Do not fill a missing behavior contract with an assumption.
+`how` is read-only under its Phase 1 allowlist and cannot mutate source, create Steps, change State, or choose a Decision. Stop and surface a material behavior Uncertainty or `blocked` result when the entry point, relevant branch, current evidence, or required Tool is unavailable, or when evidence conflicts materially. Do not promote absence of evidence alone or fill a missing behavior contract with an assumption.
 
 ### `why`
 
@@ -322,11 +328,11 @@ Use for an unresolved rationale question in a Scout read-only Execution, such as
 
 **Expected output / Evidence**
 
-Return an analysis handoff (normally an `analysis` Artifact with purpose `why`) with a concise rationale, cited local refs/commands, the relevant constraints or trade-offs, and `Fact`/`Inference`/`Assumption` labels. Record unresolved or conflicting rationale as `uncertainty_candidates`; include `decision_requests` only to route a material unresolved choice, never as a resolved Decision. The result MUST say when no causal evidence was found.
+Return an analysis handoff (normally an `analysis` Artifact with purpose `why`) with a concise rationale, cited local refs/commands, the relevant constraints or trade-offs, and `Fact`/`Inference`/`Assumption` labels. Record unresolved or conflicting rationale as `uncertainty_candidates` only when it is material to the current Requirement/Run; include `decision_requests` only to route a material unresolved choice, never as a resolved Decision. The result MUST say when no causal evidence was found.
 
 **Constraints / stopping conditions**
 
-Do not invent author intent, treat a historical commit message as current authority, or turn a plausible explanation into a requirement. Do not mutate source or resolve D2/D3. Stop when causal evidence is absent or materially conflicting and return the residual Uncertainty/required escalation instead of selecting a convenient rationale.
+Do not invent author intent, treat a historical commit message as current authority, or turn a plausible explanation into a requirement. Do not mutate source or resolve D2/D3. Stop when causal evidence is absent or materially conflicting and the missing rationale can affect the current Requirement/Run; otherwise report the evidence boundary without creating a blocking Uncertainty.
 
 ### `blast-radius`
 
@@ -343,17 +349,18 @@ Use when a Scout or Reviewer must bound the consequences of a behavior or change
 1. Identify the subject, comparison/baseline, repository or Plan version, and the impact question. If the basis is a proposed change, use the supplied proposal rather than inventing one.
 2. Enumerate direct references and immediate consumers, then trace callers/dependents, configuration, data/state, Artifact/Event, persistence, Tool, permission, and user-interaction boundaries as relevant to the subject.
 3. Compare the actual current diff/snapshot and relevant evidence with the stated scope when available. Record both affected and inspected-but-not-affected areas; do not equate touched files with the full impact.
-4. Classify each impact as direct, indirect, or unknown and describe its affected contract/behavior, confidence, and evidence. Cover relevant correctness, security, compatibility, operational, and verification/review consequences without inventing a risk.
-5. Map material impacts to Acceptance Criteria/constraints and list the smallest checks or additional evidence needed to confirm them.
-6. Return the impact handoff with scope limits and unresolved impact Uncertainty; do not decide whether to re-plan, switch Playbooks, or accept the risk.
+4. Classify each impact as direct, indirect, or unknown and describe its affected contract/behavior, confidence, and evidence. Cover relevant correctness, security, compatibility, operational, and verification/review consequences without inventing a risk. Surface an impact Uncertainty only when a different answer could materially change the current Requirement/Run and concrete repository/supplied evidence or an explicit compatibility requirement ties the unknown to that impact.
+5. Treat a repository search finding no caller, CI integration, convention, or external contract as an absence-of-evidence observation, not proof of absence and not a blocker by itself. Do not promote a hypothetical external consumer into an Uncertainty without that material tie.
+6. Map material impacts to Acceptance Criteria/constraints and list the smallest checks or additional evidence needed to confirm them.
+7. Return the impact handoff with scope limits and unresolved material impact Uncertainty; do not decide whether to re-plan, switch Playbooks, or accept the risk.
 
 **Expected output / Evidence**
 
-Return an analysis handoff (normally an `analysis` Artifact with purpose `blast-radius`) containing the subject/basis, impact map, affected and unaffected areas, traceability to relevant AC/constraints, risk/confidence, required checks, and evidence refs. Use `observations` for established impact facts and `uncertainty_candidates` for unknown reach or incomplete dependency evidence. A Reviewer MUST also provide the evidence needed for any resulting Finding candidate, but does not assign its authoritative identity or disposition.
+Return an analysis handoff (normally an `analysis` Artifact with purpose `blast-radius`) containing the subject/basis, impact map, affected and unaffected areas, traceability to relevant AC/constraints, risk/confidence, required checks, and evidence refs. Use `observations` for established impact facts and `uncertainty_candidates` only for unknown reach or incomplete dependency evidence that is material to the current Requirement/Run; hypothetical reach remains a scoped limitation. A Reviewer MUST also provide the evidence needed for any resulting Finding candidate, but does not assign its authoritative identity or disposition.
 
 **Constraints / stopping conditions**
 
-Remain read-only and independent of implementation/design authority. Do not silently broaden scope, mutate source/State, create a recovery Step, or resolve an impact uncertainty by using `figure-it-out`; `figure-it-out` is not in the Reviewer allowlist. Stop and escalate when the subject/baseline is ambiguous, a critical boundary cannot be inspected, or impact remains materially unknown.
+Remain read-only and independent of implementation/design authority. Do not silently broaden scope, mutate source/State, create a recovery Step, or resolve an impact uncertainty by using `figure-it-out`; `figure-it-out` is not in the Reviewer allowlist. Stop and escalate when the subject/baseline is ambiguous, a critical boundary cannot be inspected, or impact remains materially unknown with a concrete current-Requirement tie.
 
 ### `architect`
 
@@ -430,7 +437,7 @@ Use in Scout, Researcher, Planner, Oracle, or Reviewer Executions when a Require
 
 **Expected output / Evidence**
 
-Return `observations` for resolved facts, `uncertainty_candidates` for unresolved unknowns, and `decision_requests` or add/clarify `requirement_candidates` when routing is needed. Each item includes the question, why it matters, evidence refs, alternatives if applicable, assumption/impact, and requested authority. An analysis handoff (normally purpose `interrogate`) records the same information and explicitly states whether the procedure completed or stopped at a blocker.
+Return `observations` for resolved facts, `uncertainty_candidates` for unresolved material unknowns, and `decision_requests` or add/clarify `requirement_candidates` when routing is needed. Each item includes the question, why it matters, evidence refs, alternatives if applicable, assumption/impact, and requested authority. An analysis handoff (normally purpose `interrogate`) records the same information and explicitly states whether the procedure completed or stopped at a blocker.
 
 **Constraints / stopping conditions**
 
@@ -456,7 +463,7 @@ Use in Scout, Researcher, Planner, Oracle, Worker, or Verifier Executions when t
 
 **Expected output / Evidence**
 
-Return a concise diagnostic handoff with `summary`, a conclusion or explicitly unresolved unknown, hypothesis/probe records, command or source refs, Check status, assumptions, and residual `uncertainty_candidates`. Use `blocked` when required access/capability/environment is unavailable and `failed` when an attempted probe fails; do not claim resolution from an unexecuted or ambiguous probe. No authoritative State ID is created.
+Return a concise diagnostic handoff with `summary`, a conclusion or explicitly unresolved unknown, hypothesis/probe records, command or source refs, Check status, assumptions, and residual `uncertainty_candidates` only when the residual unknown is material to the current objective/Requirement. Use `blocked` when required access/capability/environment is unavailable and `failed` when an attempted probe fails; do not claim resolution from an unexecuted or ambiguous probe. No authoritative State ID is created.
 
 **Constraints / stopping conditions**
 

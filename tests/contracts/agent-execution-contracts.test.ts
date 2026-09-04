@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AgentExecutionRequestV1Schema,
   STEP_RESULT_AGENT_OUTPUT_CONTRACT,
+  STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS,
   STEP_RESULT_REQUIREMENT_CANDIDATE_EFFECTS,
   STEP_RESULT_REQUIREMENT_CANDIDATE_OPERATIONS,
   STEP_RESULT_UNCERTAINTY_CATEGORIES,
@@ -141,6 +142,14 @@ describe("Agent execution contracts", () => {
   it("keeps the shared LLM contract aligned with authoritative finite vocabularies", () => {
     const root = schemaRecord(STEP_RESULT_AGENT_OUTPUT_CONTRACT);
     const properties = schemaProperties(root);
+    expect(root.uncertaintyAdmission).toContain("Uncertainty admission/materiality boundary:");
+    expect(properties).not.toHaveProperty("uncertaintyAdmission");
+    expect(STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS).toContain(
+      "Before creating a candidate, check those material dimensions; if none would change, do not emit an uncertainty_candidates item.",
+    );
+    expect(STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS).toContain(
+      "Do not turn a hypothetical external caller/impact into a current Uncertainty",
+    );
     expect(schemaEnum(properties.outcome)).toEqual(["completed", "blocked", "failed"]);
 
     const plan = schemaRecord(properties.plan);
@@ -191,6 +200,9 @@ describe("Agent execution contracts", () => {
     ]);
 
     const uncertainty = schemaRecord(properties.uncertainty_candidates);
+    expect(schemaRecord(uncertainty.items).description).toContain(
+      "Material Uncertainty candidate only",
+    );
     expect(schemaEnum(schemaProperties(uncertainty.items).category)).toEqual(
       UNCERTAINTY_CATEGORIES,
     );

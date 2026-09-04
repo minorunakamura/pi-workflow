@@ -124,6 +124,22 @@ This placeholder will be implemented later.
     );
   });
 
+  it("projects materiality and stopping boundaries into uncertainty-producing Skills", () => {
+    const expectedMarkers = {
+      how: "Treat a missing convention, caller, CI, or external contract as an observation/evidence boundary",
+      why: "Do not turn absent history, convention, caller, CI, or external evidence into a blocking Uncertainty by itself",
+      "blast-radius": "absence-of-evidence observation",
+      interrogate: "Do not generate a question merely for completeness.",
+      "figure-it-out":
+        "Do not treat absent evidence, an unobserved caller, or a hypothetical external risk",
+    } as const;
+
+    for (const [id, marker] of Object.entries(expectedMarkers)) {
+      const source = readFileSync(resolve(projectRoot, "skills", id, "SKILL.md"), "utf8");
+      expect(source, id).toContain(marker);
+    }
+  });
+
   it("preserves the Phase 1 allowlist boundary, including Reviewer without figure-it-out", () => {
     expect(SKILL_ALLOWLISTS).toEqual({
       scout: ["how", "why", "blast-radius", "interrogate", "figure-it-out", "reflect"],

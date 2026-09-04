@@ -409,6 +409,8 @@ export function normalizeResultCandidates(
     planDeviations: new Set<string>(),
   };
   const result = input.result;
+  // Materiality is an Agent/Skill semantic responsibility; normalization only
+  // validates the candidate shape and allocates authoritative identity.
 
   return {
     uncertainty_candidates: result.uncertainty_candidates.map((candidate) =>

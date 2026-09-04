@@ -598,6 +598,12 @@ describe("packed Pi Package production Agent runtime", () => {
               task.includes("Resolved Workflow Prompt") && task.includes("## Procedure"),
           ),
       ).toBe(true);
+      expect(audit.find(({ agent }) => agent === "scout")?.systemPrompt).toContain(
+        "Uncertainty admission boundary",
+      );
+      expect(audit.find(({ agent }) => agent === "scout")?.systemPrompt).toContain(
+        "A required current-Requirement behavior or verification check unavailable to this Execution is material",
+      );
       expect(audit.find(({ agent }) => agent === "planner")?.systemPrompt).toContain(
         "Use the supplied Context Pack and finalized Scout Artifact as the primary evidence.",
       );

@@ -115,7 +115,9 @@ runtime: {}
 
 - **MUST:** Distinguish facts/evidence from inference and assumptions.
 - **MUST:** Identify unresolved questions and evidence gaps.
+- **MUST:** Apply the Uncertainty admission boundary and surface only candidates material to the current Requirement/Run; a required current-Requirement behavior or verification check unavailable to the Execution remains material.
 - **MUST NOT:** Produce the final implementation design, final Plan, or source change.
+- **MUST NOT:** Promote absent convention/caller/CI/external-contract evidence or hypothetical external impact into a blocking Uncertainty without a concrete material tie.
 - **MUST NOT:** Mutate repository source.
 
 ### Researcher
@@ -277,6 +279,10 @@ Every Core Skill MUST obey the following rules:
 
 The specifications below define semantic behavior. The packaged `skills/<skill-id>/SKILL.md` files operationalize these procedures without redefining them.
 
+### Uncertainty admission boundary
+
+An unknown or evidence gap MUST NOT become an authoritative `Uncertainty` merely because information is absent or completeness would benefit. Before returning an `uncertainty_candidates` item, the Agent MUST establish that the unknown is relevant to the current Requirement/Run and that a different answer could materially change correctness, requested behavior, scope, architecture/design authority, verification, security/safety, concrete compatibility, completion eligibility, or required authority. If none of those material dimensions would change, the Agent MUST NOT emit an `uncertainty_candidates` item. A required current-Requirement behavior or verification check unavailable to the Execution is material and MUST be surfaced for later authorized evidence. Absence of evidence alone—such as no convention, CI, caller, or external contract found—is an observation or scope limitation, not a blocking Uncertainty. A D0 local choice or D1 Plan-bounded choice that stays within authority and does not materially change the current Requirement is not an Uncertainty. A hypothetical external caller or impact without repository/supplied evidence or an explicit current compatibility requirement is not automatically material. This boundary routes non-material facts/choices to observations or semantically appropriate bounded Plan assumptions without requiring automatic Requirement-assumption persistence; it does not add a new State entity, status, or authority level.
+
 ### `how`
 
 **Responsibility:** Explain how an existing repository behavior, mechanism, or execution path works using local evidence.
@@ -293,7 +299,7 @@ The specifications below define semantic behavior. The packaged `skills/<skill-i
 6. Produce a concise end-to-end explanation, including important branch/error paths when they materially affect the requested behavior.
 7. Stop when the requested mechanism is explained with sufficient evidence; do not broaden into unrelated architecture review.
 
-**Expected output/evidence:** Entry points, relevant files/symbols, ordered control/data-flow explanation, material branch/error behavior, evidence gaps, and confidence/uncertainty where needed.
+**Expected output/evidence:** Entry points, relevant files/symbols, ordered control/data-flow explanation, material branch/error behavior, evidence gaps, and material confidence/uncertainty where needed.
 
 **Constraints / stopping conditions:**
 
@@ -317,7 +323,7 @@ The specifications below define semantic behavior. The packaged `skills/<skill-i
 6. Summarize the strongest supported rationale and list unresolved or competing explanations.
 7. Stop once the rationale is sufficiently supported for the Step objective or further progress requires unavailable history/context.
 
-**Expected output/evidence:** Rationale claims, supporting source/history references, fact-vs-inference classification, contradictory evidence, unresolved rationale gaps.
+**Expected output/evidence:** Rationale claims, supporting source/history references, fact-vs-inference classification, contradictory evidence, and unresolved rationale gaps only when material to the current Requirement/Run.
 
 **Constraints / stopping conditions:**
 
@@ -336,17 +342,17 @@ The specifications below define semantic behavior. The packaged `skills/<skill-i
 1. Define the subject of impact analysis: behavior, symbol, interface, schema, configuration, or change set.
 2. Identify direct dependents and consumers using structural references/search.
 3. Expand only through materially relevant dependency edges such as callers, shared contracts, persistence formats, configuration, tests, deployment/runtime boundaries, or public interfaces.
-4. Classify affected areas as direct, indirect, or uncertain and record supporting evidence.
-5. Identify compatibility, migration, security, persistence, operational, and verification implications when applicable.
-6. Highlight high-risk or weak-evidence areas that require further investigation or verification.
-7. Stop expansion when additional edges are speculative, duplicate already-covered impact classes, or exceed the Step objective.
+4. Classify affected areas as direct, indirect, or uncertain and record supporting evidence. Surface an impact Uncertainty only when a different answer could materially change the current Requirement/Run and concrete repository/supplied evidence or an explicit compatibility requirement ties the unknown to that impact.
+5. Treat a repository search finding no caller, CI integration, convention, or external contract as an absence-of-evidence observation, not proof of absence and not a blocker by itself. Do not promote a hypothetical external consumer into an Uncertainty without that material tie.
+6. Identify compatibility, migration, security, persistence, operational, and verification implications when applicable.
+7. Highlight high-risk or weak-evidence areas that require further investigation or verification, and stop expansion when additional edges are speculative, duplicate already-covered impact classes, or exceed the Step objective.
 
-**Expected output/evidence:** Affected-area inventory, direct/indirect/uncertain classification, dependency evidence, risk notes, likely verification targets, and unresolved impact questions.
+**Expected output/evidence:** Affected-area inventory, direct/indirect/uncertain classification, dependency evidence, risk notes, likely verification targets, and unresolved material impact questions.
 
 **Constraints / stopping conditions:**
 
 - **MUST NOT:** Treat textual reference count alone as semantic impact.
-- **MUST NOT:** Expand scope merely because a transitive dependency exists.
+- **MUST NOT:** Expand scope merely because a transitive dependency exists or because a hypothetical external edge cannot be ruled out.
 - **Reviewer use:** MUST remain independent evaluation; it may surface Findings/uncertainty but MUST NOT silently fix or redesign the change.
 
 ### `architect`
@@ -417,7 +423,7 @@ The specifications below define semantic behavior. The packaged `skills/<skill-i
 6. Return resolved conclusions with evidence and unresolved items through normal candidates/decision requests.
 7. Stop when remaining questions are non-material or require Orchestrator/User authority.
 
-**Expected output/evidence:** Material questions, evidence-backed resolutions, assumptions, contradictions, uncertainty candidates, and decision requests.
+**Expected output/evidence:** Material questions, evidence-backed resolutions, assumptions, contradictions, uncertainty candidates, and decision requests; non-material unknowns are not candidates.
 
 **Constraints / stopping conditions:**
 
@@ -443,12 +449,12 @@ The specifications below define semantic behavior. The packaged `skills/<skill-i
 7. Apply the discovered method only if it remains within the Agent's existing authority and scope.
 8. Stop and surface uncertainty/decision/failure when progress stalls, evidence conflicts, budget is exhausted, or the next move requires wider authority/permissions.
 
-**Expected output/evidence:** Blocking unknown, tested hypotheses/experiments, observations, resulting conclusion or method, remaining uncertainty, and escalation reason when unresolved.
+**Expected output/evidence:** Blocking unknown, tested hypotheses/experiments, observations, resulting conclusion or method, remaining material uncertainty, and escalation reason when unresolved.
 
 **Constraints / stopping conditions:**
 
 - **MUST NOT:** Contact the user, widen scope, or acquire unauthorized Tools.
-- **MUST NOT:** Convert repeated guessing into unbounded exploration.
+- **MUST NOT:** Convert repeated guessing into unbounded exploration or promote non-material absence of evidence into a blocker.
 - **MUST NOT:** Be selected for Reviewer in Phase 1; Reviewer must surface unresolved uncertainty independently.
 - **MUST:** Prefer evidence-producing experiments over speculative reasoning.
 
