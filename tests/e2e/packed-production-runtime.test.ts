@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -360,8 +360,32 @@ describe("packed Pi Package production Agent runtime", () => {
       const packageRoot = await realpath(join(consumerRoot, "node_modules", "pi-workflow"));
       await writeFile(
         join(projectConfigDir, "settings.json"),
-        JSON.stringify({ packages: [packageRoot] }, null, 2) + "\n",
+        JSON.stringify(
+          {
+            packages: [
+              { source: "npm:pi-subagents", autoload: false, extensions: ["!index.ts"] },
+              packageRoot,
+            ],
+          },
+          null,
+          2,
+        ) + "\n",
         "utf8",
+      );
+      const globalPackageRoot = join(agentDir, "npm", "node_modules", "pi-subagents");
+      await mkdir(join(agentDir, "npm", "node_modules"), { recursive: true });
+      await cp(resolve(PROJECT_ROOT, "node_modules/pi-subagents"), globalPackageRoot, {
+        recursive: true,
+        dereference: true,
+      });
+      await Promise.all(
+        ["jiti", "typebox", "yaml"].map((dependency) =>
+          cp(
+            resolve(PROJECT_ROOT, "node_modules", dependency),
+            join(agentDir, "npm", "node_modules", dependency),
+            { recursive: true, dereference: true },
+          ),
+        ),
       );
       expect(packageRoot).not.toBe(PROJECT_ROOT);
       expect(packageRoot).toContain(join("node_modules", "pi-workflow"));
@@ -385,7 +409,8 @@ describe("packed Pi Package production Agent runtime", () => {
       );
       await writeFile(
         join(agentDir, "settings.json"),
-        JSON.stringify({ subagents: { agentOverrides } }, null, 2) + "\n",
+        JSON.stringify({ packages: ["npm:pi-subagents"], subagents: { agentOverrides } }, null, 2) +
+          "\n",
         "utf8",
       );
 
@@ -424,13 +449,16 @@ describe("packed Pi Package production Agent runtime", () => {
 
       const eventBus = createEventBus();
       const requests: SubagentDelegationRequest[] = [];
+      const started: Array<{ requestId?: unknown; ownerRunId?: unknown; nodeId?: unknown }> = [];
       const responses: SubagentDelegationResponse[] = [];
       let childStartedResolve!: () => void;
       const childStarted = new Promise<void>((resolve) => {
         childStartedResolve = resolve;
       });
       eventBus.on(SUBAGENT_DELEGATION_STARTED_EVENT, (payload) => {
-        if ((payload as { nodeId?: unknown }).nodeId === "step-001") childStartedResolve();
+        const value = payload as { requestId?: unknown; ownerRunId?: unknown; nodeId?: unknown };
+        started.push(value);
+        if (value.nodeId === "step-001") childStartedResolve();
       });
       eventBus.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
         requests.push(payload as SubagentDelegationRequest);
@@ -439,8 +467,14 @@ describe("packed Pi Package production Agent runtime", () => {
         responses.push(payload as SubagentDelegationResponse);
       });
 
-      const settingsManager = SettingsManager.inMemory({}, { projectTrusted: true });
-      settingsManager.setProjectPackages([packageRoot]);
+      const settingsManager = SettingsManager.inMemory(
+        { packages: ["npm:pi-subagents"] },
+        { projectTrusted: true },
+      );
+      settingsManager.setProjectPackages([
+        { source: "npm:pi-subagents", autoload: false, extensions: ["!index.ts"] },
+        packageRoot,
+      ]);
       const resourceLoader = new DefaultResourceLoader({
         cwd: consumerRoot,
         agentDir,
@@ -452,18 +486,26 @@ describe("packed Pi Package production Agent runtime", () => {
       const loadedSkills = resourceLoader.getSkills();
       expect(loadedSkills.diagnostics.filter(({ type }) => type === "error")).toEqual([]);
       expect(loadedSkills.skills.map(({ name }) => name).sort()).toEqual(
-        [...CORE_SKILL_IDS].sort(),
+        [...CORE_SKILL_IDS, "pi-subagents"].sort(),
       );
-      expect(loadedSkills.skills).toHaveLength(9);
+      expect(loadedSkills.skills).toHaveLength(10);
       expect(loadedSkills.skills.every(({ sourceInfo }) => sourceInfo.origin === "package")).toBe(
         true,
       );
       expect(
-        loadedSkills.skills.every(({ filePath }) =>
-          filePath.startsWith(join(packageRoot, "skills")),
+        loadedSkills.skills.every(
+          ({ filePath }) =>
+            filePath.startsWith(join(packageRoot, "skills")) ||
+            filePath.startsWith(join(globalPackageRoot, "skills")),
         ),
       ).toBe(true);
       expect(resourceLoader.getExtensions().errors).toEqual([]);
+      expect(
+        resourceLoader
+          .getExtensions()
+          .extensions.map(({ resolvedPath }) => resolvedPath)
+          .filter((path) => path.includes("pi-subagents")),
+      ).toEqual([join(packageRoot, "node_modules", "pi-subagents", "index.ts")]);
 
       const faux = fauxProvider({
         provider: PROVIDER_ID,
@@ -516,6 +558,8 @@ describe("packed Pi Package production Agent runtime", () => {
         "verifier",
         "reviewer",
       ]);
+      expect(started).toHaveLength(requests.length);
+      expect(new Set(started.map(({ nodeId }) => nodeId))).toHaveLength(requests.length);
       const workerTask = requests.find(({ agent }) => agent === "worker")?.task ?? "";
       expect(workerTask).toContain('"repositoryTargets":["src"]');
       expect(workerTask).toMatch(/"resolved":\[[^\]]*"edit"/);

@@ -1,4 +1,11 @@
 {
+  "packages": [
+    {
+      "source": "npm:pi-subagents",
+      "autoload": false,
+      "extensions": ["!index.ts"]
+    }
+  ],
   "extensions": ["!extensions/workflow-tui.ts"],
   "skills": [
     "~/.pi/agent/skills/change-workflow",
