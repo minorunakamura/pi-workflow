@@ -7,7 +7,7 @@ import {
   type ResumeFreshnessPhase,
 } from "../../src/application/recovery/resume-lifecycle.js";
 import type { RunStatus } from "../../src/contracts/state/workflow-state.js";
-import type { RunId } from "../../src/domain/primitives/ids.js";
+import type { RunId, UncertaintyId } from "../../src/domain/primitives/ids.js";
 import type { WorkflowState } from "../../src/ports/run-reader.js";
 import type { RepositoryFixture } from "../fixtures/temp-repository.js";
 import { withTempRepository } from "../fixtures/temp-repository.js";
@@ -19,6 +19,7 @@ function workflowState(
   status: RunStatus,
   finalized: boolean,
   failure: WorkflowState["run"]["failure"] = null,
+  uncertainties: WorkflowState["snapshot"]["uncertainties"]["uncertainties"] = [],
 ): WorkflowState {
   const stateRevision = 1;
   const header = { schema_version: 1, run_id: RUN_ID, state_revision: stateRevision } as const;
@@ -60,7 +61,7 @@ function workflowState(
         open_questions: [],
       },
       steps: { ...header, graph_revision: 1, steps: [] },
-      uncertainties: { ...header, uncertainties: [] },
+      uncertainties: { ...header, uncertainties },
       decisions: { ...header, decisions: [] },
       gates: { ...header, gates: [] },
       findings: { ...header, findings: [] },
@@ -137,6 +138,33 @@ describe("ResumeLifecycle E2E", () => {
     });
     expect(state.run.failure).toBeNull();
     expect(state.run.state_revision).toBe(2);
+  });
+
+  it("preserves resolved Uncertainty status and evidence refs across resume", async () => {
+    const initial = workflowState("blocked", false, null, [
+      {
+        id: "U-001" as UncertaintyId,
+        status: "resolved",
+        category: "verification",
+        resolution: {
+          status: "resolved",
+          authority: "orchestrator",
+          evidence: [{ verification_run_id: "VR-001" }],
+        },
+      },
+    ]);
+    const state = await resumePersistedRun(initial, (current) => ({
+      ...current,
+      run: { ...current.run, repository: { freshness: "fresh" } },
+    }));
+
+    expect(state.snapshot.uncertainties.uncertainties).toMatchObject([
+      {
+        id: "U-001",
+        status: "resolved",
+        resolution: { evidence: [{ verification_run_id: "VR-001" }] },
+      },
+    ]);
   });
 
   it.each([

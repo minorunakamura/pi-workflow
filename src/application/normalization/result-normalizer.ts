@@ -88,8 +88,14 @@ export type NormalizedFindingRecheck = ResultCandidate &
 
 export type NormalizedPlan = PlanCandidate;
 
+export type NormalizedUncertaintyRecheck = ResultCandidate &
+  Readonly<{
+    id: UncertaintyId;
+  }>;
+
 export type NormalizedResultCandidates = Readonly<{
   uncertainty_candidates: readonly NormalizedCandidate<UncertaintyId>[];
+  uncertainty_rechecks: readonly NormalizedUncertaintyRecheck[];
   decision_requests: readonly NormalizedCandidate<DecisionId>[];
   requirement_candidates: Readonly<{
     acceptance_criteria: readonly NormalizedCandidate<AcceptanceCriterionId>[];
@@ -319,6 +325,41 @@ function identify<Id extends string>(
   return { ...candidate, id: allocateUnique(issue, used) };
 }
 
+function uncertaintyReference(
+  candidate: ResultCandidate,
+  index: number,
+  state: WorkflowState,
+): UncertaintyId {
+  const keys = ["uncertaintyId", "uncertainty_id"].filter((key) => Object.hasOwn(candidate, key));
+  if (keys.length !== 1) {
+    fail(
+      "REFERENCE_INVALID",
+      `uncertainty_rechecks[${index}] must contain exactly one uncertaintyId or uncertainty_id reference`,
+    );
+  }
+  const reference = candidate[keys[0]!];
+  if (typeof reference !== "string" || !/^U-\d+$/.test(reference)) {
+    fail(
+      "REFERENCE_INVALID",
+      `uncertainty_rechecks[${index}] must reference a U-<number> Uncertainty`,
+    );
+  }
+  if (!state.snapshot.uncertainties.uncertainties.some(({ id }) => id === reference)) {
+    fail("REFERENCE_INVALID", `Unknown Uncertainty reference: ${reference}`);
+  }
+  return reference as UncertaintyId;
+}
+
+function normalizeUncertaintyRechecks(
+  result: StepResultV1,
+  state: WorkflowState,
+): readonly NormalizedUncertaintyRecheck[] {
+  return (result.uncertainty_rechecks ?? []).map((candidate, index) => ({
+    ...candidate,
+    id: uncertaintyReference(candidate, index, state),
+  }));
+}
+
 function findingReference(
   candidate: ResultCandidate,
   index: number,
@@ -373,6 +414,7 @@ export function normalizeResultCandidates(
     uncertainty_candidates: result.uncertainty_candidates.map((candidate) =>
       identify(candidate, () => allocator.issueUncertaintyId(), used.uncertainties),
     ),
+    uncertainty_rechecks: normalizeUncertaintyRechecks(result, input.state),
     decision_requests: result.decision_requests.map((candidate) =>
       identify(candidate, () => allocator.issueDecisionId(), used.decisions),
     ),

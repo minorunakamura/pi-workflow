@@ -1,4 +1,8 @@
-import type { JsonObject, StepResultV1 } from "../contracts/execution/agent-execution.js";
+import type {
+  JsonObject,
+  JsonValue,
+  StepResultV1,
+} from "../contracts/execution/agent-execution.js";
 import type { DomainEventDraft, EventActorV1, EventType } from "../contracts/events/event.js";
 import type { ResultNormalizationResult } from "./normalization/result-normalizer.js";
 import type { SchedulerStep } from "../domain/scheduling/scheduler.js";
@@ -130,10 +134,14 @@ function emitUncertainties(
 ): void {
   const previous = previousById(before.snapshot.uncertainties.uncertainties);
   for (const current of after.snapshot.uncertainties.uncertainties) {
+    const resolution = record(current.resolution);
     const data = {
       uncertainty_id: current.id,
       status: current.status,
       category: current.category,
+      ...(resolution?.evidence === undefined
+        ? {}
+        : { resolution_evidence: resolution.evidence as JsonValue }),
     } satisfies JsonObject;
     transitionEvent(
       events,

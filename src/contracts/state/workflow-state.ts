@@ -223,6 +223,13 @@ export type UncertaintyStateV1 = JsonObject &
     id: UncertaintyId;
     status: UncertaintyStatus;
     category: UncertaintyCategory;
+    question?: string;
+    basis?: JsonValue;
+    impact?: string;
+    created_by?: JsonObject;
+    created_at?: string;
+    resolution_attempts?: readonly JsonValue[];
+    resolution?: JsonObject;
   }>;
 
 export type UncertaintiesSnapshotV1 = SnapshotHeaderV1 &
@@ -576,6 +583,16 @@ function uncertaintyState(input: unknown, path: string): UncertaintyStateV1 {
   domainId(value.id, contract, `${path}.id`, "U");
   enumValue(value.status, contract, `${path}.status`, UNCERTAINTY_STATUSES);
   enumValue(value.category, contract, `${path}.category`, UNCERTAINTY_CATEGORIES);
+  if (value.question !== undefined) nonEmptyString(value.question, contract, `${path}.question`);
+  if (value.impact !== undefined) nonEmptyString(value.impact, contract, `${path}.impact`);
+  if (value.basis !== undefined) jsonValue(value.basis, contract, `${path}.basis`);
+  if (value.created_by !== undefined) jsonObject(value.created_by, contract, `${path}.created_by`);
+  if (value.created_at !== undefined)
+    nonEmptyString(value.created_at, contract, `${path}.created_at`);
+  if (value.resolution_attempts !== undefined) {
+    jsonArray(value.resolution_attempts, contract, `${path}.resolution_attempts`);
+  }
+  if (value.resolution !== undefined) jsonObject(value.resolution, contract, `${path}.resolution`);
   return value as UncertaintyStateV1;
 }
 

@@ -392,6 +392,35 @@ export class Orchestrator {
       state = await this.reconcile(state);
       state = await this.trigger(state);
 
+      const uncertaintyResolutionStarted = state.snapshot.uncertainties.uncertainties.some(
+        (uncertainty) =>
+          uncertainty.status === "resolving" &&
+          loaded.snapshot.uncertainties.uncertainties.find(({ id }) => id === uncertainty.id)
+            ?.status !== "resolving",
+      );
+      const triggerBlocked = state.run.status === "blocked" && loaded.run.status !== "blocked";
+      if (uncertaintyResolutionStarted || triggerBlocked) {
+        const triggerCompletion = await this.dependencies.completion(state);
+        const committed = await this.commit({
+          before: loaded,
+          candidate: state,
+          completion: triggerCompletion,
+          result: null,
+          step: null,
+          normalized: null,
+          iteration,
+        });
+        if (triggerBlocked) {
+          return {
+            kind: "idle",
+            state: committed,
+            iterations: iteration,
+            reason: "RECOVERABLE_BLOCKER",
+          };
+        }
+        continue;
+      }
+
       if (this.isCancellationRequested(runId, state)) {
         return {
           kind: "idle",

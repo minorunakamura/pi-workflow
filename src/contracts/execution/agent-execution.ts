@@ -118,6 +118,8 @@ export type StepResultV1 = Readonly<{
   plan?: PlanCandidate;
   artifacts: readonly JsonValue[];
   uncertainty_candidates: readonly ResultCandidate[];
+  /** Optional for backward compatibility; the parser normalizes an omitted list to empty. */
+  uncertainty_rechecks?: readonly ResultCandidate[];
   decision_requests: readonly ResultCandidate[];
   requirement_candidates: Readonly<{
     acceptance_criteria: readonly ResultCandidate[];
@@ -167,6 +169,7 @@ const AUTHORITATIVE_STATE_ID = /^(?:run|step|exec)-\d+$|^(?:U|D|G|F|P|V|PD|CS|VR
 
 export const STEP_RESULT_AGENT_OUTPUT_GROUPS = [
   "uncertainty_candidates",
+  "uncertainty_rechecks",
   "decision_requests",
   "requirement_candidates.acceptance_criteria",
   "requirement_candidates.constraints",
@@ -199,6 +202,7 @@ export const STEP_RESULT_UNCERTAINTY_CATEGORIES = [
   "impact",
   "verification",
 ] as const;
+export const STEP_RESULT_UNCERTAINTY_RECHECK_ACTIONS = ["resolve"] as const;
 export const STEP_RESULT_DECISION_CLASSES = ["D1", "D2", "D3"] as const;
 export const STEP_RESULT_USER_INTERACTION_KINDS = ["approval", "options", "custom"] as const;
 export const STEP_RESULT_FINDING_STATES = ["open", "resolved"] as const;
@@ -315,6 +319,12 @@ const candidateCommonProperties = {
   category: nonEmptyStringSchema,
 } as const;
 const CANDIDATE_COMMON_KEYS = Object.keys(candidateCommonProperties);
+const UNCERTAINTY_RECHECK_KEYS = [
+  ...CANDIDATE_COMMON_KEYS,
+  "uncertaintyId",
+  "uncertainty_id",
+  "action",
+];
 const DECISION_CANDIDATE_KEYS = [
   ...CANDIDATE_COMMON_KEYS,
   "class",
@@ -404,6 +414,32 @@ const uncertaintyCandidateSchema = candidateObjectSchema(
   },
   ["category"],
 );
+const uncertaintyRecheckBaseProperties = {
+  ...candidateCommonProperties,
+  action: enumSchema(STEP_RESULT_UNCERTAINTY_RECHECK_ACTIONS),
+} as const;
+const uncertaintyRecheckSchema = {
+  oneOf: [
+    candidateObjectSchema(
+      "Uncertainty recheck referencing an existing U-*; only the Orchestrator changes its status.",
+      {
+        ...uncertaintyRecheckBaseProperties,
+        uncertaintyId: { type: "string", pattern: "^U-0*[1-9][0-9]*$" },
+      },
+      ["uncertaintyId", "action"],
+    ),
+    candidateObjectSchema(
+      "Uncertainty recheck referencing an existing U-*; only the Orchestrator changes its status.",
+      {
+        ...uncertaintyRecheckBaseProperties,
+        uncertainty_id: { type: "string", pattern: "^U-0*[1-9][0-9]*$" },
+      },
+      ["uncertainty_id", "action"],
+    ),
+  ],
+  description:
+    "Exactly one of uncertaintyId or uncertainty_id is required; it is an existing reference, not a new identity.",
+} as const;
 
 const decisionD1D2CandidateSchema = candidateObjectSchema(
   "Decision request candidate; D1/D2 authority remains outside the Agent.",
@@ -704,11 +740,14 @@ export const STEP_RESULT_AGENT_OUTPUT_CONTRACT = {
   allowedReferences: [
     "requirement_candidates.acceptance_criteria[].targetId → existing AC-*",
     "requirement_candidates.constraints[].targetId → existing C-*",
+    "uncertainty_rechecks[].uncertaintyId|uncertainty_id → existing U-*",
     "finding_rechecks[].findingId|finding_id → existing F-*",
     "evidence/basis may cite existing IDs without allocating them",
   ],
   findingRecheckReference:
     "findingId or finding_id may reference an existing F-* Finding only; it is not a new candidate identity",
+  uncertaintyRecheckReference:
+    "uncertaintyId or uncertainty_id may reference an existing U-* Uncertainty only; the Orchestrator validates evidence and owns status",
   authoritativeAllocation:
     "Orchestrator normalization allocates identity after StepResultV1 validation",
   properties: {
@@ -729,6 +768,7 @@ export const STEP_RESULT_AGENT_OUTPUT_CONTRACT = {
     plan: planCandidateSchema,
     artifacts: { type: "array", items: artifactItemSchema },
     uncertainty_candidates: { type: "array", items: uncertaintyCandidateSchema },
+    uncertainty_rechecks: { type: "array", items: uncertaintyRecheckSchema },
     decision_requests: { type: "array", items: decisionRequestSchema },
     requirement_candidates: {
       type: "object",
@@ -780,6 +820,7 @@ export const STEP_RESULT_AGENT_OUTPUT_INSTRUCTIONS = [
   `Requirement Candidate effect must be exactly one of: ${STEP_RESULT_REQUIREMENT_CANDIDATE_EFFECTS.join(", ")}.`,
   "Acceptance Criterion clarify may use an existing AC-* targetId; Constraint clarify may use an existing C-* targetId; Assumption clarify uses targetIndex. These are references, not new identities.",
   `Uncertainty candidate category must be one of: ${STEP_RESULT_UNCERTAINTY_CATEGORIES.join(", ")}.`,
+  "Use uncertainty_rechecks with exactly one existing uncertaintyId or uncertainty_id and action=resolve only when concrete evidence can be cited; the Orchestrator owns the status transition.",
   `Finding candidates require severity (${STEP_RESULT_FINDING_SEVERITIES.join(", ")}) and confidence (${STEP_RESULT_FINDING_CONFIDENCES.join(", ")}); do not choose state or disposition for a new Finding.`,
   "Finding rechecks require exactly one existing findingId or finding_id F-* reference and may use only the declared recheck action/state/disposition values.",
   "Planning Executions MUST return structured `plan` content with `write_scope`; the Orchestrator assigns the Plan version when it adopts the candidate.",
@@ -1153,6 +1194,38 @@ function uncertaintyCandidateArray(input: unknown, path: string): readonly Resul
   });
 }
 
+function uncertaintyRecheckArray(input: unknown, path: string): readonly ResultCandidate[] {
+  const candidates = candidateArray(
+    input,
+    RESULT_CONTRACT,
+    path,
+    ["uncertaintyId", "uncertainty_id"],
+    UNCERTAINTY_RECHECK_KEYS,
+  );
+  return candidates.map((candidate, index) => {
+    const itemPath = `${path}[${index}]`;
+    const referenceKeys = ["uncertaintyId", "uncertainty_id"].filter((key) => key in candidate);
+    if (referenceKeys.length !== 1) {
+      fail(RESULT_CONTRACT, itemPath, "exactly one uncertaintyId or uncertainty_id U-* reference");
+    }
+    const referenceKey = referenceKeys[0]!;
+    const reference = candidate[referenceKey];
+    if (typeof reference !== "string" || !/^U-\d+$/.test(reference)) {
+      fail(RESULT_CONTRACT, `${itemPath}.${referenceKey}`, "a U-<number> Uncertainty identity");
+    }
+    enumCandidateValue(
+      candidate,
+      "action",
+      STEP_RESULT_UNCERTAINTY_RECHECK_ACTIONS,
+      `${itemPath}.action`,
+    );
+    if (candidate.evidence === undefined) {
+      fail(RESULT_CONTRACT, `${itemPath}.evidence`, "concrete resolution evidence");
+    }
+    return candidate;
+  });
+}
+
 function decisionRequestArray(input: unknown, path: string): readonly ResultCandidate[] {
   const candidates = candidateArray(input, RESULT_CONTRACT, path, [], DECISION_CANDIDATE_KEYS);
   return candidates.map((candidate, index) => {
@@ -1489,6 +1562,7 @@ export function parseStepResultV1(input: unknown): StepResultV1 {
       "plan",
       "artifacts",
       "uncertainty_candidates",
+      "uncertainty_rechecks",
       "decision_requests",
       "requirement_candidates",
       "finding_candidates",
@@ -1515,6 +1589,10 @@ export function parseStepResultV1(input: unknown): StepResultV1 {
   artifactArray(root.artifacts, RESULT_CONTRACT, "artifacts");
 
   uncertaintyCandidateArray(root.uncertainty_candidates, "uncertainty_candidates");
+  const uncertaintyRechecks = uncertaintyRecheckArray(
+    root.uncertainty_rechecks ?? [],
+    "uncertainty_rechecks",
+  );
   decisionRequestArray(root.decision_requests, "decision_requests");
   findingCandidateArray(root.finding_candidates, "finding_candidates");
   findingRecheckArray(root.finding_rechecks, RESULT_CONTRACT, "finding_rechecks");
@@ -1552,7 +1630,7 @@ export function parseStepResultV1(input: unknown): StepResultV1 {
     fail(RESULT_CONTRACT, "failure", "a structured failure value and null blocked");
   }
 
-  return input as StepResultV1;
+  return { ...(input as StepResultV1), uncertainty_rechecks: uncertaintyRechecks };
 }
 
 function createRuntimeSchema<T>(parser: (input: unknown) => T): RuntimeSchema<T> {

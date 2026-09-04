@@ -97,6 +97,7 @@ import {
   reviseRequirement,
   type RequirementCandidate,
 } from "../domain/requirements/requirement.js";
+import { transitionUncertainty } from "../domain/uncertainty/uncertainty.js";
 import { PLAYBOOK_DEFINITIONS, type PlaybookDefinition } from "../playbooks/definitions.js";
 import type { AgentRuntime } from "../ports/agent-runtime.js";
 import {
@@ -124,6 +125,7 @@ import type { StepStateV1 } from "../contracts/state/workflow-state.js";
 const RUN_ID_PATTERN = /^run-\d+$/;
 const COMMAND_TIMEOUT_MS = 300_000;
 const CONTEXT_BUDGET = 16_384;
+const DEFAULT_MAX_UNCERTAINTY_RESOLUTION_ATTEMPTS = 3;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 const TOOL_CAPABILITIES: Readonly<Record<string, readonly string[]>> = {
@@ -998,6 +1000,259 @@ function candidateEnum<T extends readonly string[]>(
   return value as T[number];
 }
 
+type UncertaintyProvenance = Readonly<{
+  stepId: StepId;
+  executionId: ExecutionId;
+  agentId: string;
+  createdAt: string;
+}>;
+
+type VerificationEvidenceSelector = Readonly<{
+  executionId?: string;
+  verificationRunId?: string;
+  checkIndex?: number;
+  checkType?: string;
+  artifactPath?: string;
+}>;
+
+function uncertaintyAttempts(
+  uncertainty: WorkflowState["snapshot"]["uncertainties"]["uncertainties"][number],
+): readonly JsonValue[] {
+  return Array.isArray(uncertainty.resolution_attempts) ? uncertainty.resolution_attempts : [];
+}
+
+function maxUncertaintyResolutionAttempts(state: WorkflowState): number {
+  const value = state.run.limits.max_uncertainty_resolution_attempts;
+  if (value === undefined) return DEFAULT_MAX_UNCERTAINTY_RESOLUTION_ATTEMPTS;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("max_uncertainty_resolution_attempts must be a non-negative safe integer");
+  }
+  return value;
+}
+
+function uncertaintyWithStatus(
+  uncertainty: WorkflowState["snapshot"]["uncertainties"]["uncertainties"][number],
+  status: "open" | "resolving" | "resolved" | "accepted" | "escalated",
+): WorkflowState["snapshot"]["uncertainties"]["uncertainties"][number] {
+  const transitioned = transitionUncertainty(
+    {
+      id: uncertainty.id,
+      status: uncertainty.status,
+      category: uncertainty.category,
+    },
+    status,
+  );
+  return { ...uncertainty, status: transitioned.status };
+}
+
+function updateUncertainty(
+  state: WorkflowState,
+  uncertaintyId: string,
+  update: (
+    uncertainty: WorkflowState["snapshot"]["uncertainties"]["uncertainties"][number],
+  ) => WorkflowState["snapshot"]["uncertainties"]["uncertainties"][number],
+): WorkflowState {
+  let found = false;
+  const uncertainties = state.snapshot.uncertainties.uncertainties.map((uncertainty) => {
+    if (uncertainty.id !== uncertaintyId) return uncertainty;
+    found = true;
+    return update(uncertainty);
+  });
+  if (!found) throw new Error(`Unknown Uncertainty ${uncertaintyId}`);
+  return {
+    ...state,
+    snapshot: {
+      ...state.snapshot,
+      uncertainties: { ...state.snapshot.uncertainties, uncertainties },
+    },
+  };
+}
+
+function verificationEvidenceSelector(
+  value: unknown,
+  currentExecutionId?: string,
+): VerificationEvidenceSelector | undefined {
+  const candidates = Array.isArray(value) ? value : [value];
+  if (
+    currentExecutionId !== undefined &&
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === "string" && entry.trim().length > 0)
+  ) {
+    return { executionId: currentExecutionId };
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const artifact = /(?:^|\/)verification\/VR-\d+\.md$/u.exec(value);
+    if (artifact?.[1] !== undefined) {
+      return {
+        verificationRunId: artifact[1].slice("verification/".length, -".md".length),
+        artifactPath: artifact[1],
+      };
+    }
+    if (currentExecutionId !== undefined) return { executionId: currentExecutionId };
+  }
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) continue;
+    const executionId = candidate.execution_id ?? candidate.executionId;
+    const verificationRunId = candidate.verification_run_id ?? candidate.verificationRunId;
+    const checkIndex = candidate.check_index ?? candidate.checkIndex;
+    const checkType = candidate.check_type ?? candidate.checkType;
+    const artifactPath = candidate.artifact_path ?? candidate.artifactPath;
+    if (
+      executionId !== undefined &&
+      (typeof executionId !== "string" || !/^exec-\d+$/.test(executionId))
+    ) {
+      continue;
+    }
+    if (
+      verificationRunId !== undefined &&
+      (typeof verificationRunId !== "string" || !/^VR-\d+$/.test(verificationRunId))
+    ) {
+      continue;
+    }
+    if (
+      checkIndex !== undefined &&
+      (typeof checkIndex !== "number" || !Number.isSafeInteger(checkIndex) || checkIndex < 1)
+    ) {
+      continue;
+    }
+    if (checkType !== undefined && typeof checkType !== "string") continue;
+    if (artifactPath !== undefined && typeof artifactPath !== "string") continue;
+    if (
+      executionId === undefined &&
+      verificationRunId === undefined &&
+      artifactPath === undefined
+    ) {
+      const checkKey = Object.keys(candidate).find((key) => /^check-\d+$/.test(key));
+      const checkValue = checkKey === undefined ? undefined : candidate[checkKey];
+      if (
+        currentExecutionId !== undefined &&
+        checkKey !== undefined &&
+        isRecord(checkValue) &&
+        checkValue.status === "passed"
+      ) {
+        return {
+          executionId: currentExecutionId,
+          checkIndex: Number(checkKey.slice("check-".length)),
+        };
+      }
+      continue;
+    }
+    return {
+      ...(executionId === undefined ? {} : { executionId }),
+      ...(verificationRunId === undefined ? {} : { verificationRunId }),
+      ...(checkIndex === undefined ? {} : { checkIndex }),
+      ...(checkType === undefined ? {} : { checkType }),
+      ...(artifactPath === undefined ? {} : { artifactPath }),
+    };
+  }
+  return undefined;
+}
+
+function verificationEvidenceFor(
+  state: WorkflowState,
+  uncertainty: WorkflowState["snapshot"]["uncertainties"]["uncertainties"][number],
+  evidence: unknown,
+  currentExecutionId?: string,
+): JsonObject | undefined {
+  if (
+    typeof evidence === "string" &&
+    currentExecutionId !== undefined &&
+    typeof state.run.repository.root === "string" &&
+    !/(?:^|\/)verification\/VR-\d+\.md$/u.test(evidence) &&
+    evidence !==
+      `.pi/runs/${state.run.run_id}/runtime/executions/${currentExecutionId}-verification.json` &&
+    resolvePath(evidence) !==
+      resolvePath(
+        state.run.repository.root,
+        ".pi",
+        "runs",
+        state.run.run_id,
+        "runtime",
+        "executions",
+        `${currentExecutionId}-verification.json`,
+      )
+  ) {
+    return undefined;
+  }
+  const selector = verificationEvidenceSelector(evidence, currentExecutionId);
+  if (selector === undefined) return undefined;
+  const allowedCheckTypes =
+    uncertainty.category === "behavior"
+      ? new Set(["behavior", "regression"])
+      : uncertainty.category === "verification"
+        ? new Set(["test", "build", "lint", "typecheck", "format", "behavior", "regression"])
+        : new Set<string>();
+  if (allowedCheckTypes.size === 0) return undefined;
+
+  for (const step of [...state.snapshot.steps.steps].reverse()) {
+    const finalization = isRecord(step.result?.finalization) ? step.result.finalization : undefined;
+    const verificationRun = isRecord(finalization?.verification_run)
+      ? finalization.verification_run
+      : undefined;
+    if (verificationRun === undefined) continue;
+    if (
+      verificationRun.status !== "complete" ||
+      verificationRun.result !== "passed" ||
+      verificationRun.accepted !== true
+    ) {
+      continue;
+    }
+    if (
+      selector.executionId !== undefined &&
+      verificationRun.executionId !== selector.executionId
+    ) {
+      continue;
+    }
+    if (
+      selector.verificationRunId !== undefined &&
+      verificationRun.id !== selector.verificationRunId
+    ) {
+      continue;
+    }
+    const artifact = isRecord(finalization?.artifact) ? finalization.artifact : undefined;
+    if (selector.artifactPath !== undefined && artifact?.path !== selector.artifactPath) continue;
+    const checks = Array.isArray(verificationRun.checks) ? verificationRun.checks : [];
+    const check = checks.find((value) => {
+      if (!isRecord(value)) return false;
+      if (selector.checkIndex !== undefined && value.check_index !== selector.checkIndex) {
+        return false;
+      }
+      if (selector.checkType !== undefined && value.type !== selector.checkType) return false;
+      return (
+        value.status === "passed" &&
+        value.required === true &&
+        value.evidence !== undefined &&
+        typeof value.type === "string" &&
+        allowedCheckTypes.has(value.type)
+      );
+    });
+    if (!isRecord(check)) continue;
+    return {
+      type: "verification",
+      verification_run_id: typeof verificationRun.id === "string" ? verificationRun.id : null,
+      execution_id:
+        typeof verificationRun.executionId === "string" ? verificationRun.executionId : null,
+      check_index: typeof check.check_index === "number" ? check.check_index : null,
+      check_type: typeof check.type === "string" ? check.type : null,
+      ...(isRecord(check.evidence) && typeof check.evidence.command === "string"
+        ? { command: check.evidence.command }
+        : {}),
+      ...(artifact === undefined ? {} : { artifact: artifact as unknown as JsonObject }),
+    };
+  }
+  return undefined;
+}
+
+function uncertaintyResolutionFailureReason(
+  evidence: unknown,
+  currentExecutionId?: string,
+): string {
+  return verificationEvidenceSelector(evidence, currentExecutionId) === undefined
+    ? "evidence-reference-invalid"
+    : "evidence-not-sufficient-for-uncertainty";
+}
+
 function applyRequirementCandidates(
   state: WorkflowState,
   candidates: ResultNormalizationResult["candidates"]["requirement_candidates"],
@@ -1067,6 +1322,7 @@ function applyRequirementCandidates(
 function applyProductionCandidates(
   state: WorkflowState,
   candidates: ResultNormalizationResult["candidates"],
+  provenance: UncertaintyProvenance,
 ): WorkflowState {
   const uncertaintyCandidates = candidates.uncertainty_candidates.map((candidate) => ({
     ...candidate,
@@ -1077,6 +1333,13 @@ function applyProductionCandidates(
       "Uncertainty candidate category",
     ),
     status: "open" as const,
+    created_by: {
+      step_id: provenance.stepId,
+      execution_id: provenance.executionId,
+      agent_id: provenance.agentId,
+    },
+    created_at: provenance.createdAt,
+    resolution_attempts: [],
   }));
   const decisionCandidates = candidates.decision_requests.map((candidate) => ({
     ...candidate,
@@ -1113,6 +1376,110 @@ function applyProductionCandidates(
         },
       },
     };
+  }
+  return next;
+}
+
+function applyUncertaintyRechecks(
+  state: WorkflowState,
+  rechecks: ResultNormalizationResult["candidates"]["uncertainty_rechecks"],
+  result: StepResultV1,
+  step: SchedulerStep,
+  now: string,
+): WorkflowState {
+  let next = state;
+  const handled = new Set<string>();
+  const maximumAttempts = maxUncertaintyResolutionAttempts(state);
+
+  for (const recheck of rechecks) {
+    const current = next.snapshot.uncertainties.uncertainties.find(({ id }) => id === recheck.id);
+    if (current === undefined) throw new Error(`Unknown Uncertainty ${recheck.id}`);
+    handled.add(recheck.id);
+    if (
+      current.status === "resolved" ||
+      current.status === "accepted" ||
+      current.status === "escalated"
+    ) {
+      continue;
+    }
+
+    const evidence = verificationEvidenceFor(
+      next,
+      current,
+      recheck.evidence,
+      result.identity.executionId,
+    );
+    const attempts = [
+      ...uncertaintyAttempts(current),
+      {
+        step_id: step.id,
+        execution_id: result.identity.executionId,
+        action: "resolve",
+        status: evidence === undefined ? "unresolved" : "resolved",
+        evidence: recheck.evidence,
+        created_at: now,
+        ...(evidence === undefined
+          ? {
+              reason: uncertaintyResolutionFailureReason(
+                recheck.evidence,
+                result.identity.executionId,
+              ),
+            }
+          : { resolution_evidence: evidence }),
+      },
+    ] as readonly JsonValue[];
+
+    if (evidence !== undefined) {
+      next = updateUncertainty(next, recheck.id, (uncertainty) => ({
+        ...uncertaintyWithStatus(uncertainty, "resolved"),
+        resolution_attempts: attempts,
+        resolution: {
+          status: "resolved",
+          authority: "orchestrator",
+          resolved_at: now,
+          step_id: step.id,
+          execution_id: result.identity.executionId,
+          evidence: [evidence],
+        },
+      }));
+      continue;
+    }
+
+    next = updateUncertainty(next, recheck.id, (uncertainty) => ({
+      ...uncertaintyWithStatus(
+        uncertainty,
+        attempts.length >= maximumAttempts
+          ? "escalated"
+          : uncertainty.status === "resolving"
+            ? "open"
+            : uncertainty.status,
+      ),
+      resolution_attempts: attempts,
+    }));
+  }
+
+  if (step.trigger !== "uncertainty") return next;
+  for (const current of next.snapshot.uncertainties.uncertainties) {
+    if (current.status !== "resolving" || handled.has(current.id)) continue;
+    const attempts = [
+      ...uncertaintyAttempts(current),
+      {
+        step_id: step.id,
+        execution_id: result.identity.executionId,
+        action: "resolve",
+        status: "unresolved",
+        evidence: { step_id: step.id, outcome: result.outcome },
+        reason: "no-resolution-recheck",
+        created_at: now,
+      },
+    ] as readonly JsonValue[];
+    next = updateUncertainty(next, current.id, (uncertainty) => ({
+      ...uncertaintyWithStatus(
+        uncertainty,
+        attempts.length >= maximumAttempts ? "escalated" : "open",
+      ),
+      resolution_attempts: attempts,
+    }));
   }
   return next;
 }
@@ -1244,6 +1611,106 @@ function markProductionTrigger(state: WorkflowState, key: string, value: number)
   };
 }
 
+function hasPendingBaseStep(state: WorkflowState): boolean {
+  return state.snapshot.steps.steps.some(
+    (step) => step.origin !== "dynamic" && step.status !== "completed" && step.status !== "skipped",
+  );
+}
+
+function uncertaintyResolutionRoute(
+  category: string,
+): Readonly<{ type: Step["type"]; agent: string }> {
+  switch (category) {
+    case "external":
+      return { type: "research", agent: "researcher" };
+    case "design":
+      return { type: "planning", agent: "planner" };
+    case "verification":
+      return { type: "verification", agent: "verifier" };
+    default:
+      return { type: "analysis", agent: "scout" };
+  }
+}
+
+function blockOnUncertainty(
+  state: WorkflowState,
+  uncertainty: WorkflowState["snapshot"]["uncertainties"]["uncertainties"][number],
+): WorkflowState {
+  return {
+    ...state,
+    run: {
+      ...state.run,
+      status: "blocked",
+      blocked: {
+        reason: "uncertainty-unresolved",
+        classification: "uncertainty-unresolved",
+        uncertainty_id: uncertainty.id,
+      },
+    },
+  };
+}
+
+function productionUncertaintyTrigger(
+  state: WorkflowState,
+  idAllocator: IdAllocator,
+): WorkflowState {
+  if (hasPendingBaseStep(state)) return state;
+  const uncertainty = state.snapshot.uncertainties.uncertainties.find(
+    ({ status }) => status !== "resolved" && status !== "accepted",
+  );
+  if (uncertainty === undefined) return state;
+  const objective = `resolve uncertainty ${uncertainty.id}`;
+  const active = state.snapshot.steps.steps.find(
+    (step) =>
+      step.origin === "dynamic" &&
+      step.trigger === "uncertainty" &&
+      step.objective === objective &&
+      step.status !== "completed" &&
+      step.status !== "skipped",
+  );
+  if (active !== undefined) return state;
+  if (uncertainty.status === "escalated") return blockOnUncertainty(state, uncertainty);
+  if (uncertainty.status === "resolving") {
+    return productionUncertaintyTrigger(
+      updateUncertainty(state, uncertainty.id, (current) => uncertaintyWithStatus(current, "open")),
+      idAllocator,
+    );
+  }
+  if (uncertaintyAttempts(uncertainty).length >= maxUncertaintyResolutionAttempts(state)) {
+    const escalated = updateUncertainty(state, uncertainty.id, (current) =>
+      uncertaintyWithStatus(current, "escalated"),
+    );
+    return blockOnUncertainty(escalated, {
+      ...uncertainty,
+      status: "escalated",
+    });
+  }
+
+  const route = uncertaintyResolutionRoute(uncertainty.category);
+  const source = lastCompletedStepId(state);
+  let added: ProductionDynamicStepResult;
+  try {
+    added = addProductionDynamicStep(
+      state,
+      {
+        objective,
+        type: route.type,
+        agent: route.agent,
+        dependsOn: source === undefined ? [] : [source],
+        trigger: "uncertainty",
+      },
+      idAllocator,
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("max_dynamic_steps")) throw error;
+    return blockOnUncertainty(state, uncertainty);
+  }
+  if (!added.added) return added.state;
+  return updateUncertainty(added.state, uncertainty.id, (current) =>
+    uncertaintyWithStatus(current, "resolving"),
+  );
+}
+
 function productionTrigger(state: WorkflowState, idAllocator: IdAllocator): WorkflowState {
   const source = lastCompletedStepId(state);
   const requirementRevision = state.snapshot.requirement.revision;
@@ -1355,7 +1822,7 @@ function productionTrigger(state: WorkflowState, idAllocator: IdAllocator): Work
     return added.state;
   }
 
-  return state;
+  return productionUncertaintyTrigger(state, idAllocator);
 }
 
 function productionPostconditions(
@@ -1661,6 +2128,24 @@ function appendChangeSetReference(
   };
 }
 
+function settleProductionUncertainties(
+  state: WorkflowState,
+  input: Readonly<{
+    result: StepResultV1;
+    step: SchedulerStep;
+    normalized: ResultNormalizationResult;
+  }>,
+  now: string,
+): WorkflowState {
+  return applyUncertaintyRechecks(
+    state,
+    input.normalized.candidates.uncertainty_rechecks,
+    input.result,
+    input.step,
+    now,
+  );
+}
+
 async function finalizeProductionStep(
   input: Readonly<{
     state: WorkflowState;
@@ -1676,7 +2161,13 @@ async function finalizeProductionStep(
 ): Promise<WorkflowState> {
   const after = sourceRepositorySnapshot(await input.repository.captureSnapshot());
   const diff = await input.repository.diff(input.execution.before, after);
-  let state = applyProductionCandidates(input.state, input.normalized.candidates);
+  const now = new Date().toISOString();
+  let state = applyProductionCandidates(input.state, input.normalized.candidates, {
+    stepId: input.step.id,
+    executionId: input.result.identity.executionId,
+    agentId: input.execution.request.identity.agentId,
+    createdAt: now,
+  });
 
   if (input.step.type === "implementation") {
     const finalization = await input.workerFinalizer.finalize({
@@ -1696,11 +2187,15 @@ async function finalizeProductionStep(
       change_set: finalization.changeSet as unknown as JsonObject,
       artifact: artifactValue(finalization.artifact),
     });
-    return productionRepositoryState(
-      state,
-      after,
-      finalization.changeSet.violations.length > 0 ||
-        finalization.changeSet.observation.attributionUncertain,
+    return settleProductionUncertainties(
+      productionRepositoryState(
+        state,
+        after,
+        finalization.changeSet.violations.length > 0 ||
+          finalization.changeSet.observation.attributionUncertain,
+      ),
+      input,
+      now,
     );
   }
 
@@ -1725,7 +2220,11 @@ async function finalizeProductionStep(
       verification_run: finalization.verificationRun as unknown as JsonObject,
       artifact: artifactValue(finalization.artifact),
     });
-    return productionRepositoryState(state, after, finalization.verificationRun.repository.mutated);
+    return settleProductionUncertainties(
+      productionRepositoryState(state, after, finalization.verificationRun.repository.mutated),
+      input,
+      now,
+    );
   }
 
   if (input.step.type === "review") {
@@ -1754,7 +2253,11 @@ async function finalizeProductionStep(
       rechecks: finalization.rechecks as unknown as readonly JsonValue[],
       artifact: artifactValue(finalization.artifact),
     });
-    return productionRepositoryState(state, after, finalization.reviewRun.repository.mutated);
+    return settleProductionUncertainties(
+      productionRepositoryState(state, after, finalization.reviewRun.repository.mutated),
+      input,
+      now,
+    );
   }
 
   if (diff.files.length > 0 || diff.headChanged || diff.branchChanged) {
@@ -1762,7 +2265,7 @@ async function finalizeProductionStep(
       `Read-only Agent ${input.execution.request.identity.agentId} mutated the repository`,
     );
   }
-  return productionRepositoryState(state, after, false);
+  return settleProductionUncertainties(productionRepositoryState(state, after, false), input, now);
 }
 
 async function createProductionUseCases(

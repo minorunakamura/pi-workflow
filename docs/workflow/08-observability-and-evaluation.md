@@ -385,7 +385,7 @@ Track actual `skill.used`, not merely selected Skills. Tool metrics may aggregat
 
 ### Uncertainty and Decisions
 
-Track creation/resolution/acceptance/escalation and resolution attempts. Track D1/D2/D3 Decisions, supersession, and user/Orchestrator resolution where meaningful.
+Track creation/resolution/acceptance/escalation and resolution attempts. `uncertainty.resolved` records the validated resolution evidence references. Track D1/D2/D3 Decisions, supersession, and user/Orchestrator resolution where meaningful.
 
 Counts alone MUST NOT be interpreted as quality judgments without request context.
 

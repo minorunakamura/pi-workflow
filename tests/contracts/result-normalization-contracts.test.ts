@@ -295,6 +295,42 @@ describe("Result normalization contract", () => {
     });
   });
 
+  it("preserves an existing Uncertainty identity for a recheck and rejects unknown references", () => {
+    const normalized = normalizeResultCandidates({
+      result: StepResultV1Schema.parse({
+        ...result(),
+        uncertainty_rechecks: [
+          {
+            uncertaintyId: "U-001",
+            action: "resolve",
+            evidence: { execution_id: "exec-001", check_index: 1 },
+          },
+        ],
+      }),
+      state: stateWithExistingIds(),
+    });
+
+    expect(normalized.uncertainty_rechecks[0]).toMatchObject({
+      id: "U-001",
+      uncertaintyId: "U-001",
+    });
+    expect(() =>
+      normalizeResultCandidates({
+        result: StepResultV1Schema.parse({
+          ...result(),
+          uncertainty_rechecks: [
+            {
+              uncertaintyId: "U-999",
+              action: "resolve",
+              evidence: { execution_id: "exec-001", check_index: 1 },
+            },
+          ],
+        }),
+        state: stateWithExistingIds(),
+      }),
+    ).toThrow(/Unknown Uncertainty reference: U-999/);
+  });
+
   it("rejects role, permission, and Artifact reference violations", async () => {
     const base = {
       result: result(),

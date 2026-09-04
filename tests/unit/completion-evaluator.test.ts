@@ -108,6 +108,21 @@ describe("Completion evaluator", () => {
     });
   });
 
+  it("allows explicitly accepted residual Uncertainty but not an open one", () => {
+    expect(
+      evaluateCompletion({
+        ...readyState(),
+        controlState: { uncertainties: [{ status: "accepted" }], decisions: [], gates: [] },
+      }),
+    ).toEqual({ eligible: true, blockers: [] });
+    expect(
+      evaluateCompletion({
+        ...readyState(),
+        controlState: { uncertainties: [{ status: "resolved" }], decisions: [], gates: [] },
+      }),
+    ).toEqual({ eligible: true, blockers: [] });
+  });
+
   it("reports control blockers and treats absent facts as blocking", () => {
     const state = readyState();
     const blocked = evaluateCompletion({
