@@ -279,6 +279,62 @@ describe("Result normalization contract", () => {
     expect(result().uncertainty_candidates[0]).not.toHaveProperty("id", "U-002");
   });
 
+  it("does not suppress material design or impact candidates by category", () => {
+    const normalized = normalizeResultCandidates({
+      result: StepResultV1Schema.parse({
+        ...result(),
+        uncertainty_candidates: [
+          {
+            category: "design",
+            question: "Which conflicting repository convention governs this change?",
+            basis: "Two existing conventions apply to the affected path.",
+            impact: "The choice changes the approved scope and compatibility boundary.",
+          },
+          {
+            category: "impact",
+            question: "Does the concrete existing caller require compatibility?",
+            basis: "A repository caller and public API declaration were found.",
+            impact: "The implementation may break an existing consumer contract.",
+          },
+        ],
+      }),
+      state: stateWithExistingIds(),
+    });
+
+    expect(normalized.uncertainty_candidates).toMatchObject([
+      { id: "U-002", category: "design" },
+      { id: "U-003", category: "impact" },
+    ]);
+  });
+
+  it("does not invent blocking Uncertainty candidates for non-material absence observations", () => {
+    const normalized = normalizeResultCandidates({
+      result: StepResultV1Schema.parse({
+        ...result(),
+        uncertainty_candidates: [],
+        observations: [
+          {
+            kind: "Fact",
+            classification: "Fact",
+            statement: "No existing test convention or CI configuration was found.",
+            evidence: ["repository inventory"],
+          },
+          {
+            kind: "Fact",
+            classification: "Fact",
+            statement: "No external caller or compatibility contract was found.",
+            evidence: ["repository inventory", "current Requirement"],
+          },
+        ],
+      }),
+      state: stateWithExistingIds(),
+    });
+
+    expect(normalized.uncertainty_candidates).toEqual([]);
+    expect(normalized.observations).toHaveLength(2);
+    expect(normalized.requirement_candidates.assumptions).toEqual([]);
+  });
+
   it("preserves an existing Finding identity for a recheck", () => {
     const normalized = normalizeResultCandidates({
       result: StepResultV1Schema.parse({

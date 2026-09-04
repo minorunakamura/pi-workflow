@@ -189,6 +189,19 @@ describe("assemblePrompt", () => {
     expect(content).toContain(
       "Uncertainty candidate category must be one of: requirement, behavior, design, external, impact, verification.",
     );
+    expect(content).toContain("Uncertainty admission/materiality boundary:");
+    expect(content).toContain(
+      "Do not create an authoritative Uncertainty merely because information is absent or cannot be proven.",
+    );
+    expect(content).toContain(
+      "Do not turn a hypothetical external caller/impact into a current Uncertainty",
+    );
+    expect(content).toContain(
+      "A required current-Requirement behavior or verification check unavailable to this Execution is material",
+    );
+    expect(content).toContain(
+      "A D0 local choice or D1 Plan-bounded choice that stays within current authority",
+    );
     expect(content).toContain(
       "Artifacts supplied by an Agent are analysis/research drafts with type, purpose, and content",
     );
