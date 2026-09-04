@@ -44,6 +44,19 @@ type ProviderImport = Readonly<{
   auditPath: string;
 }>;
 
+type PackedAuditRequest = Readonly<{
+  identity: { agentId: string };
+  execution: { mode: string; timeoutMs: number };
+  permissions: {
+    filesystem: unknown[];
+    shell: unknown[];
+    git: unknown[];
+    network: unknown[];
+    repositoryTargets: unknown[];
+  };
+  tools: { resolved: unknown[]; policy: unknown };
+}>;
+
 function pnpmInvocation(args: readonly string[]): { command: string; args: string[] } {
   return process.platform === "win32"
     ? {
@@ -98,7 +111,15 @@ const auditPath = ${JSON.stringify(auditPath)};
 type PackedRequest = {
   identity: { runId: string; stepId: string; executionId: string; agentId: string };
   objective: { objective: string };
-  execution: { mode: string };
+  execution: { mode: string; timeoutMs: number };
+  permissions: {
+    filesystem: unknown[];
+    shell: unknown[];
+    git: unknown[];
+    network: unknown[];
+    repositoryTargets: unknown[];
+  };
+  tools: { resolved: unknown[]; policy: unknown };
 };
 
 function textContent(content: unknown): string {
@@ -139,6 +160,14 @@ function requestFrom(context: { messages: readonly unknown[] }): PackedRequest {
   throw new Error("Packed provider could not find an Agent Execution request");
 }
 
+function advertisedTools(context: { tools?: readonly unknown[] }): string[] {
+  return (context.tools ?? []).flatMap((tool) => {
+    if (!tool || typeof tool !== "object") return [];
+    const name = (tool as { name?: unknown }).name;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
 function resultFor(request: PackedRequest): Record<string, unknown> {
   const verifier = request.identity.agentId === "verifier";
   const planner = request.identity.agentId === "planner";
@@ -160,9 +189,16 @@ function resultFor(request: PackedRequest): Record<string, unknown> {
     plan_deviations: [],
     skill_requests: [],
     execution_checks: verifier
-      ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
+      ? [{ type: "test", status: "failed", required: true, evidence: { exit_code: 1 } }]
       : [],
-    ...(planner ? { plan: { write_scope: ["src"] } } : {}),
+    ...(planner
+      ? {
+          plan: {
+            write_scope: ["src"],
+            verification_checks: [{ type: "test", command: "node --test", required: true }],
+          },
+        }
+      : {}),
     observations: [],
     blocked: null,
     failure: null,
@@ -171,7 +207,7 @@ function resultFor(request: PackedRequest): Record<string, unknown> {
 }
 
 function response(
-  context: { messages: readonly unknown[] },
+  context: { messages: readonly unknown[]; tools?: readonly unknown[] },
   _options: unknown,
   state: { callCount: number },
 ) {
@@ -186,6 +222,7 @@ function response(
         typeof (context as { systemPrompt?: unknown }).systemPrompt === "string"
           ? (context as { systemPrompt: string }).systemPrompt
           : "",
+      advertisedTools: advertisedTools(context),
       request,
     }) + "\\n",
     "utf8",
@@ -197,6 +234,9 @@ function response(
         edits: [{ oldText: "baseline\\n", newText: "packed production runtime\\n" }],
       }),
     );
+  }
+  if (request.identity.agentId === "verifier" && state.callCount === 1) {
+    return fauxAssistantMessage(fauxToolCall("verification", { command: "node --test" }));
   }
   return fauxAssistantMessage(fauxToolCall("structured_output", { value: resultFor(request) }));
 }
@@ -290,6 +330,11 @@ describe("packed Pi Package production Agent runtime", () => {
           "utf8",
         ),
         writeFile(join(sourceRoot, "packed-runtime.txt"), "baseline\n", "utf8"),
+        writeFile(
+          join(consumerRoot, "packed-runtime.test.mjs"),
+          "import { test } from 'node:test'; test('packed runtime', () => {});\n",
+          "utf8",
+        ),
         writeFile(
           providerPath,
           providerSource({
@@ -532,6 +577,8 @@ describe("packed Pi Package production Agent runtime", () => {
               call: number;
               task: string;
               systemPrompt: string;
+              advertisedTools: string[];
+              request: PackedAuditRequest;
             },
         );
       expect(audit.map(({ agent }) => agent)).toEqual([
@@ -539,6 +586,7 @@ describe("packed Pi Package production Agent runtime", () => {
         "planner",
         "worker",
         "worker",
+        "verifier",
         "verifier",
         "reviewer",
       ]);
@@ -562,18 +610,45 @@ describe("packed Pi Package production Agent runtime", () => {
       expect(audit.find(({ agent }) => agent === "reviewer")?.systemPrompt).toContain(
         "You are the Workflow Reviewer Agent.",
       );
+      const verifierAudits = audit.filter(({ agent }) => agent === "verifier");
+      expect(verifierAudits).toHaveLength(2);
+      expect(verifierAudits[0]?.advertisedTools).toEqual(expect.arrayContaining(["verification"]));
+      expect(verifierAudits[0]?.advertisedTools).toEqual(
+        expect.not.arrayContaining(["bash", "edit", "write"]),
+      );
+      expect(verifierAudits[0]?.request.execution.mode).toBe("verify-only");
+      expect(verifierAudits[0]?.request.permissions.shell).toEqual([]);
+      expect(verifierAudits[0]?.request.permissions.repositoryTargets).toEqual([]);
+      expect(verifierAudits[0]?.request.tools.resolved).toEqual(
+        expect.arrayContaining(["read", "grep", "find", "ls", "verification"]),
+      );
+      expect(verifierAudits[0]?.request.tools.resolved).toEqual(
+        expect.not.arrayContaining(["bash", "edit", "write"]),
+      );
 
       const steps = state.snapshot.steps.steps;
+      expect(requests.find(({ agent }) => agent === "verifier")?.task).toContain(
+        '"command":"node --test"',
+      );
       expect(steps.find(({ agent }) => agent === "worker")?.result).toMatchObject({
         finalization: {
           kind: "change-set",
           change_set: { status: "complete", accepted: true },
         },
       });
-      expect(steps.find(({ agent }) => agent === "verifier")?.result).toMatchObject({
+      const verifierStep = steps.find(({ agent }) => agent === "verifier");
+      expect(verifierStep?.result?.runtime).toMatchObject({
+        commands_executed: ["node --test"],
+      });
+      expect(verifierStep?.result).toMatchObject({
         finalization: {
           kind: "verification-run",
-          verification_run: { status: "complete", result: "passed", accepted: true },
+          verification_run: {
+            status: "complete",
+            result: "passed",
+            accepted: true,
+            checks: [{ type: "test", status: "passed", required: true }],
+          },
         },
       });
       expect(steps.find(({ agent }) => agent === "reviewer")?.result).toMatchObject({
@@ -583,6 +658,13 @@ describe("packed Pi Package production Agent runtime", () => {
         },
       });
       const artifactsStore = new FileArtifactStore(consumerRoot);
+      const verificationArtifact = await artifactsStore.read({
+        runId: "run-001" as RunId,
+        path: "verification/VR-001.md",
+        status: "complete",
+      });
+      expect(verificationArtifact.body).toContain('"command": "node --test"');
+      expect(verificationArtifact.body).toContain('"exit_code": 0');
       await expect(
         artifactsStore.read({
           runId: "run-001" as RunId,

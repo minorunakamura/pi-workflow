@@ -72,6 +72,15 @@ const toolCatalog: ToolCatalog = {
         minimumAuthority: "D1",
       };
     }
+    if (capability === "verification") {
+      return {
+        name: "verification",
+        capabilities: ["verification"],
+        requiredPermissions: [{ scope: "filesystem", value: "repository" }],
+        allowedModes: ["verify-only"],
+        minimumAuthority: "D0",
+      };
+    }
     return undefined;
   },
 };
@@ -107,6 +116,23 @@ describe("model and tool resolution integration", () => {
     const input = request();
 
     expect(resolver.resolve(input, ["repository-read"])).toEqual(["read"]);
+  });
+
+  it("resolves verify-only command execution without repository-write capability", () => {
+    const input = request({
+      identity: { ...request().identity, agentId: "verifier" },
+      execution: { ...request().execution, mode: "verify-only" },
+      permissions: { ...request().permissions, repositoryTargets: [] },
+      tools: { resolved: [], policy: { allow: ["read", "verification"] } },
+    });
+    const resolved = new ExecutionResolver({
+      modelCatalog: modelCatalog(["configured/model"]),
+      toolCatalog,
+    }).resolve(input, ["repository-read", "verification"]);
+
+    expect(resolved.tools.resolved).toEqual(["read", "verification"]);
+    expect(resolved.tools.resolved).not.toEqual(expect.arrayContaining(["edit", "write", "bash"]));
+    expect(resolved.execution.mode).toBe("verify-only");
   });
 
   it("rejects Tools that require denied permissions, authority, or unrequested capabilities", () => {

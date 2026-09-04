@@ -33,6 +33,7 @@ import { FileRunReader } from "../../src/adapters/persistence/read/file-run-read
 import { CORE_SKILL_IDS } from "../../src/agents/definitions.js";
 import type { RunId } from "../../src/domain/primitives/ids.js";
 import { WORKFLOW_COMMANDS } from "../../src/extensions/commands/register-workflow-commands.js";
+import { executeDelegatedVerification } from "../fixtures/verification-delegation.js";
 
 const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
@@ -88,7 +89,14 @@ function completedStepResult(request: SubagentDelegationRequest): Record<string,
       request.agent === "verifier"
         ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
         : [],
-    ...(request.agent === "planner" ? { plan: { write_scope: ["src"] } } : {}),
+    ...(request.agent === "planner"
+      ? {
+          plan: {
+            write_scope: ["src"],
+            verification_checks: [{ type: "test", command: "node --test", required: true }],
+          },
+        }
+      : {}),
     observations: [],
     blocked: null,
     failure: null,
@@ -216,6 +224,7 @@ describe("packed Pi Package installation", () => {
       eventBus.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
         const request = payload as SubagentDelegationRequest;
         requests.push(request);
+        executeDelegatedVerification(request);
         eventBus.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
           requestId: request.requestId,
           ownerRunId: request.ownerRunId,

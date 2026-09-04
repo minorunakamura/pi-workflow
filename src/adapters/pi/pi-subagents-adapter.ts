@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   SUBAGENT_DELEGATION_CANCEL_EVENT,
@@ -23,6 +27,11 @@ import {
 import { validateAgentExecutionRequest } from "../../agents/permission-policy.js";
 import type { AgentRuntime } from "../../ports/agent-runtime.js";
 import {
+  applyVerificationEvidence,
+  VERIFICATION_POLICY_ENV,
+  verificationPolicyForEnvironment,
+} from "./verification-command-tool.js";
+import {
   attachRuntimeTelemetry,
   captureRuntimeTelemetry,
   type RuntimeTelemetryUsage,
@@ -31,6 +40,10 @@ import {
 
 const MAX_DELEGATION_TIMEOUT_MS = 2_147_483_647;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const EXTRA_AGENT_DIRS_ENV = "PI_SUBAGENT_EXTRA_AGENT_DIRS";
+const VERIFICATION_EXTENSION_PATH = fileURLToPath(
+  new URL("./verification-command-extension.ts", import.meta.url),
+);
 
 type PiEventBus = ExtensionAPI["events"];
 
@@ -368,6 +381,40 @@ function abortError(): Error {
   return error;
 }
 
+function installVerifierAgentOverride(request: AgentExecutionRequestV1): () => void {
+  if (request.identity.agentId !== "verifier") return () => {};
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-verifier-"));
+  const agentPath = join(directory, "verifier.md");
+  writeFileSync(
+    agentPath,
+    [
+      "---",
+      "name: verifier",
+      "description: Formal verification of current implementation and evidence capture",
+      `tools: read, grep, find, ls, verification, ${VERIFICATION_EXTENSION_PATH}`,
+      "thinking: medium",
+      "systemPromptMode: replace",
+      "completionGuard: false",
+      "inheritProjectContext: true",
+      "inheritSkills: false",
+      "---",
+      "",
+      "You are the Workflow Verifier Agent.",
+      "Execute the supplied Verification Checks with the verification Tool, record runtime evidence, and distinguish passed, failed, skipped, and unavailable checks. The Tool accepts only an exact Orchestrator-approved command from the current Plan; never use bash, powershell, edit, or write. Do not modify source, create Findings, or widen the execution permissions.",
+      "",
+    ].join("\n"),
+    { encoding: "utf8", mode: 0o600 },
+  );
+  const previous = process.env[EXTRA_AGENT_DIRS_ENV];
+  process.env[EXTRA_AGENT_DIRS_ENV] =
+    previous === undefined ? directory : `${previous}${delimiter}${directory}`;
+  return () => {
+    if (previous === undefined) delete process.env[EXTRA_AGENT_DIRS_ENV];
+    else process.env[EXTRA_AGENT_DIRS_ENV] = previous;
+    rmSync(directory, { force: true, recursive: true });
+  };
+}
+
 type SlashSubagentParams = Record<string, unknown>;
 type SlashSubagentRequest = Readonly<{
   requestId: string;
@@ -553,6 +600,16 @@ export class PiSubagentsAdapter implements AgentRuntime {
   ): Promise<StepResultV1> {
     const validatedRequest = validateAgentExecutionRequest(request);
     const allowedTools = resolvedToolNames(validatedRequest);
+    if (
+      validatedRequest.identity.agentId === "verifier" &&
+      allowedTools.has("verification") &&
+      verificationPolicyForEnvironment(validatedRequest) === undefined
+    ) {
+      throw new PiSubagentsToolCapabilityError(
+        "verification",
+        "Verifier verification capability requires an Orchestrator-approved command policy",
+      );
+    }
     const started = performance.now();
     const prompt = this.buildPrompt?.(validatedRequest);
     if (prompt !== undefined && prompt.trim().length === 0) {
@@ -584,7 +641,10 @@ export class PiSubagentsAdapter implements AgentRuntime {
     if (response.result?.kind !== "structured") {
       throw new Error("PiSubagents Agent Execution did not return a structured StepResultV1");
     }
-    const result = parseStepResultV1(response.result.value);
+    const result = applyVerificationEvidence(
+      parseStepResultV1(response.result.value),
+      validatedRequest,
+    );
     const wallClockMs = Math.max(0, Math.round(performance.now() - started));
     const usage = runtimeUsage(response.usage, execution.observation);
     const telemetry = captureRuntimeTelemetry(validatedRequest, {
@@ -610,20 +670,49 @@ export class PiSubagentsAdapter implements AgentRuntime {
     allowedTools: ReadonlySet<string>,
     execute: () => Promise<AgentRuntimeExecution>,
   ): Promise<AgentRuntimeExecution> {
-    if (this.sessionId === undefined) return execute();
-    const capabilityCeiling = registerSubagentCapabilityCeiling({
-      sessionId: this.sessionId,
-      source: "pi-workflow",
-      ceiling: {
-        allowedAgents: [request.identity.agentId],
-        allowedTools: [...allowedTools],
-        denyExtensions: false,
-      },
-    });
+    const verificationPolicy = verificationPolicyForEnvironment(request);
+    const restoreVerifierAgent =
+      verificationPolicy === undefined ? () => {} : installVerifierAgentOverride(request);
+    const previousVerificationPolicy = process.env[VERIFICATION_POLICY_ENV];
+    // ponytail: the structured pi-subagents contract has no per-child env field;
+    // Phase 1 is sequential, so keep this policy scoped to the one live child.
+    if (verificationPolicy === undefined) delete process.env[VERIFICATION_POLICY_ENV];
+    else process.env[VERIFICATION_POLICY_ENV] = verificationPolicy;
+
+    const restoreVerificationPolicy = (): void => {
+      if (previousVerificationPolicy === undefined) delete process.env[VERIFICATION_POLICY_ENV];
+      else process.env[VERIFICATION_POLICY_ENV] = previousVerificationPolicy;
+    };
+    if (this.sessionId === undefined) {
+      try {
+        return await execute();
+      } finally {
+        restoreVerificationPolicy();
+        restoreVerifierAgent();
+      }
+    }
+    let capabilityCeiling: ReturnType<typeof registerSubagentCapabilityCeiling>;
+    try {
+      capabilityCeiling = registerSubagentCapabilityCeiling({
+        sessionId: this.sessionId,
+        source: "pi-workflow",
+        ceiling: {
+          allowedAgents: [request.identity.agentId],
+          allowedTools: [...allowedTools],
+          denyExtensions: false,
+        },
+      });
+    } catch (error) {
+      restoreVerificationPolicy();
+      restoreVerifierAgent();
+      throw error;
+    }
     try {
       return await execute();
     } finally {
       capabilityCeiling.dispose();
+      restoreVerificationPolicy();
+      restoreVerifierAgent();
     }
   }
 
