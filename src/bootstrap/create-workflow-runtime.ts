@@ -10,6 +10,7 @@ import { stringify as stringifyYaml } from "yaml";
 import { resolve as resolvePath } from "node:path";
 import { FileArtifactStore } from "../adapters/persistence/write/file-artifact-store.js";
 import { GitRepositoryAdapter } from "../adapters/repository/git-repository-adapter.js";
+import { collectVerificationInspectionEvidence } from "../adapters/repository/verification-inspector.js";
 import { PiUserInteractionAdapter } from "../adapters/pi/pi-user-interaction-adapter.js";
 import { FileRunLock } from "../adapters/persistence/write/file-run-lock.js";
 import { FileStateStore } from "../adapters/persistence/write/file-state-store.js";
@@ -379,12 +380,9 @@ function repositorySnapshotValue(snapshot: RepositorySnapshot): Record<string, u
   return { ...baseline, snapshot: baseline };
 }
 
-function persistedRepositorySnapshot(state: WorkflowState): RepositorySnapshot {
-  const value = state.run.repository.snapshot;
-  if (!isRecord(value)) {
-    throw new Error(`Run ${state.run.run_id} has no persisted repository snapshot`);
-  }
+function repositorySnapshotFromValue(value: unknown): RepositorySnapshot | undefined {
   if (
+    !isRecord(value) ||
     typeof value.root !== "string" ||
     typeof value.head !== "string" ||
     (value.branch !== null && typeof value.branch !== "string") ||
@@ -393,9 +391,25 @@ function persistedRepositorySnapshot(state: WorkflowState): RepositorySnapshot {
     !Array.isArray(value.status.entries) ||
     !isRecord(value.fingerprints)
   ) {
-    throw new Error(`Run ${state.run.run_id} has an invalid persisted repository snapshot`);
+    return undefined;
   }
   return value as unknown as RepositorySnapshot;
+}
+
+function persistedRepositorySnapshot(state: WorkflowState): RepositorySnapshot {
+  const snapshot = repositorySnapshotFromValue(state.run.repository.snapshot);
+  if (snapshot === undefined) {
+    throw new Error(`Run ${state.run.run_id} has an invalid persisted repository snapshot`);
+  }
+  return snapshot;
+}
+
+function preExistingRepositoryPaths(state: WorkflowState): readonly string[] {
+  const preExisting = state.run.repository.pre_existing;
+  if (!isRecord(preExisting)) return [];
+  return [preExisting.changed, preExisting.untracked]
+    .flatMap((value) => (Array.isArray(value) ? value : []))
+    .filter((value): value is string => typeof value === "string");
 }
 
 function schedulerStep(step: WorkflowState["snapshot"]["steps"]["steps"][number]): SchedulerStep {
@@ -955,12 +969,13 @@ function attachFinalization(
   stepId: StepId,
   artifact: ArtifactRef,
   details: JsonObject,
+  resultOverride?: JsonObject,
 ): WorkflowState {
   let found = false;
   const steps = state.snapshot.steps.steps.map((step) => {
     if (step.id !== stepId) return step;
     found = true;
-    const current = step.result ?? {};
+    const current = resultOverride ?? step.result ?? {};
     const artifacts = Array.isArray(current.artifacts) ? current.artifacts : [];
     const reference = artifactValue(artifact);
     const alreadyReferenced = artifacts.some(
@@ -2200,6 +2215,15 @@ async function finalizeProductionStep(
   }
 
   if (input.step.type === "verification") {
+    const baseline = repositorySnapshotFromValue(input.state.run.repository.baseline_snapshot);
+    const inspectionEvidence = await collectVerificationInspectionEvidence({
+      repositoryRoot: after.root,
+      checks: planVerificationChecks(input.state),
+      writeScope: planWriteScope(input.state),
+      ...(baseline === undefined ? {} : { baseline }),
+      current: after,
+      preExistingPaths: preExistingRepositoryPaths(input.state),
+    });
     const finalization = await input.verifierFinalizer.finalize({
       request: input.execution.request,
       result: input.result,
@@ -2207,6 +2231,7 @@ async function finalizeProductionStep(
       after,
       diff,
       executionStateRevision: input.execution.executionStateRevision,
+      inspectionEvidence,
       basis: {
         requirement_revision: input.state.snapshot.requirement.revision,
         ...(typeof input.state.run.current_plan?.version === "number"
@@ -2215,11 +2240,21 @@ async function finalizeProductionStep(
         step_id: input.step.id,
       },
     });
-    state = attachFinalization(state, input.step.id, finalization.artifact, {
-      kind: "verification-run",
-      verification_run: finalization.verificationRun as unknown as JsonObject,
-      artifact: artifactValue(finalization.artifact),
-    });
+    const finalizedResult = {
+      ...input.result,
+      execution_checks: finalization.checks as unknown as readonly JsonValue[],
+    } as unknown as JsonObject;
+    state = attachFinalization(
+      state,
+      input.step.id,
+      finalization.artifact,
+      {
+        kind: "verification-run",
+        verification_run: finalization.verificationRun as unknown as JsonObject,
+        artifact: artifactValue(finalization.artifact),
+      },
+      finalizedResult,
+    );
     return settleProductionUncertainties(
       productionRepositoryState(state, after, finalization.verificationRun.repository.mutated),
       input,

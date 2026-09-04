@@ -157,7 +157,7 @@ export const AGENT_DEFINITIONS = [
     skillAllowlist: SKILL_ALLOWLISTS.verifier,
     requirements: {
       must: [
-        "Execute/observe Verification Checks and record evidence/results.",
+        "Execute/observe Verification Checks and record evidence/results; use read-only repository inspection Tools for inspection/manual checks.",
         "Distinguish passed, failed, skipped, and unavailable checks.",
       ],
       mustNot: [

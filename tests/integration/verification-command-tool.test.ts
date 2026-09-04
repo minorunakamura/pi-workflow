@@ -129,6 +129,22 @@ function restoreEnvironment(previous: string | undefined): void {
 }
 
 describe("verification command policy and Tool", () => {
+  it("keeps an inspection intent out of the command policy even when type is omitted", async () => {
+    await withTempRepository({}, async (root) => {
+      const approved = policy(root, [
+        {
+          check: "依存と変更範囲の inspection",
+          command: "変更 diff とファイル内容を inspection",
+        },
+      ]);
+      expect(approved.checks).toMatchObject([
+        { key: "check-1", type: "inspection", required: true },
+      ]);
+      expect(approved.checks[0]).not.toHaveProperty("command");
+      expect(approved.checks[0]).not.toHaveProperty("executable");
+    });
+  });
+
   it("exposes only the approved verification Tool and records an actual passing command", async () => {
     await withTempRepository(
       {
@@ -303,6 +319,40 @@ describe("verification command policy and Tool", () => {
       expect(verificationPolicyForRequest(input)).toMatchObject({ checks: [{ key: "check-1" }] });
       expect(applyVerificationEvidence(result(input), input).execution_checks).toMatchObject([
         { status: "unavailable", required: true },
+      ]);
+    });
+  });
+
+  it("does not promote a model-passed inspection without an actual inspection record", async () => {
+    await withTempRepository({}, async (root) => {
+      const approved = policy(root, [
+        { type: "inspection", command: "inspect repository", required: true },
+      ]);
+      const input = request(approved);
+      const actual = applyVerificationEvidence(
+        {
+          ...result(input),
+          execution_checks: [
+            {
+              type: "inspection",
+              status: "passed",
+              required: true,
+              evidence: {
+                inspection_performed: true,
+                evidence_refs: ["repository"],
+                observed: { changed_files: [] },
+              },
+            },
+          ],
+        },
+        input,
+      );
+      expect(actual.execution_checks).toMatchObject([
+        {
+          type: "inspection",
+          status: "unavailable",
+          evidence: { source: "verification-tool", status: "unavailable" },
+        },
       ]);
     });
   });
