@@ -18,6 +18,7 @@ import { JsonlEventReader } from "../../src/adapters/persistence/read/jsonl-even
 import { withGoldenRepository } from "../fixtures/golden-repositories.js";
 import type { AgentExecutionRequestV1 } from "../../src/contracts/execution/agent-execution.js";
 import type { RunId } from "../../src/domain/primitives/ids.js";
+import { executeVerificationRequest } from "../fixtures/verification-delegation.js";
 
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const { registerPromptTemplateDelegationBridge } = await import(
@@ -105,7 +106,14 @@ function stepResult(request: AgentExecutionRequestV1): Record<string, unknown> {
       request.identity.agentId === "verifier"
         ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
         : [],
-    ...(request.identity.agentId === "planner" ? { plan: { write_scope: ["src"] } } : {}),
+    ...(request.identity.agentId === "planner"
+      ? {
+          plan: {
+            write_scope: ["src"],
+            verification_checks: [{ type: "test", command: "node --test", required: true }],
+          },
+        }
+      : {}),
     observations: [],
     blocked: null,
     failure: null,
@@ -123,6 +131,7 @@ function ui(notifications: string[]): ExtensionUIContext {
 }
 
 function bridgeResult(request: AgentExecutionRequestV1, message = "bridge accepted"): SlashResult {
+  executeVerificationRequest(request);
   return {
     content: [{ type: "text", text: message }],
     details: {

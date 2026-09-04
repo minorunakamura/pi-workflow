@@ -24,6 +24,7 @@ import { JsonlEventReader } from "../../src/adapters/persistence/read/jsonl-even
 import { GitRepositoryAdapter } from "../../src/adapters/repository/git-repository-adapter.js";
 import { type ExecutionId, type RunId, type StepId } from "../../src/domain/primitives/ids.js";
 import { withGoldenRepository } from "../fixtures/golden-repositories.js";
+import { executeDelegatedVerification } from "../fixtures/verification-delegation.js";
 import { withTempRepository } from "../fixtures/temp-repository.js";
 
 const execFile = promisify(nodeExecFile);
@@ -32,12 +33,18 @@ const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
 type RegisteredCommand = Parameters<ExtensionAPI["registerCommand"]>[1];
 type CommandContext = Parameters<RegisteredCommand["handler"]>[1];
 
-type ToolName = "read" | "edit";
+type ToolName = "read" | "edit" | "verification";
 
 function tools(): ToolInfo[] {
-  return (["read", "edit"] as const satisfies readonly ToolName[]).map(
+  return (["read", "edit", "verification"] as const satisfies readonly ToolName[]).map(
     (name) => ({ name }) as unknown as ToolInfo,
   );
+}
+
+function installVerificationEvidence(events: ReturnType<typeof createEventBus>): void {
+  events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
+    executeDelegatedVerification(payload as SubagentDelegationRequest);
+  });
 }
 
 function result(
@@ -107,7 +114,12 @@ function result(
           ]
         : [],
     ...(request.agent === "planner" && options.withoutPlan !== true
-      ? { plan: { write_scope: [...(options.writeScope ?? ["src"])] } }
+      ? {
+          plan: {
+            write_scope: [...(options.writeScope ?? ["src"])],
+            verification_checks: [{ type: "test", command: "node --test", required: true }],
+          },
+        }
       : {}),
     observations: [],
     blocked: null,
@@ -210,6 +222,7 @@ describe("workflow Extension production composition", () => {
 
     await withGoldenRepository("feature", {}, async (repositoryRoot) => {
       const events = createEventBus();
+      installVerificationEvidence(events);
       const requests: SubagentDelegationRequest[] = [];
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
         const request = payload as SubagentDelegationRequest;
@@ -264,6 +277,19 @@ describe("workflow Extension production composition", () => {
       ]);
       expect(new Set(requests.map(({ cwd }) => cwd))).toHaveLength(1);
       expect(await realpath(requests[0]!.cwd)).toBe(await realpath(repositoryRoot));
+      const verifierRequest = requests.find(({ agent }) => agent === "verifier");
+      expect(verifierRequest?.task).toContain('"mode":"verify-only"');
+      expect(verifierRequest?.task).toContain('"verification"');
+      expect(verifierRequest?.task).not.toContain('"bash"');
+      expect(verifierRequest?.task).not.toContain('"edit"');
+      expect(verifierRequest?.task).not.toContain('"write"');
+      expect(
+        requests
+          .filter(({ agent }) => agent === "scout" || agent === "planner")
+          .every(({ task }) => !task.includes('"verification"')),
+      ).toBe(true);
+      const workerRequest = requests.find(({ agent }) => agent === "worker");
+      expect(workerRequest?.task).toContain('"edit"');
       await expect(
         readFile(resolve(repositoryRoot, ".pi/runs/run-001/effective-config.yaml"), "utf8"),
       ).resolves.toContain("feature");
@@ -346,6 +372,7 @@ describe("workflow Extension production composition", () => {
     await withGoldenRepository("dirty-tree", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
       const baseline = await new GitRepositoryAdapter(repositoryRoot).captureSnapshot();
       const events = createEventBus();
+      installVerificationEvidence(events);
       const requests: SubagentDelegationRequest[] = [];
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
         const request = payload as SubagentDelegationRequest;
@@ -526,6 +553,7 @@ describe("workflow Extension production composition", () => {
 
     await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
       const events = createEventBus();
+      installVerificationEvidence(events);
       const requests: SubagentDelegationRequest[] = [];
       let mutated = false;
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
@@ -600,6 +628,7 @@ describe("workflow Extension production composition", () => {
 
     await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
       const events = createEventBus();
+      installVerificationEvidence(events);
       const requests: SubagentDelegationRequest[] = [];
       let deviationReported = false;
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
@@ -666,6 +695,7 @@ describe("workflow Extension production composition", () => {
 
     await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
       const events = createEventBus();
+      installVerificationEvidence(events);
       const requests: SubagentDelegationRequest[] = [];
       let amendmentReported = false;
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
@@ -742,6 +772,7 @@ describe("workflow Extension production composition", () => {
         const request = payload as SubagentDelegationRequest;
         requests.push(request);
         const verificationFailed = request.agent === "verifier" && verifierCalls++ === 0;
+        executeDelegatedVerification(request, verificationFailed ? "failed" : undefined);
         events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
           requestId: request.requestId,
           ownerRunId: request.ownerRunId,
@@ -829,6 +860,7 @@ describe("workflow Extension production composition", () => {
 
     await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
       const events = createEventBus();
+      installVerificationEvidence(events);
       const requests: SubagentDelegationRequest[] = [];
       let crashed = false;
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
@@ -909,6 +941,7 @@ describe("workflow Extension production composition", () => {
 
     await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
       const events = createEventBus();
+      installVerificationEvidence(events);
       const requests: SubagentDelegationRequest[] = [];
       let reviewerCalls = 0;
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {
@@ -982,6 +1015,7 @@ describe("workflow Extension production composition", () => {
 
     await withGoldenRepository("feature", { ".gitignore": ".pi/\n" }, async (repositoryRoot) => {
       const events = createEventBus();
+      installVerificationEvidence(events);
       const requests: SubagentDelegationRequest[] = [];
       let mutated = false;
       events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (payload) => {

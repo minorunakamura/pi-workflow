@@ -24,6 +24,7 @@ import { JsonlEventReader } from "../../src/adapters/persistence/read/jsonl-even
 import { START_WORKFLOW_COMMANDS } from "../../src/application/workflow-command-handler.js";
 import type { RunId } from "../../src/domain/primitives/ids.js";
 import { withGoldenRepository } from "../fixtures/golden-repositories.js";
+import { executeDelegatedVerification } from "../fixtures/verification-delegation.js";
 
 const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
 const PROJECT_IGNORE = ".pi/\n";
@@ -51,7 +52,7 @@ function packageSkills(): ReturnType<typeof loadSkillsFromDir>["skills"] {
 }
 
 function tools(): ToolInfo[] {
-  return [{ name: "read" }, { name: "edit" }] as unknown as ToolInfo[];
+  return [{ name: "read" }, { name: "edit" }, { name: "verification" }] as unknown as ToolInfo[];
 }
 
 function completedResult(
@@ -78,7 +79,14 @@ function completedResult(
       request.agent === "verifier"
         ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
         : [],
-    ...(request.agent === "planner" ? { plan: { write_scope: ["src"] } } : {}),
+    ...(request.agent === "planner"
+      ? {
+          plan: {
+            write_scope: ["src"],
+            verification_checks: [{ type: "test", command: "node --test", required: true }],
+          },
+        }
+      : {}),
     observations: [],
     blocked: null,
     failure: null,
@@ -91,6 +99,7 @@ function respond(
   request: SubagentDelegationRequest,
   value: Record<string, unknown>,
 ): void {
+  executeDelegatedVerification(request);
   events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
     requestId: request.requestId,
     ownerRunId: request.ownerRunId,

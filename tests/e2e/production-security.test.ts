@@ -57,7 +57,7 @@ describe("STORY-13-08 production security composition", () => {
           JSON.stringify({
             subagents: {
               agentOverrides: Object.fromEntries(
-                AGENT_IDS.map((agent) => [agent, { extensions: [PROVIDER_EXTENSION] }]),
+                AGENT_IDS.map((agent) => [agent, { subagentOnlyExtensions: [PROVIDER_EXTENSION] }]),
               ),
             },
           }),
@@ -151,6 +151,7 @@ describe("STORY-13-08 production security composition", () => {
           );
 
           expect(verifierFinal).toMatchObject({ mode: "verify-only" });
+          expect(verifierFinal?.advertisedTools).toEqual(expect.arrayContaining(["verification"]));
           expect(verifierFinal?.advertisedTools).toEqual(
             expect.not.arrayContaining(["edit", "write", "bash"]),
           );

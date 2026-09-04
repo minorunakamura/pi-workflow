@@ -113,9 +113,16 @@ function resultFor(request: SecurityRequest): Record<string, unknown> {
     plan_deviations: [],
     skill_requests: [],
     execution_checks: verifier
-      ? [{ type: "test", status: "passed", required: true, evidence: { exit_code: 0 } }]
+      ? [{ type: "test", status: "failed", required: true, evidence: { exit_code: 1 } }]
       : [],
-    ...(planner ? { plan: { write_scope: ["src"] } } : {}),
+    ...(planner
+      ? {
+          plan: {
+            write_scope: ["src"],
+            verification_checks: [{ type: "test", command: "node --test", required: true }],
+          },
+        }
+      : {}),
     observations: [],
     blocked: null,
     failure: null,
@@ -165,6 +172,9 @@ function response(
   }
   if (request.identity.agentId === "verifier" && state.callCount === 2) {
     return fauxAssistantMessage(fauxToolCall("bash", { command: `printf denied >> ${target}` }));
+  }
+  if (request.identity.agentId === "verifier" && state.callCount === 3) {
+    return fauxAssistantMessage(fauxToolCall("verification", { command: "node --test" }));
   }
   return fauxAssistantMessage(fauxToolCall("structured_output", { value: resultFor(request) }));
 }

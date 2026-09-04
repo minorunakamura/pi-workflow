@@ -82,6 +82,35 @@ describe("Agent permission policy", () => {
     },
   );
 
+  it("gives Verifier verification execution without repository-write authority", () => {
+    expect(
+      validateAgentExecutionRequest(
+        request("verifier", {
+          mode: "verify-only",
+          filesystem: ["repository"],
+          tools: {
+            resolved: ["read", "verification"],
+            policy: { allow: ["read", "verification"] },
+          },
+        }),
+      ).identity.agentId,
+    ).toBe("verifier");
+    expectDenied(
+      request("verifier", {
+        mode: "verify-only",
+        tools: { resolved: ["bash"], policy: { allow: ["bash"] } },
+      }),
+      "WRITE_DENIED",
+    );
+    expectDenied(
+      request("verifier", {
+        mode: "verify-only",
+        tools: { resolved: ["edit"], policy: { allow: ["edit"] } },
+      }),
+      "WRITE_DENIED",
+    );
+  });
+
   it("keeps the Worker write scope relative and denies Git writes", () => {
     expect(
       validateAgentExecutionRequest(

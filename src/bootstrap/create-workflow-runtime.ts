@@ -5,6 +5,7 @@ import type {
   ExtensionUIContext,
   Skill as PiSkill,
 } from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
 import { stringify as stringifyYaml } from "yaml";
 import { resolve as resolvePath } from "node:path";
 import { FileArtifactStore } from "../adapters/persistence/write/file-artifact-store.js";
@@ -19,6 +20,10 @@ import {
   PiSubagentsAdapter,
   type PiSubagentsAdapterOptions,
 } from "../adapters/pi/pi-subagents-adapter.js";
+import {
+  createVerificationCommandPolicy,
+  verificationPolicyValue,
+} from "../adapters/pi/verification-command-tool.js";
 import { createPiPackageSkillCatalog } from "../adapters/pi/skill-catalog.js";
 import { AGENT_DEFINITIONS, type AgentDefinition } from "../agents/definitions.js";
 import { SkillCatalog } from "../agents/skill-catalog.js";
@@ -130,6 +135,7 @@ const TOOL_CAPABILITIES: Readonly<Record<string, readonly string[]>> = {
   write: ["repository-write"],
   bash: ["shell"],
   powershell: ["shell"],
+  verification: ["verification"],
 };
 
 type RuntimeUseCases = Readonly<{
@@ -157,6 +163,7 @@ type ProductionExecution = Readonly<{
   executionResolver: ExecutionResolver;
   skillCatalog: SkillCatalog;
   modelCandidates: readonly ModelReference[];
+  repositoryRoot: string;
   toolCatalog: ToolCatalog;
   toolNames: readonly string[];
 }>;
@@ -265,8 +272,20 @@ function createPiToolCatalog(toolNames: readonly string[]): ToolCatalog {
       const allowedModes =
         capability === "repository-write" || capability === "shell"
           ? (["write"] as const)
-          : (["read-only", "write", "verify-only"] as const);
-      definitions.set(capability, { name, capabilities, allowedModes });
+          : capability === "verification"
+            ? (["verify-only"] as const)
+            : (["read-only", "write", "verify-only"] as const);
+      definitions.set(capability, {
+        name,
+        capabilities,
+        allowedModes,
+        ...(capability === "verification"
+          ? {
+              requiredPermissions: [{ scope: "filesystem" as const, value: "repository" }],
+              minimumAuthority: "D0",
+            }
+          : {}),
+      });
     }
   }
 
@@ -300,7 +319,42 @@ function productionPrompt(request: AgentExecutionRequestV1, skillCatalog: SkillC
   }).content;
 }
 
+function isWorkflowRuntimePath(path: string): boolean {
+  return path === ".pi" || path.startsWith(".pi/");
+}
+
+function sourceRepositorySnapshot(snapshot: RepositorySnapshot): RepositorySnapshot {
+  const entries = snapshot.status.entries.filter(({ path }) => !isWorkflowRuntimePath(path));
+  const fingerprints = Object.fromEntries(
+    Object.entries(snapshot.fingerprints).filter(([path]) => !isWorkflowRuntimePath(path)),
+  );
+  const hash = createHash("sha256");
+  for (const [path, fingerprint] of Object.entries(fingerprints).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    hash
+      .update(path)
+      .update("\u0000")
+      .update(fingerprint ?? "<missing>")
+      .update("\u0000");
+  }
+  return {
+    ...snapshot,
+    status: {
+      dirty: entries.length > 0,
+      changed: entries.map(({ path }) => path),
+      untracked: entries
+        .filter(({ index, worktree }) => index === "?" && worktree === "?")
+        .map(({ path }) => path),
+      entries,
+    },
+    fingerprints,
+    fingerprint: hash.digest("hex"),
+  };
+}
+
 function repositorySnapshotValue(snapshot: RepositorySnapshot): Record<string, unknown> {
+  snapshot = sourceRepositorySnapshot(snapshot);
   const status = {
     dirty: snapshot.status.dirty,
     changed: [...snapshot.status.changed],
@@ -509,6 +563,12 @@ function plannedWriteScope(result: StepResultV1): readonly string[] | undefined 
     : writeScopePaths(result.plan.write_scope as unknown as RepositoryScope);
 }
 
+function planVerificationChecks(state: WorkflowState): readonly JsonValue[] {
+  const plan = state.run.current_plan;
+  if (!isRecord(plan) || !Array.isArray(plan.verification_checks)) return [];
+  return plan.verification_checks;
+}
+
 const PLAN_WRITE_SCOPE_BLOCK_CLASSIFICATION = "recovery-required" as const;
 
 function planWriteScopeBlock(stepId: StepId, detail?: string): JsonObject {
@@ -545,9 +605,30 @@ async function buildProductionRequest(
   if (definition.id === "worker" && workerScope.length === 0) {
     throw new Error("Worker dispatch requires a non-empty approved Plan Write Scope");
   }
+  const executionId = idAllocator.issueExecutionId() as ExecutionId;
+  const verificationPolicy =
+    definition.id === "verifier"
+      ? createVerificationCommandPolicy({
+          runId: input.state.run.run_id,
+          executionId,
+          repositoryRoot: execution.repositoryRoot,
+          timeoutMs: COMMAND_TIMEOUT_MS,
+          evidencePath: resolvePath(
+            execution.repositoryRoot,
+            ".pi",
+            "runs",
+            input.state.run.run_id,
+            "runtime",
+            "executions",
+            `${executionId}-verification.json`,
+          ),
+          checks: planVerificationChecks(input.state),
+        })
+      : undefined;
   const requestedCapabilities = [
     "repository-read",
     ...(definition.id === "worker" && workerScope.length > 0 ? ["repository-write"] : []),
+    ...(definition.id === "verifier" ? ["verification"] : []),
   ];
   const missingCapabilities = requestedCapabilities.filter(
     (capability) => execution.toolCatalog.resolve(capability) === undefined,
@@ -561,7 +642,7 @@ async function buildProductionRequest(
     identity: {
       runId: input.state.run.run_id,
       stepId: input.step.id,
-      executionId: idAllocator.issueExecutionId() as ExecutionId,
+      executionId,
       agentId: definition.id,
       agentVersion: definition.version,
     },
@@ -588,7 +669,13 @@ async function buildProductionRequest(
       repositoryTargets: workerScope,
     },
     skills: { required: skillReferences, optional: [] },
-    tools: { resolved: [], policy: {} },
+    tools: {
+      resolved: [],
+      policy:
+        verificationPolicy === undefined
+          ? {}
+          : { verification: verificationPolicyValue(verificationPolicy) },
+    },
     model: {
       requested: execution.modelCandidates[0]!,
       actual: null,
@@ -615,7 +702,12 @@ async function buildProductionRequest(
     tools: {
       ...resolved.tools,
       resolved: allowedToolNames,
-      policy: { allow: allowedToolNames },
+      policy: {
+        allow: allowedToolNames,
+        ...(verificationPolicy === undefined
+          ? {}
+          : { verification: verificationPolicyValue(verificationPolicy) }),
+      },
     },
   };
 }
@@ -1582,7 +1674,7 @@ async function finalizeProductionStep(
     reviewerFinalizer: ReviewerFinalizer;
   }>,
 ): Promise<WorkflowState> {
-  const after = await input.repository.captureSnapshot();
+  const after = sourceRepositorySnapshot(await input.repository.captureSnapshot());
   const diff = await input.repository.diff(input.execution.before, after);
   let state = applyProductionCandidates(input.state, input.normalized.candidates);
 
@@ -1709,6 +1801,7 @@ async function createProductionUseCases(
           }),
           skillCatalog: createPiSkillCatalog(currentContext),
           modelCandidates: models,
+          repositoryRoot,
           toolCatalog,
           toolNames,
         };
@@ -1760,7 +1853,7 @@ async function createProductionUseCases(
   });
   const repositoryFreshness = async (state: WorkflowState): Promise<WorkflowState> => {
     const before = persistedRepositorySnapshot(state);
-    const after = await repository.captureSnapshot();
+    const after = sourceRepositorySnapshot(await repository.captureSnapshot());
     const diff = await driftRepository.diff(before, after);
     if (
       diff.changedFiles.length > 0 ||
@@ -1859,7 +1952,7 @@ async function createProductionUseCases(
           artifactReader,
           idAllocator,
         );
-        const before = await repository.captureSnapshot();
+        const before = sourceRepositorySnapshot(await repository.captureSnapshot());
         executionSnapshots.set(request.identity.executionId, {
           request,
           before,
