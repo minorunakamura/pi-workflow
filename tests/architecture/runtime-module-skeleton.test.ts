@@ -48,6 +48,9 @@ describe("runtime module skeleton", () => {
     const manifest: unknown = JSON.parse(
       readFileSync(resolve(projectRoot, "package.json"), "utf8"),
     );
+    const settings = JSON.parse(
+      readFileSync(resolve(projectRoot, ".pi/settings.json"), "utf8"),
+    ) as { packages?: unknown[] };
 
     expect(manifest).toEqual(
       expect.objectContaining({
@@ -59,8 +62,14 @@ describe("runtime module skeleton", () => {
           skills: ["./skills"],
         }),
         bundledDependencies: expect.arrayContaining(["pi-subagents"]),
+        dependencies: expect.objectContaining({ "pi-subagents": ">=0.49.0 <0.65.0" }),
       }),
     );
+    expect(settings.packages).toContainEqual({
+      source: "npm:pi-subagents",
+      autoload: false,
+      extensions: ["!index.ts"],
+    });
     expect(existsSync(resolve(projectRoot, "src/extensions/workflow.ts"))).toBe(true);
   });
 

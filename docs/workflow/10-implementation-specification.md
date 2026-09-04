@@ -68,19 +68,26 @@ A `.pi/` directory MAY appear while developing the package for local Pi project 
 
 ## Package Manifest
 
-The package MUST declare the resources that Pi loads from the package root. The recommended manifest is:
+The package MUST declare the resources that Pi loads from the package root. Phase 1 uses the bundled `pi-subagents` runtime as the canonical delegation bridge owner:
 
 ```json
 {
   "keywords": ["pi-package"],
   "pi": {
-    "extensions": ["./src/extensions/workflow.ts"],
+    "extensions": [
+      "./src/extensions/workflow.ts",
+      "./node_modules/pi-subagents/index.ts"
+    ],
     "skills": ["./skills"]
-  }
+  },
+  "dependencies": {
+    "pi-subagents": ">=0.49.0 <0.65.0"
+  },
+  "bundledDependencies": ["pi-subagents"]
 }
 ```
 
-The resource paths are package-root-relative. Using one explicit Extension entry point prevents helper modules under `src/extensions/` from accidentally becoming independent Pi Extension entry points.
+The resource paths are package-root-relative. Using one explicit Extension entry point prevents helper modules under `src/extensions/` from accidentally becoming independent Pi Extension entry points. The nested `pi-subagents` entry is intentional: Pi does not auto-load an npm dependency's `pi.extensions` manifest, and a clean consumer therefore needs the bundled owner explicitly declared.
 
 - **MUST:** `src/extensions/workflow.ts` remain a thin Pi integration layer that registers `/wf-*` commands and delegates to `src/bootstrap/` / Application use cases.
 - **MUST NOT:** Multi-Agent orchestration logic live in the Extension registration file.
@@ -96,6 +103,30 @@ The resource paths are package-root-relative. Using one explicit Extension entry
 - **MUST:** Development-only tooling such as TypeScript, linter, formatter, and test framework remain in `devDependencies`.
 - **SHOULD:** `packageManager` pin the pnpm version used to develop the repository.
 - **MUST:** Any dependency on another Pi Package follow Pi Package dependency/bundling rules; the Workflow Runtime MUST NOT assume separately installed Pi Packages share a module root.
+- **MUST:** `pi-subagents` remains a bundled runtime dependency for clean consumers; it MUST NOT be changed to a peer-only dependency unless Pi gains a supported dependency-extension autoload contract.
+- **MUST:** The supported Phase 1 `pi-subagents` range is `>=0.49.0 <0.65.0`. `0.65.x` changes child execution to native in-process Pi sessions and requires a separate security/runtime revalidation before adoption.
+
+### Single-owner PiSubagents topology
+
+The ownership unit is one Pi process. In a workflow-enabled project, the bundled `node_modules/pi-subagents/index.ts` is the canonical active bridge. A separately installed `pi-subagents` package may remain present for its Skills and Agent resources, but its Extension entry MUST be disabled at the package-resource layer:
+
+```json
+{
+  "packages": [
+    {
+      "source": "npm:pi-subagents",
+      "autoload": false,
+      "extensions": ["!index.ts"]
+    }
+  ]
+}
+```
+
+`autoload: false` makes the project entry a delta over an existing global package, while `!index.ts` disables that package's declared Extension without removing its Skills or package-owned Agent definitions. A top-level `"extensions": []` only filters local extension paths; it does not filter an installed package. For a project-local path package, use an object with that exact `source` path and `extensions: ["!index.ts"]`, but omit `autoload: false`; normal package filtering then keeps unspecified Skills and Prompts enabled.
+
+This repository's `.pi/settings.json` carries the override for local development and the live Canary. An installed consumer with an existing global `pi-subagents` package must carry the equivalent project-local override; the current Pi package manifest cannot mutate consumer settings or conditionally disable another package. This package filter covers package entries (`npm:`, `git:`, or an exact local package source), not a manually configured top-level `extensions` path; remove or explicitly exclude such a direct path separately. An unfiltered global/project/nested combination is unsupported because Pi exposes no public bridge-owner discovery or deregistration API. Listener-count scans, filesystem scans, retry, and response deduplication are not substitutes for this setting.
+
+The `pi-workflow` Skills and `pi.subagents.agents` remain package-owned. Disabling only the external Extension leaves those resources available while ensuring that the Adapter's event constants and capability ceiling reach the bundled owner. The Adapter imports the bundled package instance in packed runtime; `registerSubagentCapabilityCeiling()` additionally uses the process-global `Symbol.for("pi-subagents.capability-ceiling.v1")` registry.
 
 ### Local Package Development
 
