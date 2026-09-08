@@ -1,0 +1,51 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+const coreRoot = `${repoRoot}/src/core`;
+
+function sourceFiles(root: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${root}/${entry.name}`;
+    return entry.isDirectory()
+      ? sourceFiles(path)
+      : path.endsWith(".ts")
+        ? [path]
+        : [];
+  });
+}
+
+describe("architecture contract", () => {
+  it("keeps core independent from Pi and adapter layers", () => {
+    const forbiddenImports = [
+      "@earendil-works/pi-coding-agent",
+      "../commands",
+      "../../commands",
+      "../tools",
+      "../../tools",
+      "../runtime",
+      "../../runtime",
+    ];
+
+    for (const file of sourceFiles(coreRoot)) {
+      const content = readFileSync(file, "utf8");
+      for (const forbiddenImport of forbiddenImports) {
+        expect(content, file).not.toContain(forbiddenImport);
+      }
+    }
+  });
+
+  it("keeps the extension entry point registration-only", () => {
+    const entry = readFileSync(`${repoRoot}/src/index.ts`, "utf8");
+
+    expect(entry).toContain("registerTools");
+    expect(entry).not.toContain("subagent");
+    expect(entry).not.toContain("mission");
+    expect(entry).not.toContain("workflowScript");
+  });
+
+  it("does not declare custom Agents", () => {
+    expect(existsSync(`${repoRoot}/agents`)).toBe(false);
+  });
+});
