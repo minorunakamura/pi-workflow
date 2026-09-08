@@ -20,8 +20,9 @@ const result = await runs.run("discovery", {
   context: "fresh",
   task,
   outputSchema: input.outputSchema,
-  output: input.outputPath,
-  outputMode: "file-only",
+  ...(input.outputPath === undefined
+    ? {}
+    : { output: input.outputPath, outputMode: "file-only" }),
 });
 
 if (!result.ok) throw new Error(result.error ?? "Discovery failed.");

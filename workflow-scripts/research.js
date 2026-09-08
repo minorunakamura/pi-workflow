@@ -19,8 +19,9 @@ const result = await runs.run("research", {
   agent: "pi-ketch.researcher",
   context: "fresh",
   task,
-  output: input.outputPath,
-  outputMode: "file-only",
+  ...(input.outputPath === undefined
+    ? {}
+    : { output: input.outputPath, outputMode: "file-only" }),
 });
 
 if (!result.ok) throw new Error(result.error ?? "External research failed.");

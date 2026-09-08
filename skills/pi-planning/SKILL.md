@@ -12,6 +12,10 @@ provided schema. Do not edit repository files and do not return a prose-only
 plan. Use the supplied discovery/research references as evidence; read the
 referenced artifacts when necessary.
 
+When `outputSchema` is provided, do not finish with prose. Always use the
+runtime `structured_output` tool to return the final schema-valid result; the
+structured result is authoritative even if the preceding reasoning is prose.
+
 The decision must make all of these explicit:
 
 - request summary

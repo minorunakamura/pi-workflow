@@ -18,8 +18,6 @@ const result = await runs.run("planning", {
   skill: "pi-planning",
   task,
   outputSchema: input.outputSchema,
-  output: input.outputPath,
-  outputMode: "file-only",
 });
 
 if (!result.ok) throw new Error(result.error ?? "Planning failed.");
