@@ -54,15 +54,18 @@ describe("pi_workflow_prepare_phase", () => {
     ).rejects.toThrow();
   });
 
-  it("registers one foundation tool", () => {
+  it("registers the foundation tools", () => {
     const registered: unknown[] = [];
     registerTools({
       registerTool: (tool: unknown) => registered.push(tool),
     } as never);
 
-    expect(registered).toHaveLength(1);
+    expect(registered).toHaveLength(2);
     expect((registered[0] as { name: string }).name).toBe(
       "pi_workflow_prepare_phase",
+    );
+    expect((registered[1] as { name: string }).name).toBe(
+      "pi_workflow_plan_review",
     );
   });
 });
