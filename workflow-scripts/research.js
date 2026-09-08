@@ -1,5 +1,7 @@
 const input = __PI_WORKFLOW_INPUT__;
 
+await state.set("phase", "research");
+
 let questionText = "";
 if (input.questions?.length) {
   questionText = "Questions:\n";

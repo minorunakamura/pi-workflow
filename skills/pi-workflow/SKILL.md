@@ -22,22 +22,33 @@ Mission as success in this flow.
 For each `/wf-*` kickoff, perform these checks in order:
 
 1. Call `subagent({ action: "mission.list" })` for the current project.
-2. If any non-terminal Mission is active, waiting, paused, or needs a decision,
-   stop. Do not resume, cancel, close, or create another Mission. Report its
-   Mission ID, title, and status.
-3. Call `subagent({ action: "list", capabilities: true })`. Require executable
+2. The official `pi-subagents` v0.65.1 Mission statuses are `planned`, `active`,
+   `waiting`, `needs_decision`, `completed`, `failed`, and `cancelled`.
+   Block a new workflow when a Mission is `planned`, `active`, `waiting`, or
+   `needs_decision`. Report its Mission ID, title, and status; do not resume,
+   cancel, close, or create another Mission.
+3. `completed` on a phase workflow is not proof that pi-workflow is complete.
+   The native top-level phase run can make the Mission terminal before the Main
+   Control Plane advances to the next phase. If recovery sees a pi-workflow
+   Mission in that condition, call `mission.show`, inspect its native linked
+   run/phase metadata, and continue or recover with the same Mission ID. Do not
+   create a replacement Mission merely because a phase run says `completed`.
+   Only the final Main Control Plane completion may close the Mission.
+4. `paused` is not a Mission status in this contract; it is a native goal status
+   value. Do not use or invent `status: "paused"` for a Mission.
+5. Call `subagent({ action: "list", capabilities: true })`. Require executable
    `scout`, `reviewer`, and `worker` rows. For this Planning Flow, `worker` is
    checked at startup even though it is not started yet. A capability-ceiling
    denial is missing capability. Do not silently switch agents or execution
    modes.
-4. Check the loaded skill inventory for `pi-workflow`, `pi-planning`,
+6. Check the loaded skill inventory for `pi-workflow`, `pi-planning`,
    `pi-verification`, and `ponytail-review`. Missing own Skills or the required
    Ponytail review capability is a start blocker.
-5. Run `git status --porcelain` with the Main Session's minimal safety check.
+7. Run `git status --porcelain` with the Main Session's minimal safety check.
    A command error or any output is a blocker. Do not create a Mission for a
    dirty tree.
-6. Create exactly one explicit native Mission with
-   `subagent({ action: "mission.create", mission: { title, objective } })`.
+8. Create exactly one explicit native Mission with
+   `subagent({ action: "mission.create", missionStatus: "active", mission: { title, objective } })`.
    Do not set `goal: true`. Keep the returned Mission ID and pass it explicitly
    to every later phase workflow.
 
@@ -55,6 +66,35 @@ project `cwd`.
 The phase workflow is sequential because its structured result is needed by the
 next phase. Use a blocking native workflow invocation when the next decision is
 needed immediately; do not invent a parallel scheduler.
+
+### Native Mission lifecycle between phases
+
+A phase workflow's top-level `completed` result is only a phase-run outcome.
+It must never be treated as pi-workflow completion. Immediately after every
+successful phase workflow returns, before branching or starting the next phase,
+the Main Control Plane must call:
+
+```js
+subagent({
+  action: "mission.update",
+  missionId,
+  missionUpdate: { status: "active" },
+});
+```
+
+If the next action is a Human input or approval gate, use the native
+`mission.update` with `missionUpdate: { status: "waiting" }` while waiting.
+After the Human result, restore `active` before continuing. `waiting` is a
+Mission status from the v0.65.1 contract; do not substitute an invented status.
+If a machine-invalid phase result stops the flow, use native
+`missionUpdate: { status: "needs_decision" }` when owner intervention is
+required and report the explicit failure. Do not leave the Mission's transient
+phase `completed` status as if the whole workflow succeeded.
+
+This normalization is required after Discovery, optional Research, and
+Planning, including after a Plan rejection before re-planning. A Human Plan
+rejection is a separate re-planning control and does not consume the single
+automatic Planning correction.
 
 ### Discovery
 
@@ -121,7 +161,8 @@ executable. Then prepare `phase: "research"` and run the fresh
 `pi-ketch.researcher`. Pass the bounded questions and a durable output path.
 The researcher collects evidence only and never owns product, architecture,
 policy, or risk-acceptance decisions. If research is not required, do not start
-it.
+it. After a Research workflow returns, normalize the Mission to native `active`
+before continuing.
 
 ### Main-only Human clarification
 
@@ -141,13 +182,25 @@ these fields and relationships:
 
 - unique acceptance-criterion, verification, WorkUnit, and decision IDs
 - every referenced ID exists
+- dependency-free WorkUnits use `dependsOn: []`
 - non-empty `finalVerificationIds`
 - valid WorkUnit write scopes
 - no dependencies between parallel lane WorkUnits
 - no unresolved decisions for Plan Review
 
+The native `outputSchema` validates schema shape. Immediately after receiving
+that structured result, also perform semantic cross-reference validation. If
+semantic validation fails, return the exact validation errors to the
+Planning reviewer and run one automatic correction at most. Revalidate the
+corrected result with both gates. If it is still invalid, stop with an explicit
+`planning-invalid` failure, update the Mission to `needs_decision` when owner
+intervention is required, and do not call Plan Review. Never add a generic retry
+framework or a second automatic correction.
+
 Do not parse reviewer prose as a plan. `pi_workflow_plan_review` performs the
-canonical semantic validation again and is the approval boundary.
+canonical schema and semantic validation again and is the approval boundary.
+After a valid Planning workflow returns, normalize the Mission to native
+`active` before entering the Human Plan Gate.
 
 ## Human Plan Gate
 
@@ -163,6 +216,8 @@ make `version` exactly `1`. JSON Schema cannot express all reference and
 uniqueness rules; `pi_workflow_plan_review` is the authoritative semantic
 validator.
 
+Before waiting for Plan Review, set the native Mission to `waiting` with
+`mission.update`; this is a Human approval wait, not a terminal workflow state.
 Call `pi_workflow_plan_review` with `missionId`, the complete
 `planningDecision`, and a positive `round`. The tool deterministically renders
 `plan.md` and writes it under:
@@ -177,11 +232,17 @@ It then uses only Plannotator's shared event API:
 
 Only an explicit boolean `approved: true` is approval. `false`, unavailable,
 error, cancel, close, timeout, missing, malformed, or mismatched results are
-not approval. A rejection returns its feedback to a new Planning round; retain
-the current Mission and do not create a second Mission. Keep the re-plan loop
-bounded: allow at most three total Plan Review rounds, then stop and report the
-last feedback for a Main/Human decision. Never auto-approve or fall back to
-`ask_user_question`.
+not approval. A rejection returns its feedback to a new Planning round; first
+restore the current Mission to native `active`, retain the current Mission, and
+do not create a second Mission. Human rejection feedback is not an automatic
+machine-invalid correction and does not consume that correction count. Keep the
+re-plan loop bounded: allow at most three total Plan Review rounds, then stop
+and report the last feedback for a Main/Human decision. Never auto-approve or
+fall back to `ask_user_question`.
+
+After explicit Plan approval, restore the Mission to native `active` and report
+the approved plan. Step 2 must not call `mission.close`; implementation,
+verification, review, and final Human Code Review remain outstanding.
 
 If a pending review may have crossed a restart or event race, query
 `review-status` using its `reviewId` before creating another review. A completed
@@ -193,4 +254,6 @@ pending browser review merely because the event was missed.
 Report the approved `planPath`, `reviewId`, Mission ID, and any feedback. Do not
 start implementation or close the Mission as terminal success; those belong to
 later Steps. If a phase, native child, event bridge, or capability fails, retain
-the exact failure and stop under the same protocol.
+the exact failure and stop under the same protocol. A phase-run terminal status
+must not be reported as pi-workflow completion; only the final successful flow
+may use native `mission.close`.

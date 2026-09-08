@@ -42,10 +42,62 @@ const validDecision: PlanningDecisionV1 = {
 };
 
 describe("validatePlanningDecision", () => {
-  it("accepts a complete PlanningDecisionV1", () => {
+  it("accepts a dependency-free WorkUnit with dependsOn: []", () => {
     const result = validatePlanningDecision(validDecision);
 
     expect(result).toEqual({ ok: true, value: validDecision, errors: [] });
+  });
+
+  it("accepts a dependency that references a defined WorkUnit ID", () => {
+    const dependent = structuredClone(validDecision);
+    dependent.implementation.workUnits.push({
+      ...structuredClone(validDecision.implementation.workUnits[0]),
+      id: "search-index",
+      title: "Add the search index",
+      objective: "Make search lookups fast.",
+      dependsOn: ["search-api"],
+    });
+
+    expect(validatePlanningDecision(dependent)).toEqual({
+      ok: true,
+      value: dependent,
+      errors: [],
+    });
+  });
+
+  it.each(["なし", "none", "N/A"])(
+    "rejects explanatory dependency text: %s",
+    (dependency) => {
+      const invalid = structuredClone(validDecision);
+      invalid.implementation.workUnits[0].dependsOn = [dependency];
+
+      const result = validatePlanningDecision(invalid);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors).toContainEqual({
+          path: "/implementation/workUnits/0/dependsOn/0",
+          message:
+            "work unit search-api references unknown dependency " + dependency,
+        });
+      }
+    },
+  );
+
+  it("rejects an unknown WorkUnit dependency ID", () => {
+    const invalid = structuredClone(validDecision);
+    invalid.implementation.workUnits[0].dependsOn = ["missing-work-unit"];
+
+    const result = validatePlanningDecision(invalid);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContainEqual({
+        path: "/implementation/workUnits/0/dependsOn/0",
+        message:
+          "work unit search-api references unknown dependency missing-work-unit",
+      });
+    }
   });
 
   it("rejects duplicate ids and unknown references", () => {

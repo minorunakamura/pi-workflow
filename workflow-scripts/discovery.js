@@ -1,5 +1,7 @@
 const input = __PI_WORKFLOW_INPUT__;
 
+await state.set("phase", "discovery");
+
 const task = [
   "Inspect the current repository for the requested change.",
   `Request:\n${input.task}`,

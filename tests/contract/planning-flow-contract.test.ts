@@ -37,9 +37,19 @@ describe("Planning Flow contract", () => {
     expect(read("workflow-scripts/planning.js")).toContain(
       'skill: "pi-planning"',
     );
+    expect(read("workflow-scripts/planning.js")).toContain(
+      "outputSchema: input.outputSchema",
+    );
+    expect(read("workflow-scripts/planning.js")).toContain(
+      "planning-correction",
+    );
+    expect(read("workflow-scripts/planning.js")).toContain("planning-invalid");
   });
 
   it("persists phase evidence through native Mission state", () => {
+    expect(read("workflow-scripts/discovery.js")).toContain(
+      'await state.set("phase", "discovery")',
+    );
     expect(read("workflow-scripts/discovery.js")).toContain(
       'await state.set("discovery", discovery)',
     );
@@ -47,11 +57,30 @@ describe("Planning Flow contract", () => {
       "result: result.structuredOutput",
     );
     expect(read("workflow-scripts/research.js")).toContain(
+      'await state.set("phase", "research")',
+    );
+    expect(read("workflow-scripts/research.js")).toContain(
       'await state.set("research", research)',
+    );
+    expect(read("workflow-scripts/planning.js")).toContain(
+      'await state.set("phase", "planning")',
     );
     expect(read("workflow-scripts/planning.js")).toContain(
       'await state.set("planningDecision", planningDecision)',
     );
+    expect(read("workflow-scripts/planning.js")).toContain(
+      'await state.set("phase", "plan-review")',
+    );
+  });
+
+  it("documents canonical dependency references for the Planning reviewer", () => {
+    const skill = read("skills/pi-planning/SKILL.md");
+
+    expect(skill).toContain(
+      "A WorkUnit with no dependency must use `dependsOn: []`.",
+    );
+    expect(skill).toContain("`none`, `なし`, or `N/A`");
+    expect(skill).toContain("Every ID-reference field may contain only an ID");
   });
 
   it("does not add custom Agents", () => {

@@ -37,5 +37,21 @@ architecture, policy, or risk-acceptance decisions. If a material decision is
 unresolved, record it in `unresolvedDecisions`; the Main Session will stop
 before Plan Review rather than guessing.
 
+Dependency reference rules are strict:
+
+- A WorkUnit with no dependency must use `dependsOn: []`.
+- Never use explanatory strings such as `none`, `なし`, or `N/A` in `dependsOn`
+  or any other ID-reference field.
+- Every ID-reference field may contain only an ID defined in the same
+  `PlanningDecisionV1` (WorkUnit IDs, acceptance-criterion IDs, and
+  verification IDs).
+
+Before returning the structured result, check both the schema shape and all
+cross-references. A semantic validation error from Main is correction feedback:
+fix it in the Planning reviewer result, not in prose. The Main Session may ask
+for at most one automatic machine-invalid correction for this Planning result;
+a Human Plan rejection starts a separate Planning round and does not consume
+that correction.
+
 Keep the plan bounded to the request and do not anticipate implementation,
 verification, review, or lane behavior that the approved scope does not need.
