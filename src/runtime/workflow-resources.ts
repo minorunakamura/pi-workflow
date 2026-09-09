@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import {
@@ -5,11 +7,28 @@ import {
   WORKFLOW_RESOURCE_OUTPUT_POLICIES,
 } from "../core/phases/definitions";
 import {
+  MAX_RESOURCE_ARGS_BYTES,
   ResourceArgsSchemas,
+  type DiscoveryArgsV1,
   type ResourceArgsPhase,
   validateResourceArgs,
 } from "../core/phases/args";
 import { formatValidationIssues } from "../core/validation";
+import {
+  DiscoveryMetadataSchema,
+  MAX_DISCOVERY_METADATA_BYTES,
+  MAX_DISCOVERY_METADATA_ITEMS,
+  MAX_HUMAN_INPUT_ENTRIES,
+  MAX_HUMAN_INPUT_VALUE_BYTES,
+  MAX_IDENTIFIER_BYTES,
+  MAX_MISSION_STATE_BYTES,
+  MAX_REGULAR_TEXT_BYTES,
+  MAX_REFERENCE_BYTES,
+  MAX_REQUEST_BYTES,
+  MISSION_STATE_KEYS,
+  MissionStateSchema,
+} from "../core/state/contracts";
+import { MAX_JSON_DEPTH } from "../core/validation";
 import {
   registerWorkflowResource,
   type RegisterWorkflowResourceInput,
@@ -33,6 +52,46 @@ export type WorkflowResourceRegistrar = (
 ) => WorkflowResourceRegistration;
 
 const RESOURCE_VERSION = 1;
+const DISCOVERY_RESOURCE_MARKER = "resource";
+const DISCOVERY_RESOURCE_START = "/* pi-workflow: discovery-resource:start */";
+const DISCOVERY_RESOURCE_END = "/* pi-workflow: discovery-resource:end */";
+
+function discoveryWorkflowTemplate(): string {
+  const path = fileURLToPath(
+    new URL("../../workflow-scripts/discovery.js", import.meta.url),
+  );
+  const source = readFileSync(path, "utf8").replaceAll("\r\n", "\n");
+  const start = source.indexOf(DISCOVERY_RESOURCE_START);
+  const end = source.indexOf(DISCOVERY_RESOURCE_END);
+  if (start < 0 || end < start) {
+    throw new Error("Discovery resource script markers are invalid.");
+  }
+  return source.slice(start + DISCOVERY_RESOURCE_START.length, end);
+}
+
+export function buildDiscoveryWorkflowScript(args: DiscoveryArgsV1): string {
+  const input = {
+    [DISCOVERY_RESOURCE_MARKER]: "pi-workflow.discovery",
+    ...args,
+    discoveryMetadataSchema: DiscoveryMetadataSchema,
+    missionStateSchema: MissionStateSchema,
+    stateKeys: MISSION_STATE_KEYS,
+    discoveryBounds: {
+      stateBytes: MAX_MISSION_STATE_BYTES,
+      referenceBytes: MAX_REFERENCE_BYTES,
+      identifierBytes: MAX_IDENTIFIER_BYTES,
+      requestBytes: MAX_REQUEST_BYTES,
+      textBytes: MAX_REGULAR_TEXT_BYTES,
+      humanInputs: MAX_HUMAN_INPUT_ENTRIES,
+      humanValueBytes: MAX_HUMAN_INPUT_VALUE_BYTES,
+      metadataBytes: MAX_DISCOVERY_METADATA_BYTES,
+      metadataItems: MAX_DISCOVERY_METADATA_ITEMS,
+      jsonDepth: MAX_JSON_DEPTH,
+      resultBytes: MAX_RESOURCE_ARGS_BYTES,
+    },
+  };
+  return `const input = ${JSON.stringify(input)};\n${discoveryWorkflowTemplate()}`;
+}
 
 export const WORKFLOW_RESOURCE_CONTRACTS = {
   "pi-workflow.discovery": {
@@ -87,6 +146,20 @@ export const WORKFLOW_RESOURCE_CONTRACTS = {
   }
 >;
 
+function resolveDiscovery(
+  args: Readonly<Record<string, unknown>>,
+): ReturnType<WorkflowResourceDefinition["resolve"]> {
+  const validation = validateResourceArgs("discovery", args);
+  if (!validation.ok) {
+    return {
+      error: `Invalid args for 'pi-workflow.discovery': ${formatValidationIssues(validation.errors)}`,
+    };
+  }
+  return {
+    script: buildDiscoveryWorkflowScript(validation.value as DiscoveryArgsV1),
+  };
+}
+
 function notMigrated(
   name: WorkflowResourceName,
 ): WorkflowResourceDefinition["resolve"] {
@@ -108,7 +181,8 @@ export const WORKFLOW_RESOURCE_DEFINITIONS: readonly WorkflowResourceDefinition[
   WORKFLOW_RESOURCE_NAMES.map((name) => ({
     name,
     version: RESOURCE_VERSION,
-    resolve: notMigrated(name),
+    resolve:
+      name === "pi-workflow.discovery" ? resolveDiscovery : notMigrated(name),
   }));
 
 function disposeAll(

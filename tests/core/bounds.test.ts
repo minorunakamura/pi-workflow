@@ -19,9 +19,12 @@ import {
   type ReviewDecisionV1,
 } from "../../src/core/review/review-decision-schema";
 import {
+  MAX_DISCOVERY_METADATA_ITEMS,
   MAX_IMPLEMENTATION_LANE_RESULTS,
   MAX_MISSION_STATE_BYTES,
   MAX_VERIFICATION_FIX_RUNS,
+  validateDiscoveryMetadata,
+  type DiscoveryMetadataV1,
   validateMissionState,
 } from "../../src/core/state/contracts";
 import { MAX_REFERENCE_BYTES } from "../../src/core/state/references";
@@ -423,6 +426,46 @@ function maximumState(lastFixSummaryLength: number): unknown {
     },
   };
 }
+
+describe("DiscoveryMetadataV1 bounds", () => {
+  const metadata: DiscoveryMetadataV1 = {
+    version: 1 as const,
+    status: "ready" as const,
+    externalResearchRequired: true,
+    humanClarificationRequired: false,
+    uncertainties: [],
+    researchQuestions: [],
+  };
+
+  it("rejects unknown fields, oversized arrays, and oversized UTF-8 text", () => {
+    expect(validateDiscoveryMetadata(metadata).ok).toBe(true);
+
+    const unknown = { ...metadata, report: "full report" };
+    expect(validateDiscoveryMetadata(unknown).ok).toBe(false);
+
+    const tooManyUncertainties = structuredClone(metadata);
+    tooManyUncertainties.uncertainties = Array.from(
+      { length: MAX_DISCOVERY_METADATA_ITEMS + 1 },
+      (_, index) => ({
+        id: `uncertainty-${index}`,
+        question: "question",
+        material: false,
+      }),
+    );
+    expect(validateDiscoveryMetadata(tooManyUncertainties).ok).toBe(false);
+
+    const oversizedQuestion = structuredClone(metadata);
+    oversizedQuestion.researchQuestions = ["あ".repeat(342)];
+    expect(validateDiscoveryMetadata(oversizedQuestion).ok).toBe(false);
+
+    const oversizedAggregate = structuredClone(metadata);
+    oversizedAggregate.researchQuestions = Array.from(
+      { length: MAX_DISCOVERY_METADATA_ITEMS },
+      () => "x".repeat(1_024),
+    );
+    expect(validateDiscoveryMetadata(oversizedAggregate).ok).toBe(false);
+  });
+});
 
 describe("Mission state aggregate contract", () => {
   it("accepts the exact 256 KiB boundary and rejects overflow", () => {

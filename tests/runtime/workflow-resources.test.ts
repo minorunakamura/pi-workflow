@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { registerWorkflowResource } from "pi-subagents/workflow-resources";
+import { MAX_REQUEST_BYTES } from "../../src/core/phases/args";
 import {
   createWorkflowResourceLifecycle,
   registerWorkflowResourceLifecycle,
@@ -70,12 +71,16 @@ describe("named workflow resource contract", () => {
         .outputSchema,
     ).toBe("forbidden");
     expect(
+      WORKFLOW_RESOURCE_CONTRACTS["pi-workflow.discovery"].outputPolicy.metadata
+        .outputMode,
+    ).toBe("file-only");
+    expect(
       WORKFLOW_RESOURCE_CONTRACTS["pi-workflow.planning"].outputPolicy.decision
         .outputSchema,
     ).toBe("allowed");
   });
 
-  it("validates bounded args before failing closed for an unmigrated phase", () => {
+  it("activates only Discovery while keeping the other phases fail-closed", () => {
     const validArgs: Record<
       (typeof EXPECTED_RESOURCE_NAMES)[number],
       Readonly<Record<string, unknown>>
@@ -97,20 +102,28 @@ describe("named workflow resource contract", () => {
       const result = definition.resolve(
         validArgs[definition.name as (typeof EXPECTED_RESOURCE_NAMES)[number]],
       );
-      expect(result).toMatchObject({
-        error: expect.stringContaining(definition.name),
-      });
-      expect(result).toMatchObject({
-        error: expect.stringContaining("not yet migrated"),
-      });
+      if (definition.name === "pi-workflow.discovery") {
+        expect(result).toMatchObject({ script: expect.any(String) });
+        if (!("script" in result)) throw new Error("expected Discovery script");
+        expect(result.script).not.toContain("__PI_WORKFLOW_INPUT__");
+        expect(result.script).toContain('agent: "scout"');
+      } else {
+        expect(result).toMatchObject({
+          error: expect.stringContaining(definition.name),
+        });
+        expect(result).toMatchObject({
+          error: expect.stringContaining("not yet migrated"),
+        });
+      }
     }
   });
 
-  it("rejects invalid args instead of reaching the migration placeholder", () => {
+  it("rejects caller-owned script, schema, and path fields before resolution", () => {
     for (const definition of WORKFLOW_RESOURCE_DEFINITIONS) {
       const result = definition.resolve({
         workflowScript: "caller supplied script",
         outputSchema: { type: "object" },
+        outputPath: "/tmp/caller-owned.md",
       });
       expect(result).toMatchObject({
         error: expect.stringContaining("Invalid args"),
@@ -289,6 +302,55 @@ describe("named workflow resource contract", () => {
 
     expect(() => lifecycle.register(sessionId)).not.toThrow();
     expect(() => lifecycle.dispose(sessionId)).not.toThrow();
+  });
+
+  it("rejects invalid Discovery args at the resource boundary", () => {
+    const definition = WORKFLOW_RESOURCE_DEFINITIONS.find(
+      ({ name }) => name === "pi-workflow.discovery",
+    );
+    if (!definition) throw new Error("missing Discovery definition");
+
+    for (const args of [
+      { requestType: "feature", request: "" },
+      { requestType: "feature", request: "x".repeat(MAX_REQUEST_BYTES + 1) },
+      {
+        requestType: "feature",
+        request: "Inspect the repository.",
+        outputPath: "caller.md",
+      },
+      {
+        requestType: "feature",
+        request: "Inspect the repository.",
+        outputSchema: { type: "object" },
+      },
+    ]) {
+      const result = definition.resolve(args);
+      expect(result).toMatchObject({
+        error: expect.stringContaining("Invalid args"),
+      });
+    }
+  });
+
+  it("keeps the Discovery resolver resource-owned and bounded", () => {
+    const definition = WORKFLOW_RESOURCE_DEFINITIONS.find(
+      ({ name }) => name === "pi-workflow.discovery",
+    );
+    if (!definition) throw new Error("missing Discovery definition");
+
+    const result = definition.resolve({
+      requestType: "bug",
+      request: "Find the failing path.",
+      attempt: 2,
+    });
+
+    expect(result).toMatchObject({ script: expect.any(String) });
+    if (!("script" in result)) throw new Error("expected Discovery script");
+    expect(result.script).toContain('context: "fresh"');
+    expect(result.script).toContain("async: false");
+    expect(result.script).toContain('outputMode: "file-only"');
+    expect(result.script).toContain('output: "discovery.md"');
+    expect(result.script).not.toContain("outputPath: input");
+    expect(result.script).not.toContain("outputSchema: input.outputSchema");
   });
 
   it("preserves the original public registration on duplicate names", () => {

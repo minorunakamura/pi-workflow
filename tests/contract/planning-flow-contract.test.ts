@@ -37,6 +37,18 @@ describe("Planning Flow contract", () => {
     expect(skill).toContain("injects the package-owned");
   });
 
+  it("dispatches migrated Discovery through its named resource", () => {
+    const skill = read("skills/pi-workflow/SKILL.md");
+
+    expect(skill).toContain('workflow: "pi-workflow.discovery"');
+    expect(skill).toContain("async: false");
+    expect(skill).toContain(
+      "The resource owns the full investigation, metadata schema, output",
+    );
+    expect(skill).toContain("read `discoveryRef` and `discoveryMeta`");
+    expect(skill).not.toContain('Prepare `phase: "discovery"');
+  });
+
   it("contains native Planning Flow roles in phase templates", () => {
     expect(read("workflow-scripts/discovery.js")).toContain('agent: "scout"');
     expect(read("workflow-scripts/research.js")).toContain(

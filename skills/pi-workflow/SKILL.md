@@ -57,11 +57,27 @@ fallback runtime or CLI.
 
 ## Phase dispatch
 
-Use `pi_workflow_prepare_phase` to render an allowlisted phase script. Pass only
-validated JSON payloads; never provide a template path, JavaScript, or an
-arbitrary workflow script. Each phase call uses the returned `workflowScript`
-with the native model-facing `subagent` tool, the same `missionId`, and the
-project `cwd`.
+The migrated Discovery phase uses the canonical named resource directly:
+
+```js
+subagent({
+  workflow: "pi-workflow.discovery",
+  args: { requestType, request, attempt: 1 },
+  missionId,
+  cwd,
+  async: false,
+});
+```
+
+Do not add `agent`, `task`, `workflowScript`, `workflowScriptPath`,
+`outputSchema`, `output`, or an arbitrary Artifact path to this invocation. The
+resource owns its script, schema, child policy, and Artifact location. Its
+result is compact; read `discoveryRef` and `discoveryMeta`, not a report body.
+
+The remaining, not-yet-migrated phases still use `pi_workflow_prepare_phase`
+with validated JSON payloads. Never provide a template path, JavaScript, or an
+arbitrary workflow script. Each legacy phase call uses the returned
+`workflowScript` with the same `missionId` and project `cwd`.
 
 The phase workflow is sequential because its structured result is needed by the
 next phase. Use a blocking native workflow invocation when the next decision is
@@ -106,59 +122,40 @@ automatic Planning correction.
 
 ### Discovery
 
-Prepare `phase: "discovery"` with a task containing the request and a
-`DiscoveryResultV1` JSON schema. The schema passed to the phase must be
-machine-readable and reject extra fields; its essential shape is:
+Invoke `pi-workflow.discovery` with only bounded request args and the current
+Mission. The resource owns the full investigation, metadata schema, output
+policy, and state handoff:
 
-```json
+- full Discovery is a `file-only` Artifact with no `outputSchema`;
+- a fresh built-in `scout` runs with explicit `async: false`;
+- a second fresh `scout` reads only the Artifact Reference and returns the
+  bounded `DiscoveryMetadataV1` schema;
+- `discoveryRef` and `discoveryMeta` are written to the same Mission state;
+- the Main result contains only compact status, run ID, Reference, and bounded
+  metadata.
+
+`DiscoveryMetadataV1` is the only structured contract exposed by this resource:
+
+```ts
 {
-  "type": "object",
-  "properties": {
-    "version": { "const": 1 },
-    "summary": { "type": "string", "minLength": 1 },
-    "entryPoints": { "type": "array", "items": { "type": "string" } },
-    "affectedAreas": { "type": "array", "items": { "type": "string" } },
-    "tests": { "type": "array", "items": { "type": "string" } },
-    "constraints": { "type": "array", "items": { "type": "string" } },
-    "risks": { "type": "array", "items": { "type": "string" } },
-    "uncertainties": { "type": "array", "items": {
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "question": { "type": "string", "minLength": 1 },
-        "material": { "type": "boolean" }
-      },
-      "required": ["id", "question", "material"],
-      "additionalProperties": false
-    } },
-    "externalResearch": { "type": "object", "properties": {
-      "required": { "type": "boolean" },
-      "questions": { "type": "array", "items": { "type": "string" } }
-    }, "required": ["required", "questions"], "additionalProperties": false }
-  },
-  "required": ["version", "summary", "entryPoints", "affectedAreas", "tests", "constraints", "risks", "uncertainties", "externalResearch"],
-  "additionalProperties": false
+  version: 1,
+  status: "ready" | "blocked",
+  externalResearchRequired: boolean,
+  humanClarificationRequired: boolean,
+  uncertainties: Array<{ id: string; question: string; material: boolean }>,
+  researchQuestions: string[],
 }
 ```
 
-The fresh `scout` must return structured output with:
+Its strings, arrays, Reference, and aggregate JSON size are bounded by the
+shared Unit 2 contract. Do not pass a Discovery schema, Artifact path, report,
+transcript, or `workflowScript` from Main. Do not parse prose as metadata.
+Discovery remains read-only and never invokes Research, Human clarification, or
+Planning itself.
 
-- `version: 1`
-- `summary`
-- `entryPoints`
-- `affectedAreas`
-- `tests`
-- `constraints`
-- `risks`
-- `uncertainties` with `id`, `question`, and `material`
-- `externalResearch` with `required` and `questions`
-
-Accept only the native structured result and its run/reference metadata. Do not
-treat scout prose as a contract. Discovery is read-only.
-
-The scout follows this CodeGraph policy: `codegraph status` first; if usable,
-use `codegraph explore` for structural questions; read exact source only when
-needed; otherwise use bounded `read`/`grep`/`find`/`ls`. Never run
+The full scout follows this CodeGraph policy: `codegraph status` first; if
+usable, use `codegraph explore` for structural questions; read exact source only
+when needed; otherwise use bounded `read`/`grep`/`find`/`ls`. Never run
 `codegraph init`, `index`, `sync`, or `upgrade`.
 
 ### External research
