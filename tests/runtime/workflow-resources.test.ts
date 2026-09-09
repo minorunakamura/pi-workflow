@@ -80,7 +80,7 @@ describe("named workflow resource contract", () => {
     ).toBe("allowed");
   });
 
-  it("activates only Discovery while keeping the other phases fail-closed", () => {
+  it("activates Discovery and Research while keeping later phases fail-closed", () => {
     const validArgs: Record<
       (typeof EXPECTED_RESOURCE_NAMES)[number],
       Readonly<Record<string, unknown>>
@@ -102,11 +102,21 @@ describe("named workflow resource contract", () => {
       const result = definition.resolve(
         validArgs[definition.name as (typeof EXPECTED_RESOURCE_NAMES)[number]],
       );
-      if (definition.name === "pi-workflow.discovery") {
+      if (
+        definition.name === "pi-workflow.discovery" ||
+        definition.name === "pi-workflow.research"
+      ) {
         expect(result).toMatchObject({ script: expect.any(String) });
-        if (!("script" in result)) throw new Error("expected Discovery script");
+        if (!("script" in result))
+          throw new Error("expected active resource script");
         expect(result.script).not.toContain("__PI_WORKFLOW_INPUT__");
-        expect(result.script).toContain('agent: "scout"');
+        if (definition.name === "pi-workflow.discovery") {
+          expect(result.script).toContain('agent: "scout"');
+        } else {
+          expect(result.script).toContain('agent: "pi-ketch.researcher"');
+          expect(result.script).toContain('output: "research.md"');
+          expect(result.script).toContain("researchMeta");
+        }
       } else {
         expect(result).toMatchObject({
           error: expect.stringContaining(definition.name),
@@ -351,6 +361,35 @@ describe("named workflow resource contract", () => {
     expect(result.script).toContain('output: "discovery.md"');
     expect(result.script).not.toContain("outputPath: input");
     expect(result.script).not.toContain("outputSchema: input.outputSchema");
+  });
+
+  it("keeps the Research resolver free of caller-owned upstream and output fields", () => {
+    const definition = WORKFLOW_RESOURCE_DEFINITIONS.find(
+      ({ name }) => name === "pi-workflow.research",
+    );
+    if (!definition) throw new Error("missing Research definition");
+
+    for (const args of [
+      { discoveryRef: "caller-ref" },
+      { discoveryMeta: { externalResearchRequired: true } },
+      { outputPath: "caller.md" },
+      { outputSchema: { type: "object" } },
+      { task: "caller task" },
+      { questions: ["caller question"] },
+    ]) {
+      const result = definition.resolve(args);
+      expect(result).toMatchObject({
+        error: expect.stringContaining("Invalid args"),
+      });
+    }
+
+    const result = definition.resolve({});
+    expect(result).toMatchObject({ script: expect.any(String) });
+    if (!("script" in result)) throw new Error("expected Research script");
+    expect(result.script).toContain('context: "fresh"');
+    expect(result.script).toContain("async: false");
+    expect(result.script).toContain('outputMode: "file-only"');
+    expect(result.script).not.toContain("outputSchema");
   });
 
   it("preserves the original public registration on duplicate names", () => {

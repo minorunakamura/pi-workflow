@@ -49,6 +49,41 @@ describe("Planning Flow contract", () => {
     expect(skill).not.toContain('Prepare `phase: "discovery"');
   });
 
+  it("dispatches conditional Research through its named resource", () => {
+    const skill = read("skills/pi-workflow/SKILL.md");
+    const research = read("workflow-scripts/research.js");
+
+    expect(skill).toContain("discoveryMeta.externalResearchRequired === true");
+    expect(skill).toContain('workflow: "pi-workflow.research"');
+    expect(skill).toContain("args: { attempt: 1 }");
+    expect(skill).toContain("control-only skip path");
+    expect(skill).toContain('researchMeta.status === "skipped"');
+    expect(skill).not.toContain('Prepare `phase: "research"');
+    expect(research).toContain(
+      'if (input.resource === "pi-workflow.research")',
+    );
+    expect(research).toContain('agent: "pi-ketch.researcher"');
+    expect(research).toContain("async: false");
+  });
+
+  it("keeps clarification Main-only and fail-closed", () => {
+    const skill = read("skills/pi-workflow/SKILL.md");
+    const research = read("workflow-scripts/research.js");
+
+    expect(skill).toContain("### Main-only Human clarification");
+    expect(skill).toContain("`ask_user_question` capability");
+    expect(skill).toContain(
+      "When it is `false`, do not invoke `ask_user_question`",
+    );
+    expect(skill).toContain("details.cancelled === false");
+    expect(skill).toContain("never invent `No`, `Skip`, `Continue`");
+    expect(skill).toContain(
+      "Children, including Discovery and Research resources",
+    );
+    expect(research).not.toContain("ask_user_question");
+    expect(research).not.toContain("Plannotator");
+  });
+
   it("contains native Planning Flow roles in phase templates", () => {
     expect(read("workflow-scripts/discovery.js")).toContain('agent: "scout"');
     expect(read("workflow-scripts/research.js")).toContain(

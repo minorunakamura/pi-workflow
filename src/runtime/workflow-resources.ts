@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import {
@@ -10,14 +9,18 @@ import {
   MAX_RESOURCE_ARGS_BYTES,
   ResourceArgsSchemas,
   type DiscoveryArgsV1,
+  type ResearchArgsV1,
   type ResourceArgsPhase,
   validateResourceArgs,
 } from "../core/phases/args";
 import { formatValidationIssues } from "../core/validation";
 import {
   DiscoveryMetadataSchema,
+  ResearchMetadataSchema,
   MAX_DISCOVERY_METADATA_BYTES,
   MAX_DISCOVERY_METADATA_ITEMS,
+  MAX_RESEARCH_METADATA_BYTES,
+  MAX_RESEARCH_QUESTIONS,
   MAX_HUMAN_INPUT_ENTRIES,
   MAX_HUMAN_INPUT_VALUE_BYTES,
   MAX_IDENTIFIER_BYTES,
@@ -55,18 +58,43 @@ const RESOURCE_VERSION = 1;
 const DISCOVERY_RESOURCE_MARKER = "resource";
 const DISCOVERY_RESOURCE_START = "/* pi-workflow: discovery-resource:start */";
 const DISCOVERY_RESOURCE_END = "/* pi-workflow: discovery-resource:end */";
+const RESEARCH_RESOURCE_START = "/* pi-workflow: research-resource:start */";
+const RESEARCH_RESOURCE_END = "/* pi-workflow: research-resource:end */";
+
+function resourceWorkflowTemplate(
+  path: string,
+  startMarker: string,
+  endMarker: string,
+  label: string,
+): string {
+  const source = readFileSync(
+    new URL(path, import.meta.url),
+    "utf8",
+  ).replaceAll("\r\n", "\n");
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker);
+  if (start < 0 || end < start) {
+    throw new Error(`${label} resource script markers are invalid.`);
+  }
+  return source.slice(start + startMarker.length, end);
+}
 
 function discoveryWorkflowTemplate(): string {
-  const path = fileURLToPath(
-    new URL("../../workflow-scripts/discovery.js", import.meta.url),
+  return resourceWorkflowTemplate(
+    "../../workflow-scripts/discovery.js",
+    DISCOVERY_RESOURCE_START,
+    DISCOVERY_RESOURCE_END,
+    "Discovery",
   );
-  const source = readFileSync(path, "utf8").replaceAll("\r\n", "\n");
-  const start = source.indexOf(DISCOVERY_RESOURCE_START);
-  const end = source.indexOf(DISCOVERY_RESOURCE_END);
-  if (start < 0 || end < start) {
-    throw new Error("Discovery resource script markers are invalid.");
-  }
-  return source.slice(start + DISCOVERY_RESOURCE_START.length, end);
+}
+
+function researchWorkflowTemplate(): string {
+  return resourceWorkflowTemplate(
+    "../../workflow-scripts/research.js",
+    RESEARCH_RESOURCE_START,
+    RESEARCH_RESOURCE_END,
+    "Research",
+  );
 }
 
 export function buildDiscoveryWorkflowScript(args: DiscoveryArgsV1): string {
@@ -91,6 +119,29 @@ export function buildDiscoveryWorkflowScript(args: DiscoveryArgsV1): string {
     },
   };
   return `const input = ${JSON.stringify(input)};\n${discoveryWorkflowTemplate()}`;
+}
+
+export function buildResearchWorkflowScript(args: ResearchArgsV1): string {
+  const input = {
+    [DISCOVERY_RESOURCE_MARKER]: "pi-workflow.research",
+    ...args,
+    discoveryMetadataSchema: DiscoveryMetadataSchema,
+    researchMetadataSchema: ResearchMetadataSchema,
+    missionStateSchema: MissionStateSchema,
+    stateKeys: MISSION_STATE_KEYS,
+    researchBounds: {
+      stateBytes: MAX_MISSION_STATE_BYTES,
+      referenceBytes: MAX_REFERENCE_BYTES,
+      identifierBytes: MAX_IDENTIFIER_BYTES,
+      requestBytes: MAX_REQUEST_BYTES,
+      textBytes: MAX_REGULAR_TEXT_BYTES,
+      metadataBytes: MAX_RESEARCH_METADATA_BYTES,
+      metadataItems: MAX_RESEARCH_QUESTIONS,
+      jsonDepth: MAX_JSON_DEPTH,
+      resultBytes: MAX_RESOURCE_ARGS_BYTES,
+    },
+  };
+  return `const input = ${JSON.stringify(input)};\n${researchWorkflowTemplate()}`;
 }
 
 export const WORKFLOW_RESOURCE_CONTRACTS = {
@@ -160,6 +211,20 @@ function resolveDiscovery(
   };
 }
 
+function resolveResearch(
+  args: Readonly<Record<string, unknown>>,
+): ReturnType<WorkflowResourceDefinition["resolve"]> {
+  const validation = validateResourceArgs("research", args);
+  if (!validation.ok) {
+    return {
+      error: `Invalid args for 'pi-workflow.research': ${formatValidationIssues(validation.errors)}`,
+    };
+  }
+  return {
+    script: buildResearchWorkflowScript(validation.value as ResearchArgsV1),
+  };
+}
+
 function notMigrated(
   name: WorkflowResourceName,
 ): WorkflowResourceDefinition["resolve"] {
@@ -182,7 +247,11 @@ export const WORKFLOW_RESOURCE_DEFINITIONS: readonly WorkflowResourceDefinition[
     name,
     version: RESOURCE_VERSION,
     resolve:
-      name === "pi-workflow.discovery" ? resolveDiscovery : notMigrated(name),
+      name === "pi-workflow.discovery"
+        ? resolveDiscovery
+        : name === "pi-workflow.research"
+          ? resolveResearch
+          : notMigrated(name),
   }));
 
 function disposeAll(

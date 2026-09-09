@@ -22,7 +22,7 @@ Mission as success in this flow.
 For each `/wf-*` kickoff, perform these checks in order:
 
 1. Call `subagent({ action: "mission.list" })` for the current project.
-2. The official `pi-subagents` v0.65.1 Mission statuses are `planned`, `active`,
+2. The official `pi-subagents` v0.66.0 Mission statuses are `planned`, `active`,
    `waiting`, `needs_decision`, `completed`, `failed`, and `cancelled`.
    Block a new workflow when a Mission is `planned`, `active`, `waiting`, or
    `needs_decision`. Report its Mission ID, title, and status; do not resume,
@@ -75,9 +75,10 @@ resource owns its script, schema, child policy, and Artifact location. Its
 result is compact; read `discoveryRef` and `discoveryMeta`, not a report body.
 
 The remaining, not-yet-migrated phases still use `pi_workflow_prepare_phase`
-with validated JSON payloads. Never provide a template path, JavaScript, or an
-arbitrary workflow script. Each legacy phase call uses the returned
-`workflowScript` with the same `missionId` and project `cwd`.
+with validated JSON payloads. Research is not one of those legacy calls. Never
+provide a template path, JavaScript, or an arbitrary workflow script. Each
+remaining legacy phase call uses the returned `workflowScript` with the same
+`missionId` and project `cwd`.
 
 The phase workflow is sequential because its structured result is needed by the
 next phase. Use a blocking native workflow invocation when the next decision is
@@ -109,7 +110,7 @@ subagent({
 If the next action is a Human input or approval gate, use the native
 `mission.update` with `missionUpdate: { status: "waiting" }` while waiting.
 After the Human result, restore `active` before continuing. `waiting` is a
-Mission status from the v0.65.1 contract; do not substitute an invented status.
+Mission status from the v0.66.0 contract; do not substitute an invented status.
 If a machine-invalid phase result stops the flow, use native
 `missionUpdate: { status: "needs_decision" }` when owner intervention is
 required and report the explicit failure. Do not leave the Mission's transient
@@ -158,25 +159,64 @@ usable, use `codegraph explore` for structural questions; read exact source only
 when needed; otherwise use bounded `read`/`grep`/`find`/`ls`. Never run
 `codegraph init`, `index`, `sync`, or `upgrade`.
 
-### External research
+### Conditional Research
 
-Read the Discovery result. If and only if `externalResearch.required === true`,
-first confirm that the exact `pi-ketch.researcher` agent is present and
-executable. Then prepare `phase: "research"` and run the fresh
-`pi-ketch.researcher`. Pass the bounded questions and a durable output path.
-The researcher collects evidence only and never owns product, architecture,
-policy, or risk-acceptance decisions. If research is not required, do not start
-it. After a Research workflow returns, normalize the Mission to native `active`
-before continuing.
+Read only the compact `discoveryMeta` result from the Discovery resource. If and
+only if `discoveryMeta.externalResearchRequired === true`, first confirm that
+the exact `pi-ketch.researcher` capability is present and executable. Then
+invoke the active named resource:
+
+```js
+subagent({
+  workflow: "pi-workflow.research",
+  args: { attempt: 1 },
+  missionId,
+  cwd,
+  async: false,
+});
+```
+
+The Research resource resolves `discoveryRef`, `discoveryMeta`, and bounded
+`researchQuestions` from the same Mission state. Main never reads, copies, or
+relays the Discovery Artifact body, path, or report into the invocation. The
+resource launches one fresh `pi-ketch.researcher` with explicit `async: false`,
+read-only policy, and a fixed `file-only` Artifact output. Its result is only a
+bounded `researchRef` and `researchMeta`; the full report is not returned to
+Main or stored in Mission state.
+
+When `externalResearchRequired === false`, invoke the same named resource only
+as its control-only skip path. It must launch zero children, create no
+`researchRef`, and persist canonical `researchMeta.status === "skipped"` in the
+same Mission. Do not add a `mark-research-skipped` Tool or use another Mission's
+state. A missing required reference, missing capability, child failure, missing
+Artifact/outputReference, invalid Reference, or `state.set` failure is
+fail-closed and must not produce a completed Research result.
+
+After either completed or skipped Research, normalize the Mission to native
+`active` before continuing.
 
 ### Main-only Human clarification
 
-After discovery and any required research, escalate only material uncertainties
-that repository evidence and primary sources cannot resolve. Call the Main-only
-`ask_user_question` tool. Continue only when `details.cancelled === false` and
-at least one actual answer is present. Cancel, unavailable, malformed, or empty
-answers leave the decision unresolved and stop the flow. Do not let a child call
-this tool, and do not use it as a Plannotator approval fallback.
+After Discovery and the conditional Research path, evaluate only bounded
+`discoveryMeta.humanClarificationRequired` and its bounded `uncertainties`.
+When it is `false`, do not invoke `ask_user_question`; its unavailable state is
+not a blocker. When it is `true`, check the conditional `ask_user_question` capability, set
+the Mission to native `waiting`, and ask only those bounded questions from the
+Main Session. Do not read the full Discovery Artifact to construct questions.
+
+Accept answers only when `details.cancelled === false`, the result is valid, and
+there is at least one actual answer. Normalize them to the Unit 2 bounded
+Human decision contract (maximum 8 entries, each value at most 2,048 UTF-8
+bytes), using canonical `humanDecisions` when persisted, and carry them as
+Main-origin control data for the next phase / Mission state. Cancel, unavailable,
+non-TUI unsupported paths, malformed answers,
+empty answers, oversized values, and too many answers are unresolved and
+fail-closed: never invent `No`, `Skip`, `Continue`, or another default, and do
+not advance the phase. Restore native `active` only after a valid answer.
+
+Children, including Discovery and Research resources, never call
+`ask_user_question`, Plannotator, or any interactive prompt. Human
+clarification is not a Plannotator approval fallback.
 
 ### Planning
 

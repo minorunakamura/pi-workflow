@@ -6,9 +6,9 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const skill = readFileSync(`${repoRoot}/skills/pi-workflow/SKILL.md`, "utf8");
 
 describe("native Mission lifecycle contract", () => {
-  it("uses only v0.65.1 Mission status values", () => {
+  it("uses only v0.66.0 Mission status values", () => {
     expect(skill).toContain(
-      "The official `pi-subagents` v0.65.1 Mission statuses",
+      "The official `pi-subagents` v0.66.0 Mission statuses",
     );
     for (const status of [
       "planned",
