@@ -40,9 +40,22 @@ describe("architecture contract", () => {
     const entry = readFileSync(`${repoRoot}/src/index.ts`, "utf8");
 
     expect(entry).toContain("registerTools");
+    expect(entry).toContain("registerWorkflowResourceLifecycle");
     expect(entry).not.toContain("subagent");
     expect(entry).not.toContain("mission");
     expect(entry).not.toContain("workflowScript");
+  });
+
+  it("uses only the public workflow resource boundary", () => {
+    const runtime = readFileSync(
+      `${repoRoot}/src/runtime/workflow-resources.ts`,
+      "utf8",
+    );
+
+    expect(runtime).toContain('"pi-subagents/workflow-resources"');
+    expect(runtime).not.toContain("pi-subagents/src/");
+    expect(runtime).not.toContain("Symbol.for");
+    expect(runtime).not.toContain("globalThis");
   });
 
   it("does not declare custom Agents", () => {

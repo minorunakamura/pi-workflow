@@ -6,6 +6,7 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const packageJson = JSON.parse(
   readFileSync(`${repoRoot}/package.json`, "utf8"),
 ) as Record<string, unknown>;
+const lockfile = readFileSync(`${repoRoot}/pnpm-lock.yaml`, "utf8");
 const piManifest = packageJson.pi as { extensions: string[]; skills: string[] };
 
 const workflowScripts = [
@@ -21,6 +22,23 @@ const workflowScripts = [
 const skills = ["pi-workflow", "pi-planning", "pi-verification"];
 
 describe("package contract", () => {
+  it("requires pi-subagents 0.66.0 as a peer and development dependency", () => {
+    expect(packageJson.peerDependencies).toMatchObject({
+      "pi-subagents": "0.66.0",
+    });
+    expect(packageJson.devDependencies).toMatchObject({
+      "pi-subagents": "0.66.0",
+    });
+    expect(packageJson.dependencies ?? {}).not.toHaveProperty("pi-subagents");
+    expect(packageJson.bundledDependencies ?? []).not.toContain("pi-subagents");
+  });
+
+  it("keeps the pnpm lockfile on the exact package version", () => {
+    expect(lockfile).toMatch(
+      /pi-subagents:\n\s+specifier: 0\.66\.0\n\s+version: 0\.66\.0\(/,
+    );
+  });
+
   it("declares the Pi package resources", () => {
     expect(packageJson.keywords).toContain("pi-package");
     expect(piManifest).toEqual({
