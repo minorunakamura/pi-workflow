@@ -67,6 +67,14 @@ The phase workflow is sequential because its structured result is needed by the
 next phase. Use a blocking native workflow invocation when the next decision is
 needed immediately; do not invent a parallel scheduler.
 
+Before launching a prepared phase, call `subagent({ action: "validate", workflowScript })` with the exact returned script. The script passed to validation and execution must be byte-for-byte identical to the `pi_workflow_prepare_phase` result; do not retype, edit, or reconstruct it. If validation fails, report the validation error and stop without launching the phase.
+
+### Explicit user stop
+
+Classify every native phase result before any Mission normalization, correction, retry, resume, or new phase preparation. A native result with state/status/terminal reason `stopped`, `cancelled`, or `interrupted`, or an explicit `user stop` / `Subagent stopped by user.` reason, is an explicit user stop. It is not a semantic-validation failure and is not retryable.
+
+For an explicit user stop, stop the current pi-workflow execution and return the exact native stop result to the Main Session/Human. Do not run automatic Planning correction, retry or resume the run, call `mission.update`, prepare a new phase, create another Mission, or close the Mission. This rule applies to the observed terminal result; do not infer a different ordering when an action was already started before the stop.
+
 ### Native Mission lifecycle between phases
 
 A phase workflow's top-level `completed` result is only a phase-run outcome.
@@ -203,6 +211,10 @@ After a valid Planning workflow returns, normalize the Mission to native
 `active` before entering the Human Plan Gate.
 
 ## Human Plan Gate
+
+For `phase: "planning"`, `pi_workflow_prepare_phase` injects the package-owned
+`PlanningDecisionSchema`; do not hand-author, replace, or edit that schema in
+Main.
 
 The planning phase's `outputSchema` must describe the complete
 `PlanningDecisionV1` contract: `version`, `requestSummary`, `scope.inScope`,

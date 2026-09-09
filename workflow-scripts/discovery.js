@@ -4,7 +4,7 @@ await state.set("phase", "discovery");
 
 const task = [
   "Inspect the current repository for the requested change.",
-  `Request:\n${input.task}`,
+  "Request:\n" + input.task,
   "",
   "Discovery policy:",
   "1. Run `codegraph status` first when the CodeGraph CLI is available.",

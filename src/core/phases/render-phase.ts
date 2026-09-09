@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PHASE_NAMES, PhaseSchemas, type PhaseName } from "./inputs";
+import { PlanningDecisionSchema } from "../planning/planning-decision-schema";
 import {
   isJsonValue,
   jsonByteLength,
@@ -24,6 +25,10 @@ function isPhaseName(value: unknown): value is PhaseName {
     typeof value === "string" &&
     (PHASE_NAMES as readonly string[]).includes(value)
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function validatePhaseInput(
@@ -88,9 +93,20 @@ export function renderPhase(phase: unknown, payload: unknown): PreparedPhase {
     );
   }
 
+  let renderValue: unknown = validation.value;
+  if (phase === "planning") {
+    // PlanningDecisionSchema is package-owned; prevent hand-written schema drift.
+    if (!isRecord(validation.value)) {
+      throw new Error("planning payload must be an object");
+    }
+    renderValue = {
+      ...validation.value,
+      outputSchema: PlanningDecisionSchema,
+    };
+  }
   const workflowScript = template.replace(
     INPUT_PLACEHOLDER,
-    JSON.stringify(validation.value),
+    JSON.stringify(renderValue),
   );
   const sha256 = createHash("sha256").update(workflowScript).digest("hex");
 

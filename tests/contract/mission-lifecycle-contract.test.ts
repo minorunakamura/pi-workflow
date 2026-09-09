@@ -25,6 +25,16 @@ describe("native Mission lifecycle contract", () => {
     expect(skill).toContain('Do not use or invent `status: "paused"`');
   });
 
+  it("stops without retrying after an explicit native user stop", () => {
+    expect(skill).toContain("### Explicit user stop");
+    expect(skill).toContain(
+      "It is not a semantic-validation failure and is not retryable.",
+    );
+    expect(skill).toContain("Do not run automatic Planning correction");
+    expect(skill).toContain("prepare a new phase");
+    expect(skill).toContain("return the exact native stop result");
+  });
+
   it("normalizes phase completion before the next phase", () => {
     expect(skill).toContain('action: "mission.update"');
     expect(skill).toContain('missionUpdate: { status: "active" }');

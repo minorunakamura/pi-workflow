@@ -148,7 +148,7 @@ function requirePlanningResult(result, label) {
 
 const task = [
   "Create a bounded read-only PlanningDecisionV1 for the requested change.",
-  `Planning context:\n${input.task}`,
+  "Planning context:\n" + input.task,
   "",
   "Define explicit scope, non-goals, acceptance criteria, risks, verification commands, WorkUnits, write scopes, and integration order.",
   "Preserve WorkUnit order exactly as the decision contract requires.",

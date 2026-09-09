@@ -2,9 +2,11 @@ import { createContext, Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { renderPhase } from "../../src/core/phases/render-phase";
 import type { PlanningDecisionV1 } from "../../src/core/planning/planning-decision";
+import { PlanningDecisionSchema } from "../../src/core/planning/planning-decision-schema";
 
 type RunResult = {
   ok: boolean;
+  stopped?: boolean;
   runId?: string;
   outputReference?: string;
   output?: string;
@@ -108,10 +110,9 @@ describe("planning workflow semantic validation", () => {
 
     expect(execution.calls).toHaveLength(1);
     expect(execution.calls[0]?.key).toBe("planning");
-    expect(execution.calls[0]?.params.outputSchema).toEqual({
-      type: "object",
-      additionalProperties: false,
-    });
+    expect(execution.calls[0]?.params.outputSchema).toEqual(
+      PlanningDecisionSchema,
+    );
     expect(execution.result).toMatchObject({
       planningDecision: validDecision,
       planningCorrectionCount: 0,
@@ -150,6 +151,19 @@ describe("planning workflow semantic validation", () => {
       key: "phase",
       value: "plan-review",
     });
+  });
+
+  it("propagates a native user stop without a correction", async () => {
+    await expect(
+      executePlanning([
+        {
+          ok: false,
+          stopped: true,
+          error: "Subagent stopped by user.",
+        },
+        childResult("unexpected-correction", validDecision),
+      ]),
+    ).rejects.toThrow("Subagent stopped by user.");
   });
 
   it("stops as planning-invalid when the one correction is still invalid", async () => {

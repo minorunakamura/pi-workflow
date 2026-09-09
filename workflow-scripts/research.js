@@ -5,12 +5,12 @@ await state.set("phase", "research");
 let questionText = "";
 if (input.questions?.length) {
   questionText = "Questions:\n";
-  for (const question of input.questions) questionText += `- ${question}\n`;
+  for (const question of input.questions) questionText += "- " + question + "\n";
 }
 
 const task = [
   "Collect external evidence needed for the requested change.",
-  `Request and research context:\n${input.task}`,
+  "Request and research context:\n" + input.task,
   questionText,
   "",
   "Use primary sources when possible.",

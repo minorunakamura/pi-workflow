@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
+import { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
+import { Compile } from "typebox/compile";
+import { PlanningDecisionSchema } from "../../src/core/planning/planning-decision-schema";
 import {
   MAX_PHASE_PAYLOAD_BYTES,
   renderPhase,
@@ -19,6 +22,89 @@ describe("phase rendering", () => {
     expect(prepared.sha256).toBe(
       createHash("sha256").update(prepared.workflowScript).digest("hex"),
     );
+  });
+
+  it("renders arbitrary task text as data, not JavaScript source", () => {
+    const task = [
+      "backtick: `",
+      "Markdown fence:",
+      "```bash",
+      'printf "%s" "quoted"',
+      "```",
+      "template marker: ${value}",
+      "single quote: '",
+      'double quote: "',
+      "line one",
+      "line two",
+      'JSON snippet: {"key":"value"}',
+    ].join("\n");
+    const outputSchema = {
+      type: "object",
+      properties: {
+        value: {
+          type: "string",
+          description: 'shell block:\n```sh\nprintf "%s" "value"\n```',
+        },
+      },
+      required: ["value"],
+      additionalProperties: false,
+    };
+
+    const prepared = renderPhase("discovery", { task, outputSchema });
+
+    expect(
+      () => new Script(`(async () => {\n${prepared.workflowScript}\n})()`),
+    ).not.toThrow();
+    const firstLine = prepared.workflowScript.split("\n", 1)[0];
+    const renderedInput = JSON.parse(
+      firstLine.slice("const input = ".length, -1),
+    ) as { task: string; outputSchema: unknown };
+    expect(renderedInput.task).toBe(task);
+    expect(renderedInput.outputSchema).toEqual(outputSchema);
+  });
+
+  it("transports the package-owned PlanningDecision schema", () => {
+    const prepared = renderPhase("planning", {
+      task: "Plan the requested change.",
+      outputSchema: {
+        type: "object",
+        properties: { required: ["not-a-schema-key"] },
+      },
+    });
+
+    const firstLine = prepared.workflowScript.split("\n", 1)[0];
+    const renderedInput = JSON.parse(
+      firstLine.slice("const input = ".length, -1),
+    ) as { outputSchema: Record<string, unknown> };
+    const schema = renderedInput.outputSchema;
+
+    expect(schema.type).toBe("object");
+    expect(Object.keys(schema.properties as object)).toEqual([
+      "version",
+      "requestSummary",
+      "scope",
+      "acceptanceCriteria",
+      "constraints",
+      "risks",
+      "verification",
+      "implementation",
+      "unresolvedDecisions",
+    ]);
+    expect(schema.required).toEqual([
+      "version",
+      "requestSummary",
+      "scope",
+      "acceptanceCriteria",
+      "constraints",
+      "risks",
+      "verification",
+      "implementation",
+      "unresolvedDecisions",
+    ]);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties).not.toHaveProperty("required");
+    expect(schema).toEqual(PlanningDecisionSchema);
+    expect(() => Compile(schema)).not.toThrow();
   });
 
   it("returns the same script and hash for the same input", () => {

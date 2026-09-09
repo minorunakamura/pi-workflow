@@ -28,6 +28,15 @@ describe("Planning Flow contract", () => {
     expect(planReview).not.toContain("pi-subagents");
   });
 
+  it("requires validation of the exact rendered script before launch", () => {
+    const skill = read("skills/pi-workflow/SKILL.md");
+
+    expect(skill).toContain('subagent({ action: "validate", workflowScript })');
+    expect(skill).toContain("byte-for-byte identical");
+    expect(skill).toContain("stop without launching the phase");
+    expect(skill).toContain("injects the package-owned");
+  });
+
   it("contains native Planning Flow roles in phase templates", () => {
     expect(read("workflow-scripts/discovery.js")).toContain('agent: "scout"');
     expect(read("workflow-scripts/research.js")).toContain(
