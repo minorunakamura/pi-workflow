@@ -1,4 +1,15 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
+import {
+  FOREGROUND_POLICY,
+  WORKFLOW_RESOURCE_OUTPUT_POLICIES,
+} from "../core/phases/definitions";
+import {
+  ResourceArgsSchemas,
+  type ResourceArgsPhase,
+  validateResourceArgs,
+} from "../core/phases/args";
+import { formatValidationIssues } from "../core/validation";
 import {
   registerWorkflowResource,
   type RegisterWorkflowResourceInput,
@@ -23,12 +34,74 @@ export type WorkflowResourceRegistrar = (
 
 const RESOURCE_VERSION = 1;
 
+export const WORKFLOW_RESOURCE_CONTRACTS = {
+  "pi-workflow.discovery": {
+    argsPhase: "discovery",
+    argsSchema: ResourceArgsSchemas.discovery,
+    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.discovery,
+    foreground: FOREGROUND_POLICY,
+  },
+  "pi-workflow.research": {
+    argsPhase: "research",
+    argsSchema: ResourceArgsSchemas.research,
+    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.research,
+    foreground: FOREGROUND_POLICY,
+  },
+  "pi-workflow.planning": {
+    argsPhase: "planning",
+    argsSchema: ResourceArgsSchemas.planning,
+    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.planning,
+    foreground: FOREGROUND_POLICY,
+  },
+  "pi-workflow.implementation": {
+    argsPhase: "implementation",
+    argsSchema: ResourceArgsSchemas.implementation,
+    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.implementation,
+    foreground: FOREGROUND_POLICY,
+  },
+  "pi-workflow.verification": {
+    argsPhase: "verification",
+    argsSchema: ResourceArgsSchemas.verification,
+    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.verification,
+    foreground: FOREGROUND_POLICY,
+  },
+  "pi-workflow.verification-fix": {
+    argsPhase: "verification-fix",
+    argsSchema: ResourceArgsSchemas["verification-fix"],
+    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES["verification-fix"],
+    foreground: FOREGROUND_POLICY,
+  },
+  "pi-workflow.review": {
+    argsPhase: "review",
+    argsSchema: ResourceArgsSchemas.review,
+    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.review,
+    foreground: FOREGROUND_POLICY,
+  },
+} as const satisfies Record<
+  WorkflowResourceName,
+  {
+    argsPhase: ResourceArgsPhase;
+    argsSchema: TSchema;
+    outputPolicy: unknown;
+    foreground: typeof FOREGROUND_POLICY;
+  }
+>;
+
 function notMigrated(
   name: WorkflowResourceName,
 ): WorkflowResourceDefinition["resolve"] {
-  return () => ({
-    error: `Named workflow resource '${name}' is not yet migrated to the v0.66.0 resource execution path.`,
-  });
+  const phase = WORKFLOW_RESOURCE_CONTRACTS[name].argsPhase;
+  return (args) => {
+    const validation = validateResourceArgs(phase, args);
+    if (!validation.ok) {
+      return {
+        error: `Invalid args for '${name}': ${formatValidationIssues(validation.errors)}`,
+      };
+    }
+    return {
+      error: `Named workflow resource '${name}' is not yet migrated to the v0.66.0 resource execution path.`,
+    };
+  };
 }
 
 export const WORKFLOW_RESOURCE_DEFINITIONS: readonly WorkflowResourceDefinition[] =

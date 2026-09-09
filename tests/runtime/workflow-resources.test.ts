@@ -4,6 +4,7 @@ import { registerWorkflowResource } from "pi-subagents/workflow-resources";
 import {
   createWorkflowResourceLifecycle,
   registerWorkflowResourceLifecycle,
+  WORKFLOW_RESOURCE_CONTRACTS,
   WORKFLOW_RESOURCE_DEFINITIONS,
   WORKFLOW_RESOURCE_NAMES,
   type WorkflowResourceRegistrar,
@@ -48,19 +49,74 @@ describe("named workflow resource contract", () => {
     ).toBe(true);
   });
 
-  it("fails closed until each phase is migrated", () => {
+  it("encodes resource-owned args, output, and foreground policies", () => {
+    expect(Object.keys(WORKFLOW_RESOURCE_CONTRACTS)).toEqual(
+      EXPECTED_RESOURCE_NAMES,
+    );
+    for (const name of EXPECTED_RESOURCE_NAMES) {
+      const contract = WORKFLOW_RESOURCE_CONTRACTS[name];
+      expect(contract.argsSchema).toMatchObject({
+        additionalProperties: false,
+      });
+      expect(contract.foreground).toEqual({
+        main: { async: false },
+        runsRun: { async: false },
+        runsAll: { async: false },
+        runsLanes: { async: false },
+      });
+    }
+    expect(
+      WORKFLOW_RESOURCE_CONTRACTS["pi-workflow.discovery"].outputPolicy.artifact
+        .outputSchema,
+    ).toBe("forbidden");
+    expect(
+      WORKFLOW_RESOURCE_CONTRACTS["pi-workflow.planning"].outputPolicy.decision
+        .outputSchema,
+    ).toBe("allowed");
+  });
+
+  it("validates bounded args before failing closed for an unmigrated phase", () => {
+    const validArgs: Record<
+      (typeof EXPECTED_RESOURCE_NAMES)[number],
+      Readonly<Record<string, unknown>>
+    > = {
+      "pi-workflow.discovery": {
+        requestType: "feature",
+        request: "Inspect the repository.",
+      },
+      "pi-workflow.research": {},
+      "pi-workflow.planning": { round: 1 },
+      "pi-workflow.implementation": { mode: "single" },
+      "pi-workflow.verification": { round: 0 },
+      "pi-workflow.verification-fix": { round: 1 },
+      "pi-workflow.review": { wave: 0 },
+    };
+
     for (const definition of WORKFLOW_RESOURCE_DEFINITIONS) {
       expect(Object.keys(definition)).toEqual(["name", "version", "resolve"]);
-      const result = definition.resolve({
-        workflowScript: "caller supplied script",
-        outputSchema: { type: "object" },
-      });
+      const result = definition.resolve(
+        validArgs[definition.name as (typeof EXPECTED_RESOURCE_NAMES)[number]],
+      );
       expect(result).toMatchObject({
         error: expect.stringContaining(definition.name),
       });
       expect(result).toMatchObject({
         error: expect.stringContaining("not yet migrated"),
       });
+    }
+  });
+
+  it("rejects invalid args instead of reaching the migration placeholder", () => {
+    for (const definition of WORKFLOW_RESOURCE_DEFINITIONS) {
+      const result = definition.resolve({
+        workflowScript: "caller supplied script",
+        outputSchema: { type: "object" },
+      });
+      expect(result).toMatchObject({
+        error: expect.stringContaining("Invalid args"),
+      });
+      if (!("error" in result)) throw new Error("expected invalid args");
+      expect(result.error).not.toContain("not yet migrated");
     }
   });
 
