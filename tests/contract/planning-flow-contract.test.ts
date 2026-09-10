@@ -28,13 +28,14 @@ describe("Planning Flow contract", () => {
     expect(planReview).not.toContain("pi-subagents");
   });
 
-  it("requires validation of the exact rendered script before launch", () => {
+  it("keeps legacy validation separate from the named Planning resource", () => {
     const skill = read("skills/pi-workflow/SKILL.md");
 
     expect(skill).toContain('subagent({ action: "validate", workflowScript })');
     expect(skill).toContain("byte-for-byte identical");
     expect(skill).toContain("stop without launching the phase");
-    expect(skill).toContain("injects the package-owned");
+    expect(skill).toContain('workflow: "pi-workflow.planning"');
+    expect(skill).toContain("resource-owned `PlanningDecisionV1` schema");
   });
 
   it("dispatches migrated Discovery through its named resource", () => {
@@ -85,21 +86,17 @@ describe("Planning Flow contract", () => {
   });
 
   it("contains native Planning Flow roles in phase templates", () => {
+    const planning = read("workflow-scripts/planning.js");
     expect(read("workflow-scripts/discovery.js")).toContain('agent: "scout"');
     expect(read("workflow-scripts/research.js")).toContain(
       'agent: "pi-ketch.researcher"',
     );
-    expect(read("workflow-scripts/planning.js")).toContain('agent: "reviewer"');
-    expect(read("workflow-scripts/planning.js")).toContain(
-      'skill: "pi-planning"',
-    );
-    expect(read("workflow-scripts/planning.js")).toContain(
-      "outputSchema: input.outputSchema",
-    );
-    expect(read("workflow-scripts/planning.js")).toContain(
-      "planning-correction",
-    );
-    expect(read("workflow-scripts/planning.js")).toContain("planning-invalid");
+    expect(planning).toContain('agent: "reviewer"');
+    expect(planning).toContain('skill: "pi-planning"');
+    expect(planning).toContain("planningDecisionSchema");
+    expect(planning).toContain("plan-artifact");
+    expect(planning).toContain("planning-correction");
+    expect(planning).toContain("planning-invalid");
   });
 
   it("persists phase evidence through native Mission state", () => {
@@ -118,15 +115,10 @@ describe("Planning Flow contract", () => {
     expect(read("workflow-scripts/research.js")).toContain(
       'await state.set("research", research)',
     );
-    expect(read("workflow-scripts/planning.js")).toContain(
-      'await state.set("phase", "planning")',
-    );
-    expect(read("workflow-scripts/planning.js")).toContain(
-      'await state.set("planningDecision", planningDecision)',
-    );
-    expect(read("workflow-scripts/planning.js")).toContain(
-      'await state.set("phase", "plan-review")',
-    );
+    const planning = read("workflow-scripts/planning.js");
+    expect(planning).toContain("planningDecision,");
+    expect(planning).toContain("planRef: input.planArtifactPath");
+    expect(planning).toContain("await state.set(key, nextState[key])");
   });
 
   it("documents canonical dependency references for the Planning reviewer", () => {

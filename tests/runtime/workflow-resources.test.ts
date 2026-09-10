@@ -80,7 +80,7 @@ describe("named workflow resource contract", () => {
     ).toBe("allowed");
   });
 
-  it("activates Discovery and Research while keeping later phases fail-closed", () => {
+  it("activates Discovery, Research, and Planning while keeping later phases fail-closed", () => {
     const validArgs: Record<
       (typeof EXPECTED_RESOURCE_NAMES)[number],
       Readonly<Record<string, unknown>>
@@ -104,7 +104,8 @@ describe("named workflow resource contract", () => {
       );
       if (
         definition.name === "pi-workflow.discovery" ||
-        definition.name === "pi-workflow.research"
+        definition.name === "pi-workflow.research" ||
+        definition.name === "pi-workflow.planning"
       ) {
         expect(result).toMatchObject({ script: expect.any(String) });
         if (!("script" in result))
@@ -112,10 +113,19 @@ describe("named workflow resource contract", () => {
         expect(result.script).not.toContain("__PI_WORKFLOW_INPUT__");
         if (definition.name === "pi-workflow.discovery") {
           expect(result.script).toContain('agent: "scout"');
-        } else {
+        } else if (definition.name === "pi-workflow.research") {
           expect(result.script).toContain('agent: "pi-ketch.researcher"');
           expect(result.script).toContain('output: "research.md"');
           expect(result.script).toContain("researchMeta");
+        } else {
+          expect(result.script).toContain('agent: "reviewer"');
+          expect(result.script).toContain('skill: "pi-planning"');
+          expect(result.script).toContain("runs.host");
+          expect(result).toMatchObject({
+            hostCommands: [
+              { key: "plan-artifact", command: expect.any(String) },
+            ],
+          });
         }
       } else {
         expect(result).toMatchObject({

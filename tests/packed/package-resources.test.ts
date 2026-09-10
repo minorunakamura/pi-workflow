@@ -44,6 +44,8 @@ describe("packed package contract", () => {
         "package/workflow-scripts/verification.js",
         "package/workflow-scripts/verification-fix.js",
         "package/workflow-scripts/review.js",
+        "package/src/core/planning/render-plan-runtime.js",
+        "package/src/runtime/plan-artifact.js",
       ]),
     );
   });

@@ -12,10 +12,10 @@ Agent registry, fallback CLI, or custom Mission runtime.
 
 ## Planning-flow boundary
 
-The current Planning Flow is read-only. It ends at an explicitly approved
-canonical `plan.md`. Do not start a Worker, mutate source files, verify an
-implementation, run automated code review, run final Code Review, or close the
-Mission as success in this flow.
+The current Unit 5 Planning Flow is read-only. It ends when a valid canonical
+`plan.md` Artifact and `planRef` are stored. Do not start Plan Review, a Worker,
+mutate source files, verify an implementation, run automated code review, run
+final Code Review, or close the Mission as success in this flow.
 
 ## Startup gates
 
@@ -74,11 +74,12 @@ Do not add `agent`, `task`, `workflowScript`, `workflowScriptPath`,
 resource owns its script, schema, child policy, and Artifact location. Its
 result is compact; read `discoveryRef` and `discoveryMeta`, not a report body.
 
-The remaining, not-yet-migrated phases still use `pi_workflow_prepare_phase`
-with validated JSON payloads. Research is not one of those legacy calls. Never
-provide a template path, JavaScript, or an arbitrary workflow script. Each
-remaining legacy phase call uses the returned `workflowScript` with the same
-`missionId` and project `cwd`.
+The remaining, not-yet-migrated phases—Implementation, Verification, Verification
+Fix, and Review—still use `pi_workflow_prepare_phase` with validated JSON
+payloads. Discovery, Research, and Planning are not legacy calls. Never provide
+a template path, JavaScript, or an arbitrary workflow script. Each remaining
+legacy phase call uses the returned `workflowScript` with the same `missionId`
+and project `cwd`.
 
 The phase workflow is sequential because its structured result is needed by the
 next phase. Use a blocking native workflow invocation when the next decision is
@@ -220,89 +221,64 @@ clarification is not a Plannotator approval fallback.
 
 ### Planning
 
-Prepare `phase: "planning"` with the discovery/research references and resolved
-Human decisions. The fresh built-in `reviewer` runs with `skill: "pi-planning"`,
-returns only structured `PlanningDecisionV1`, and does not edit files. Require
-these fields and relationships:
+Once Discovery, Research, and any required bounded Human decisions are ready,
+invoke the active named resource directly:
 
-- unique acceptance-criterion, verification, WorkUnit, and decision IDs
-- every referenced ID exists
-- dependency-free WorkUnits use `dependsOn: []`
-- non-empty `finalVerificationIds`
-- valid WorkUnit write scopes
-- no dependencies between parallel lane WorkUnits
-- no unresolved decisions for Plan Review
+```js
+subagent({
+  workflow: "pi-workflow.planning",
+  args: {
+    round: 1,
+    // Add bounded humanInputs/feedbackRef only when each is present.
+  },
+  missionId,
+  cwd,
+  async: false,
+});
+```
 
-The native `outputSchema` validates schema shape. Immediately after receiving
-that structured result, also perform semantic cross-reference validation. If
-semantic validation fails, return the exact validation errors to the
-Planning reviewer and run one automatic correction at most. Revalidate the
-corrected result with both gates. If it is still invalid, stop with an explicit
-`planning-invalid` failure, update the Mission to `needs_decision` when owner
-intervention is required, and do not call Plan Review. Never add a generic retry
-framework or a second automatic correction.
+Omit optional `humanInputs` and `feedbackRef` when they are not present. Do not
+add `task`, Discovery/Research bodies, `discoveryRef`, `researchRef`,
+`planningDecision`, Plan prose, `outputSchema`, `outputPath`, or
+`workflowScript`. The resource owns the schema, child policy, Artifact location,
+and all workflow code.
 
-Do not parse reviewer prose as a plan. `pi_workflow_plan_review` performs the
-canonical schema and semantic validation again and is the approval boundary.
-After a valid Planning workflow returns, normalize the Mission to native
-`active` before entering the Human Plan Gate.
+The Planning resource resolves `discoveryRef`, `discoveryMeta`, the resolved
+Research state (`completed` with `researchRef` or explicit `skipped`), bounded
+`humanDecisions`, and any same-Mission feedback Reference internally. Missing
+Research state is not an implicit skip, and cross-Mission references fail
+closed. Main never reads or relays the Discovery or Research Artifact bodies.
 
-## Human Plan Gate
+Planning uses a fresh built-in `reviewer` with `skill: "pi-planning"` and
+explicit `async: false`. Its resource-owned `PlanningDecisionV1` schema is
+bounded and its result passes schema, UTF-8, aggregate-size, and existing
+semantic validation. One automatic semantic/byte correction is allowed inside
+the resource; a second invalid result fails closed. Do not parse reviewer prose
+as a plan or construct correction prompts in Main.
 
-For `phase: "planning"`, `pi_workflow_prepare_phase` injects the package-owned
-`PlanningDecisionSchema`; do not hand-author, replace, or edit that schema in
-Main.
+On success the resource deterministically renders the canonical human-readable
+Plan, stores it as a resource-owned file-backed Artifact, writes only its
+bounded `planRef` and `planningDecision` to the same Mission state, and returns
+only a compact result. The Plan body is not placed in Mission state or
+`workflow.value`. `PlanningDecisionV1` may remain visible as bounded native
+structured output under the S2 policy; it is not the Plan Artifact.
 
-The planning phase's `outputSchema` must describe the complete
-`PlanningDecisionV1` contract: `version`, `requestSummary`, `scope.inScope`,
-`scope.outOfScope`, `acceptanceCriteria[{id,text}]`, `constraints`, `risks`,
-`verification[{id,description,command,timeoutMs?}]`,
-`implementation.mode`, `implementation.workUnits[{id,title,objective,dependsOn,writeScope,acceptanceCriteriaIds,focusedVerificationIds}]`,
-`implementation.finalVerificationIds`, and
-`unresolvedDecisions[{id,question,reason}]`. Set `additionalProperties: false`
-for every object, make `workUnits` and `finalVerificationIds` non-empty, and
-make `version` exactly `1`. JSON Schema cannot express all reference and
-uniqueness rules; `pi_workflow_plan_review` is the authoritative semantic
-validator.
+Unit 5 ends after `planRef` is available. The Planning resource does not invoke
+Plannotator, `pi_workflow_plan_review`, `ask_user_question`, or approval logic.
+Do not start Implementation or close the Mission from this path.
 
-Before waiting for Plan Review, set the native Mission to `waiting` with
-`mission.update`; this is a Human approval wait, not a terminal workflow state.
-Call `pi_workflow_plan_review` with `missionId`, the complete
-`planningDecision`, and a positive `round`. The tool deterministically renders
-`plan.md` and writes it under:
+## Deferred Human Plan Gate (Unit 6)
 
-`.pi/pi-workflow/<missionId>/plan-r<round>.md`
-
-It then uses only Plannotator's shared event API:
-
-- `plannotator:request` with `action: "plan-review"`
-- `plannotator:review-result`
-- `plannotator:request` with `action: "review-status"` for recovery
-
-Only an explicit boolean `approved: true` is approval. `false`, unavailable,
-error, cancel, close, timeout, missing, malformed, or mismatched results are
-not approval. A rejection returns its feedback to a new Planning round; first
-restore the current Mission to native `active`, retain the current Mission, and
-do not create a second Mission. Human rejection feedback is not an automatic
-machine-invalid correction and does not consume that correction count. Keep the
-re-plan loop bounded: allow at most three total Plan Review rounds, then stop
-and report the last feedback for a Main/Human decision. Never auto-approve or
-fall back to `ask_user_question`.
-
-After explicit Plan approval, restore the Mission to native `active` and report
-the approved plan. Step 2 must not call `mission.close`; implementation,
-verification, review, and final Human Code Review remain outstanding.
-
-If a pending review may have crossed a restart or event race, query
-`review-status` using its `reviewId` before creating another review. A completed
-status with explicit `approved: true` is authoritative; never duplicate a
-pending browser review merely because the event was missed.
+Plan Review remains a Main-only Unit 6 concern. Do not migrate or invoke the
+current Plan Review tool as part of Unit 5. Unit 6 will replace its legacy
+full-decision/full-path interface with the small `missionId` + `round` +
+`planRef` contract and will own explicit Plannotator approval.
 
 ## Completion of this flow
 
-Report the approved `planPath`, `reviewId`, Mission ID, and any feedback. Do not
-start implementation or close the Mission as terminal success; those belong to
-later Steps. If a phase, native child, event bridge, or capability fails, retain
-the exact failure and stop under the same protocol. A phase-run terminal status
-must not be reported as pi-workflow completion; only the final successful flow
-may use native `mission.close`.
+Report the compact Planning result, `planRef`, and Mission ID. Do not report or
+relay the Plan body. Do not start Plan Review, Implementation, Verification,
+Review, or close the Mission; those belong to later Units. If a prerequisite,
+native child, Artifact command, or state update fails, retain the exact failure
+and stop under the same protocol. A phase-run terminal status must not be
+reported as pi-workflow completion.

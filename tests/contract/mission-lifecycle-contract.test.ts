@@ -39,18 +39,19 @@ describe("native Mission lifecycle contract", () => {
     expect(skill).toContain('action: "mission.update"');
     expect(skill).toContain('missionUpdate: { status: "active" }');
     expect(skill).toContain("after Discovery, optional Research, and");
-    expect(skill).toContain("After a valid Planning workflow returns");
+    expect(skill).toContain("Unit 5 ends after `planRef` is available");
   });
 
-  it("uses waiting only for the Human Plan approval gate", () => {
+  it("keeps Human clarification Main-only and defers Plan approval", () => {
     expect(skill).toContain('missionUpdate: { status: "waiting" }');
-    expect(skill).toContain("Before waiting for Plan Review");
-    expect(skill).toContain("restore the current Mission to native `active`");
+    expect(skill).toContain("### Main-only Human clarification");
+    expect(skill).toContain("Deferred Human Plan Gate (Unit 6)");
+    expect(skill).not.toContain("Before waiting for Plan Review");
   });
 
-  it("does not finalize the Mission during Step 2", () => {
-    expect(skill).toContain("Step 2 must not call `mission.close`");
-    expect(skill).toContain("only the final successful flow");
+  it("does not finalize the Mission during Unit 5", () => {
+    expect(skill).toContain("Do not start Plan Review");
+    expect(skill).toContain("close the Mission");
   });
 
   it("guards recovery from transient phase completion", () => {

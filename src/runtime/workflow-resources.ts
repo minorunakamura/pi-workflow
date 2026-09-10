@@ -1,4 +1,8 @@
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import {
@@ -9,6 +13,7 @@ import {
   MAX_RESOURCE_ARGS_BYTES,
   ResourceArgsSchemas,
   type DiscoveryArgsV1,
+  type PlanningArgsV1,
   type ResearchArgsV1,
   type ResourceArgsPhase,
   validateResourceArgs,
@@ -32,6 +37,13 @@ import {
   MissionStateSchema,
 } from "../core/state/contracts";
 import { MAX_JSON_DEPTH } from "../core/validation";
+import { PlanningDecisionSchema } from "../core/planning/planning-decision-schema";
+import {
+  MAX_PLANNING_COMMAND_BYTES,
+  MAX_PLANNING_DECISION_BYTES,
+  MAX_PLANNING_IDENTIFIER_BYTES,
+  MAX_PLANNING_TEXT_BYTES,
+} from "../core/planning/planning-decision";
 import {
   registerWorkflowResource,
   type RegisterWorkflowResourceInput,
@@ -60,6 +72,55 @@ const DISCOVERY_RESOURCE_START = "/* pi-workflow: discovery-resource:start */";
 const DISCOVERY_RESOURCE_END = "/* pi-workflow: discovery-resource:end */";
 const RESEARCH_RESOURCE_START = "/* pi-workflow: research-resource:start */";
 const RESEARCH_RESOURCE_END = "/* pi-workflow: research-resource:end */";
+const PLANNING_RESOURCE_START = "/* pi-workflow: planning-resource:start */";
+const PLANNING_RESOURCE_END = "/* pi-workflow: planning-resource:end */";
+const PLANNING_DECISION_INPUT_DIR = join(tmpdir(), "pi-workflow");
+const PLANNING_DECISION_INPUT_BASENAME = "planning-decision.json";
+const PLAN_ARTIFACT_HOST_KEY = "plan-artifact";
+const PLAN_RENDERER_PATH = fileURLToPath(
+  new URL("./plan-artifact.js", import.meta.url),
+);
+
+function shellQuote(value: string): string {
+  if (process.platform === "win32") return `"${value.replaceAll('"', '\\"')}"`;
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+interface PlanningArtifactBinding {
+  decisionInputPath: string;
+  correctionDecisionInputPath: string;
+  planArtifactPath: string;
+  rendererCommand: string;
+}
+
+function createPlanningArtifactBinding(): PlanningArtifactBinding {
+  const token = randomUUID();
+  const decisionInputPath = join(
+    PLANNING_DECISION_INPUT_DIR,
+    `planning-decision-${token}-${PLANNING_DECISION_INPUT_BASENAME}`,
+  );
+  const correctionDecisionInputPath = join(
+    PLANNING_DECISION_INPUT_DIR,
+    `planning-decision-${token}-correction-${PLANNING_DECISION_INPUT_BASENAME}`,
+  );
+  const planArtifactPath = join(
+    PLANNING_DECISION_INPUT_DIR,
+    `plan-${token}.md`,
+  );
+  return {
+    decisionInputPath,
+    correctionDecisionInputPath,
+    planArtifactPath,
+    rendererCommand: [
+      shellQuote("node"),
+      shellQuote(PLAN_RENDERER_PATH),
+      "--output",
+      shellQuote(planArtifactPath),
+      shellQuote(decisionInputPath),
+      shellQuote(correctionDecisionInputPath),
+    ].join(" "),
+  };
+}
 
 function resourceWorkflowTemplate(
   path: string,
@@ -94,6 +155,15 @@ function researchWorkflowTemplate(): string {
     RESEARCH_RESOURCE_START,
     RESEARCH_RESOURCE_END,
     "Research",
+  );
+}
+
+function planningWorkflowTemplate(): string {
+  return resourceWorkflowTemplate(
+    "../../workflow-scripts/planning.js",
+    PLANNING_RESOURCE_START,
+    PLANNING_RESOURCE_END,
+    "Planning",
   );
 }
 
@@ -142,6 +212,39 @@ export function buildResearchWorkflowScript(args: ResearchArgsV1): string {
     },
   };
   return `const input = ${JSON.stringify(input)};\n${researchWorkflowTemplate()}`;
+}
+
+export function buildPlanningWorkflowScript(
+  args: PlanningArgsV1,
+  binding: PlanningArtifactBinding = createPlanningArtifactBinding(),
+): string {
+  const input = {
+    [DISCOVERY_RESOURCE_MARKER]: "pi-workflow.planning",
+    ...args,
+    planningDecisionSchema: PlanningDecisionSchema,
+    missionStateSchema: MissionStateSchema,
+    stateKeys: MISSION_STATE_KEYS,
+    planningDecisionInputPath: binding.decisionInputPath,
+    correctionDecisionInputPath: binding.correctionDecisionInputPath,
+    planArtifactPath: binding.planArtifactPath,
+    planRendererCommand: binding.rendererCommand,
+    planningBounds: {
+      stateBytes: MAX_MISSION_STATE_BYTES,
+      referenceBytes: MAX_REFERENCE_BYTES,
+      identifierBytes: MAX_PLANNING_IDENTIFIER_BYTES,
+      requestBytes: MAX_REQUEST_BYTES,
+      textBytes: MAX_PLANNING_TEXT_BYTES,
+      commandBytes: MAX_PLANNING_COMMAND_BYTES,
+      humanInputs: MAX_HUMAN_INPUT_ENTRIES,
+      humanValueBytes: MAX_HUMAN_INPUT_VALUE_BYTES,
+      decisionBytes: MAX_PLANNING_DECISION_BYTES,
+      metadataBytes: MAX_DISCOVERY_METADATA_BYTES,
+      metadataItems: MAX_DISCOVERY_METADATA_ITEMS,
+      jsonDepth: MAX_JSON_DEPTH,
+      resultBytes: MAX_RESOURCE_ARGS_BYTES,
+    },
+  };
+  return `const input = ${JSON.stringify(input)};\n${planningWorkflowTemplate()}`;
 }
 
 export const WORKFLOW_RESOURCE_CONTRACTS = {
@@ -225,6 +328,27 @@ function resolveResearch(
   };
 }
 
+function resolvePlanning(
+  args: Readonly<Record<string, unknown>>,
+): ReturnType<WorkflowResourceDefinition["resolve"]> {
+  const validation = validateResourceArgs("planning", args);
+  if (!validation.ok) {
+    return {
+      error: `Invalid args for 'pi-workflow.planning': ${formatValidationIssues(validation.errors)}`,
+    };
+  }
+  const binding = createPlanningArtifactBinding();
+  return {
+    script: buildPlanningWorkflowScript(
+      validation.value as PlanningArgsV1,
+      binding,
+    ),
+    hostCommands: [
+      { key: PLAN_ARTIFACT_HOST_KEY, command: binding.rendererCommand },
+    ],
+  };
+}
+
 function notMigrated(
   name: WorkflowResourceName,
 ): WorkflowResourceDefinition["resolve"] {
@@ -251,7 +375,9 @@ export const WORKFLOW_RESOURCE_DEFINITIONS: readonly WorkflowResourceDefinition[
         ? resolveDiscovery
         : name === "pi-workflow.research"
           ? resolveResearch
-          : notMigrated(name),
+          : name === "pi-workflow.planning"
+            ? resolvePlanning
+            : notMigrated(name),
   }));
 
 function disposeAll(

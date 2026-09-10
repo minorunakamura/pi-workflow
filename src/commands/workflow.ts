@@ -18,7 +18,7 @@ export function buildWorkflowKickoff(
     `Request type: ${type}`,
     `Request: ${request}`,
     "Follow the pi-workflow Skill as the Main Session control-plane policy.",
-    "Use the model-facing subagent tool and stop after an explicit Plannotator Plan approval.",
+    "Use the model-facing subagent tool and stop after the Planning resource returns a valid planRef.",
   ].join("\n");
 }
 
