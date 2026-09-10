@@ -7,6 +7,9 @@ const packageJson = JSON.parse(
   readFileSync(`${repoRoot}/package.json`, "utf8"),
 ) as Record<string, unknown>;
 const lockfile = readFileSync(`${repoRoot}/pnpm-lock.yaml`, "utf8");
+const piSubagentsPackage = JSON.parse(
+  readFileSync(`${repoRoot}/node_modules/pi-subagents/package.json`, "utf8"),
+) as { name: string; version: string; bin?: Record<string, string> };
 const piManifest = packageJson.pi as { extensions: string[]; skills: string[] };
 
 const workflowScripts = [
@@ -37,6 +40,14 @@ describe("package contract", () => {
     expect(lockfile).toMatch(
       /pi-subagents:\n\s+specifier: 0\.66\.0\n\s+version: 0\.66\.0\(/,
     );
+  });
+
+  it("checks pi-subagents metadata without executing its package bin", () => {
+    expect(piSubagentsPackage).toMatchObject({
+      name: "pi-subagents",
+      version: "0.66.0",
+      bin: { "pi-subagents": "install.mjs" },
+    });
   });
 
   it("declares the Pi package resources", () => {

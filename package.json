@@ -13,6 +13,7 @@
     "lint": "oxlint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
+    "validate:unit5:isolated": "node scripts/validate-unit5-isolated.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"
