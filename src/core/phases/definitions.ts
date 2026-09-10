@@ -64,6 +64,7 @@ export const WORKFLOW_RESOURCE_OUTPUT_POLICIES = {
   planning: {
     artifact: LARGE_ARTIFACT_OUTPUT_POLICY,
     decision: BOUNDED_COMPACT_OUTPUT_POLICY,
+    planReview: BOUNDED_COMPACT_OUTPUT_POLICY,
   },
   implementation: {
     result: LARGE_ARTIFACT_OUTPUT_POLICY,

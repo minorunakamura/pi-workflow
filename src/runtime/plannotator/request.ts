@@ -40,6 +40,9 @@ export interface PlannotatorReviewResult {
   reviewId: string;
   approved: boolean;
   feedback?: string;
+  savedPath?: string;
+  agentSwitch?: string;
+  permissionMode?: string;
 }
 
 const NOOP = () => {};
@@ -132,9 +135,24 @@ function isReviewResult(
   reviewId: string,
 ): value is PlannotatorReviewResult {
   if (!isRecord(value) || value.reviewId !== reviewId) return false;
+  const allowedKeys = [
+    "reviewId",
+    "approved",
+    "feedback",
+    "savedPath",
+    "agentSwitch",
+    "permissionMode",
+  ];
+  if (Object.keys(value).some((key) => !allowedKeys.includes(key)))
+    return false;
   return (
     typeof value.approved === "boolean" &&
-    (value.feedback === undefined || typeof value.feedback === "string")
+    (value.feedback === undefined || typeof value.feedback === "string") &&
+    (value.savedPath === undefined || typeof value.savedPath === "string") &&
+    (value.agentSwitch === undefined ||
+      typeof value.agentSwitch === "string") &&
+    (value.permissionMode === undefined ||
+      typeof value.permissionMode === "string")
   );
 }
 

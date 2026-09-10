@@ -364,18 +364,217 @@ if (input.resource === "pi-workflow.planning") {
     if (value.discoveryMeta !== undefined) assertDiscoveryMetadata(value.discoveryMeta);
     if (value.researchMeta !== undefined) assertResearchMetadata(value.researchMeta);
     if (value.planningDecision !== undefined) assertPlanningDecision(value.planningDecision, "Mission planningDecision");
+    if (value.planReview !== undefined) assertPlanReviewBinding(value.planReview);
   }
 
-  function stateReferences(value) {
-    const references = [value.discoveryRef, value.researchRef, value.planRef, value.verificationRef];
-    if (isRecord(value.codeApproval)) references.push(value.codeApproval.feedbackRef, value.codeApproval.reviewId);
-    if (isRecord(value.implementation)) {
-      references.push(value.implementation.runId);
-      for (const lane of value.implementation.laneResults ?? []) references.push(lane.runId, lane.patchRef, lane.handoffRef);
+  function assertPlanReviewBinding(value) {
+    if (!isRecord(value) || !matchesSchema(value, input.planReviewBindingSchema)) {
+      throw new Error("Mission planReview does not match the package-owned schema.");
     }
-    for (const run of value.verificationFixRuns ?? []) references.push(run.runId, run.handoffRef);
-    if (isRecord(value.reviewRef)) references.push(value.reviewRef.correctnessRef, value.reviewRef.simplicityRef, value.reviewRef.synthesisRef);
-    return references.filter((reference) => typeof reference === "string");
+    const allowedKeys = ["version", "status", "round", "planRef", "reviewId", "feedbackRef"];
+    if (Object.keys(value).some((key) => !allowedKeys.includes(key))) {
+      throw new Error("Mission planReview contains unknown fields.");
+    }
+    if (value.version !== 1 || !["pending", "approved", "rejected"].includes(value.status)) {
+      throw new Error("Mission planReview has an invalid version or status.");
+    }
+    if (!Number.isInteger(value.round) || value.round < 1 || value.round > input.planningBounds.planReviewRounds) {
+      throw new Error("Mission planReview round is invalid.");
+    }
+    assertReference(value.planRef, "Mission planReview planRef");
+    if (value.reviewId !== undefined) assertReference(value.reviewId, "Mission planReview reviewId");
+    if (value.feedbackRef !== undefined) assertReference(value.feedbackRef, "Mission planReview feedbackRef");
+    if (value.status === "pending" && value.feedbackRef !== undefined) {
+      throw new Error("Pending Plan Review must not have a feedbackRef.");
+    }
+    if (value.status !== "pending" && value.reviewId === undefined) {
+      throw new Error("Terminal Plan Review requires a reviewId.");
+    }
+    if (value.status === "rejected" && value.feedbackRef === undefined) {
+      throw new Error("Rejected Plan Review requires a feedbackRef.");
+    }
+    if (value.status === "approved" && value.feedbackRef !== undefined) {
+      throw new Error("Approved Plan Review must not have a feedbackRef.");
+    }
+    assertJson(value, "Mission planReview", input.planningBounds.planReviewBindingBytes);
+  }
+
+  function compactPlanReview(value) {
+    assertPlanReviewBinding(value);
+    const result = {
+      status: value.status,
+      round: value.round,
+      planRef: value.planRef,
+      ...(value.reviewId === undefined ? {} : { reviewId: value.reviewId }),
+      ...(value.feedbackRef === undefined ? {} : { feedbackRef: value.feedbackRef }),
+    };
+    assertJson(result, "Plan Review result", input.planningBounds.resultBytes);
+    return result;
+  }
+
+  function assertPlanReviewBase(value, planRef, round) {
+    if (value.planRef === undefined) throw new Error("Plan Review requires the current Mission planRef.");
+    assertReference(value.planRef, "Mission planRef");
+    assertReference(planRef, "supplied planRef");
+    if (value.planRef !== planRef) throw new Error("Plan Review planRef does not match the current Mission.");
+    const preparingReplan =
+      value.phase === "planning" &&
+      value.planReview !== undefined &&
+      value.planReview.status === "pending" &&
+      value.planReview.reviewId === undefined &&
+      value.planReview.round === round &&
+      value.planReview.planRef === planRef;
+    if (value.phase !== "plan-review" && !preparingReplan) {
+      throw new Error("Plan Review requires the Mission to be in the plan-review phase.");
+    }
+    if (value.planningDecision === undefined) throw new Error("Plan Review requires the current PlanningDecisionV1.");
+    assertPlanningDecision(value.planningDecision, "Mission planningDecision");
+    if (value.planningDecision.unresolvedDecisions.length > 0) {
+      throw new Error("Plan Review requires all unresolved decisions to be resolved.");
+    }
+  }
+
+  function readPlanReviewState(value) {
+    assertMissionState(value, false);
+  }
+
+  const operation = input.operation ?? "plan";
+  if (operation !== "plan") {
+    const controlState = {};
+    for (const key of stateKeys) {
+      const value = await state.get(key);
+      if (value !== undefined) controlState[key] = value;
+    }
+    for (const key of [
+      "discovery",
+      "research",
+      "planning",
+      "planningCorrectionCount",
+      "report",
+      "artifactBody",
+      "plan",
+      "planBody",
+      "planPath",
+      "planContent",
+      "planMarkdown",
+      "feedback",
+      "feedbackBody",
+      "feedbackText",
+      "plannotatorResult",
+      "browserTranscript",
+      "eventPayload",
+    ]) {
+      if ((await state.get(key)) !== undefined) throw new Error(`Mission contains unsupported Planning state '${key}'.`);
+    }
+    readPlanReviewState(controlState);
+    assertPlanReviewBase(controlState, input.planRef, input.round);
+
+    const binding = controlState.planReview;
+    if (binding === undefined && input.round !== 1) {
+      throw new Error("Plan Review has no current round binding.");
+    }
+    if (operation === "prepare-review") {
+      if (binding === undefined) {
+        const pending = {
+          version: 1,
+          status: "pending",
+          round: input.round,
+          planRef: input.planRef,
+        };
+        const nextState = {
+          ...controlState,
+          version: controlState.version === undefined ? 1 : controlState.version,
+          planReview: pending,
+        };
+        assertMissionState(nextState, true);
+        if (controlState.version === undefined) await state.set("version", 1);
+        await state.set("planReview", pending);
+        return {
+          status: "ready",
+          round: input.round,
+          planRef: input.planRef,
+        };
+      }
+
+      if (binding.planRef === input.planRef && binding.round === input.round) {
+        if (binding.status === "pending" && binding.reviewId === undefined) {
+          if (controlState.phase !== "planning") {
+            throw new Error("Plan Review has an incomplete pending binding; recovery needs a decision.");
+          }
+          const nextState = {
+            ...controlState,
+            version: controlState.version === undefined ? 1 : controlState.version,
+            phase: "plan-review",
+          };
+          assertMissionState(nextState, true);
+          if (controlState.version === undefined) await state.set("version", 1);
+          await state.set("phase", "plan-review");
+          return {
+            status: "ready",
+            round: input.round,
+            planRef: input.planRef,
+          };
+        }
+        if (binding.reviewId === undefined) {
+          throw new Error("Plan Review terminal binding is missing reviewId.");
+        }
+        return compactPlanReview(binding);
+      }
+
+      throw new Error("Plan Review binding is stale or does not match the current round and plan.");
+    }
+
+    if (operation === "review-status") {
+      if (binding === undefined) throw new Error("Plan Review status requires a prepared binding.");
+      if (binding.planRef !== input.planRef || binding.round !== input.round) {
+        throw new Error("Plan Review status does not match the current round and plan.");
+      }
+      if (binding.reviewId === undefined) {
+        throw new Error("Plan Review status cannot recover without a reviewId.");
+      }
+      return compactPlanReview(binding);
+    }
+
+    if (binding === undefined) throw new Error("Plan Review record requires a prepared binding.");
+    if (binding.planRef !== input.planRef || binding.round !== input.round) {
+      throw new Error("Plan Review record does not match the current round and plan.");
+    }
+    if (binding.status !== "pending") {
+      throw new Error("Plan Review status transition is invalid from a terminal state.");
+    }
+    if (controlState.phase !== "plan-review") {
+      throw new Error("Plan Review record requires a completed prepare-review operation.");
+    }
+    assertReference(input.reviewId, "Plan Review reviewId");
+    if (binding.reviewId !== undefined && binding.reviewId !== input.reviewId) {
+      throw new Error("Plan Review reviewId does not match the current binding.");
+    }
+    if (input.status === "rejected") {
+      if (input.feedbackRef === undefined) {
+        throw new Error("Rejected Plan Review requires a feedbackRef.");
+      }
+      assertReference(input.feedbackRef, "Plan Review feedbackRef");
+    } else if (input.feedbackRef !== undefined) {
+      throw new Error("feedbackRef is only valid for a rejected Plan Review.");
+    }
+
+    const nextBinding = {
+      version: 1,
+      status: input.status,
+      round: input.round,
+      planRef: input.planRef,
+      reviewId: input.reviewId,
+      ...(input.feedbackRef === undefined ? {} : { feedbackRef: input.feedbackRef }),
+    };
+    const nextState = {
+      ...controlState,
+      version: controlState.version === undefined ? 1 : controlState.version,
+      planReview: nextBinding,
+    };
+    assertMissionState(nextState, true);
+    if (controlState.version === undefined) await state.set("version", 1);
+    await state.set("planReview", nextBinding);
+    return compactPlanReview(nextBinding);
   }
 
   const existingState = {};
@@ -393,6 +592,14 @@ if (input.resource === "pi-workflow.planning") {
     "plan",
     "planBody",
     "planPath",
+    "planContent",
+    "planMarkdown",
+    "feedback",
+    "feedbackBody",
+    "feedbackText",
+    "plannotatorResult",
+    "browserTranscript",
+    "eventPayload",
   ]) {
     if ((await state.get(key)) !== undefined) throw new Error(`Mission contains unsupported Planning state '${key}'.`);
   }
@@ -432,11 +639,26 @@ if (input.resource === "pi-workflow.planning") {
     throw new Error("Planning requires valid bounded humanDecisions for the required clarification.");
   }
 
+  if (input.round > 1 && input.feedbackRef === undefined) {
+    throw new Error("Planning rounds after the first require the previous rejected Plan Review feedbackRef.");
+  }
   if (input.feedbackRef !== undefined) {
     assertReference(input.feedbackRef, "Planning feedbackRef");
-    if (!stateReferences(existingState).includes(input.feedbackRef)) {
-      throw new Error("Planning feedbackRef must already be a Reference owned by the same Mission.");
+    const previous = existingState.planReview;
+    if (
+      input.round <= 1 ||
+      previous === undefined ||
+      previous.status !== "rejected" ||
+      previous.round !== input.round - 1 ||
+      previous.planRef !== existingState.planRef ||
+      previous.reviewId === undefined ||
+      previous.feedbackRef !== input.feedbackRef
+    ) {
+      throw new Error("Planning feedbackRef must be bound to the previous rejected Plan Review in the same Mission.");
     }
+  }
+  if (input.round === 1 && existingState.planReview !== undefined) {
+    throw new Error("Planning cannot replace an existing Plan Review in the same round.");
   }
 
   const context = [
@@ -523,17 +745,27 @@ if (input.resource === "pi-workflow.planning") {
     throw new Error("Plan Artifact generation produced an empty Artifact.");
   }
 
+  const nextPlanReview =
+    input.round > 1
+      ? {
+          version: 1,
+          status: "pending",
+          round: input.round,
+          planRef: input.planArtifactPath,
+        }
+      : existingState.planReview;
   const nextState = {
     ...existingState,
     version: existingState.version === undefined ? 1 : existingState.version,
     ...(humanDecisions === undefined ? {} : { humanDecisions }),
     planningDecision,
     planRef: input.planArtifactPath,
-    phase: "plan-review",
+    ...(nextPlanReview === undefined ? {} : { planReview: nextPlanReview }),
+    phase: input.round > 1 ? "planning" : "plan-review",
   };
   assertMissionState(nextState, true);
 
-  for (const key of ["version", "humanDecisions", "planningDecision", "planRef", "phase"]) {
+  for (const key of ["version", "humanDecisions", "planningDecision", "planRef", "planReview", "phase"]) {
     if (nextState[key] !== undefined && existingState[key] !== nextState[key]) await state.set(key, nextState[key]);
   }
 

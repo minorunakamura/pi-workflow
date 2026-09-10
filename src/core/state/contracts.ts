@@ -32,6 +32,7 @@ export {
   MAX_HUMAN_INPUT_VALUE_BYTES,
   MAX_IDENTIFIER_BYTES,
   MAX_MISSION_STATE_BYTES,
+  MAX_PLAN_REVIEW_ROUNDS,
   MAX_REGULAR_TEXT_BYTES,
   MAX_REQUEST_BYTES,
   MAX_VERIFICATION_FIX_ROUNDS,
@@ -47,6 +48,7 @@ const RequestText = () =>
 
 export const MAX_DISCOVERY_METADATA_BYTES = 8 * 1024;
 export const MAX_RESEARCH_METADATA_BYTES = 8 * 1024;
+export const MAX_PLAN_REVIEW_BINDING_BYTES = 8 * 1024;
 export const MAX_DISCOVERY_METADATA_ITEMS = 8;
 export const MAX_RESEARCH_QUESTIONS = 8;
 export const MAX_IMPLEMENTATION_LANE_RESULTS = 32;
@@ -244,6 +246,22 @@ export const CodeApprovalSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const PlanReviewBindingSchema = Type.Object(
+  {
+    version: Type.Literal(1),
+    status: Type.Union([
+      Type.Literal("pending"),
+      Type.Literal("approved"),
+      Type.Literal("rejected"),
+    ]),
+    round: Type.Union([Type.Literal(1), Type.Literal(2), Type.Literal(3)]),
+    planRef: ReferenceValueSchema,
+    reviewId: Type.Optional(ReferenceValueSchema),
+    feedbackRef: Type.Optional(ReferenceValueSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const MissionStateSchema = Type.Object(
   {
     version: Type.Literal(1),
@@ -262,6 +280,7 @@ export const MissionStateSchema = Type.Object(
       // Keeping the same schema here prevents a second state-only shape.
       PlanningDecisionSchema,
     ),
+    planReview: Type.Optional(PlanReviewBindingSchema),
     implementation: Type.Optional(ImplementationStateSchema),
     verificationRef: Type.Optional(ReferenceValueSchema),
     verificationStatus: Type.Optional(VerificationStatusSchema),
@@ -294,6 +313,7 @@ export type VerificationStatusV1 = Static<typeof VerificationStatusSchema>;
 export type VerificationFixRunV1 = Static<typeof VerificationFixRunSchema>;
 export type ReviewReferenceIndexV1 = Static<typeof ReviewReferenceIndexSchema>;
 export type CodeApprovalV1 = Static<typeof CodeApprovalSchema>;
+export type PlanReviewBindingV1 = Static<typeof PlanReviewBindingSchema>;
 export type MissionStateV1 = Static<typeof MissionStateSchema>;
 
 function utf8Issue(
@@ -553,6 +573,59 @@ export function validateCodeApproval(
   return boundedSchemaResult(CodeApprovalSchema, value, codeApprovalIssues);
 }
 
+function planReviewBindingIssues(
+  value: PlanReviewBindingV1,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [
+    ...referenceIssues("/planRef", value.planRef),
+  ];
+  if (value.reviewId !== undefined) {
+    issues.push(...referenceIssues("/reviewId", value.reviewId));
+  }
+  if (value.feedbackRef !== undefined) {
+    issues.push(...referenceIssues("/feedbackRef", value.feedbackRef));
+  }
+  if (value.status === "pending") {
+    if (value.feedbackRef !== undefined) {
+      issues.push({
+        path: "/feedbackRef",
+        message: "pending Plan Review must not have a feedbackRef",
+      });
+    }
+  } else {
+    if (value.reviewId === undefined) {
+      issues.push({
+        path: "/reviewId",
+        message: "terminal Plan Review requires a reviewId",
+      });
+    }
+    if (value.status === "rejected" && value.feedbackRef === undefined) {
+      issues.push({
+        path: "/feedbackRef",
+        message: "rejected Plan Review requires a feedbackRef",
+      });
+    }
+    if (value.status === "approved" && value.feedbackRef !== undefined) {
+      issues.push({
+        path: "/feedbackRef",
+        message: "approved Plan Review must not have a feedbackRef",
+      });
+    }
+  }
+  return issues;
+}
+
+export function validatePlanReviewBinding(
+  value: unknown,
+): ValidationResult<PlanReviewBindingV1> {
+  return boundedSchemaResult(
+    PlanReviewBindingSchema,
+    value,
+    planReviewBindingIssues,
+    MAX_PLAN_REVIEW_BINDING_BYTES,
+  );
+}
+
 function missionStateNestedIssues(value: MissionStateV1): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (value.request !== undefined) {
@@ -617,6 +690,10 @@ function missionStateNestedIssues(value: MissionStateV1): ValidationIssue[] {
     const result = validateCodeApproval(value.codeApproval);
     if (!result.ok)
       issues.push(...prefixIssues("/codeApproval", result.errors));
+  }
+  if (value.planReview !== undefined) {
+    const result = validatePlanReviewBinding(value.planReview);
+    if (!result.ok) issues.push(...prefixIssues("/planReview", result.errors));
   }
   return issues;
 }

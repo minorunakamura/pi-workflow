@@ -269,16 +269,171 @@ Do not start Implementation or close the Mission from this path.
 
 ## Deferred Human Plan Gate (Unit 6)
 
-Plan Review remains a Main-only Unit 6 concern. Do not migrate or invoke the
-current Plan Review tool as part of Unit 5. Unit 6 will replace its legacy
-full-decision/full-path interface with the small `missionId` + `round` +
-`planRef` contract and will own explicit Plannotator approval.
+Unit 5 stops after the Planning resource returns a canonical `planRef`. Unit 6
+continues from that reference, but remains a Main-only Human Gate. Main is the
+sole authority for starting Plannotator, interpreting its result, advancing the
+phase, and deciding whether to re-plan. Main never calls native Mission
+`state.get` or `state.set`; the Planning resource owns those operations.
+
+### Prepare the Plan Review
+
+Before every Plan Review start, call the existing Planning resource with its
+control operation:
+
+```js
+subagent({
+  workflow: "pi-workflow.planning",
+  args: {
+    operation: "prepare-review",
+    round,
+    planRef,
+  },
+  missionId,
+  cwd,
+  async: false,
+});
+```
+
+This operation launches zero children. It validates the same-Mission current
+`planRef`, exact round, valid `PlanningDecisionV1`, empty
+`unresolvedDecisions`, and the existing `planReview` binding. A `ready` result
+is the only permission to start a new review. A `pending` or terminal result is
+handled as recovery; never start a second review. Missing state, stale refs,
+wrong round, invalid state, or a failed `state.set` is fail-closed.
+
+### Main-facing Plan Review bridge
+
+When `prepare-review` returns `ready`, set the native Mission to `waiting` while
+Human review is in progress, then call the Main-only
+`pi_workflow_plan_review` Tool with exactly:
+
+```json
+{
+  "missionId": "<native Mission ID>",
+  "round": 1,
+  "planRef": "<validated canonical Plan Artifact reference>"
+}
+```
+
+Do not pass `planningDecision`, `planContent`, `planBody`, `planMarkdown`,
+`planPath`, `feedbackText`, `feedbackBody`, `outputPath`, `workflowScript`, or
+any unknown field. The bridge reads only the explicitly supplied `planRef`,
+verifies it is a regular readable file, and supplies its body transiently to
+the current Plannotator `planContent` input. It never searches for the latest Plan, guesses a path,
+re-renders a decision, or returns the Plan body to Main. `savedPath` is not the
+canonical feedback reference.
+
+Only `approved === true` is approval. A valid `approved: false` result is an
+explicit rejection only when the bridge has written its feedback to a
+package-owned Feedback Artifact and returned a bounded `feedbackRef`. Missing
+`approved`, cancellation, timeout, unavailable, malformed result, transport
+failure, unreadable Plan Artifact, or Feedback Artifact failure is not
+rejection and must not trigger automatic re-planning.
+
+When the bridge returns, restore the native Mission to `active` only after its
+result is valid. If it failed, leave the Mission in an explicit fail-closed /
+`needs_decision` state. When the bridge has a `reviewId`, persist
+`status: "pending"` through the Planning resource before interpreting its
+terminal result. Persist only the compact status/reference values; never copy
+the Plan or feedback body. Then record the terminal result. First persist pending:
+
+```js
+subagent({
+  workflow: "pi-workflow.planning",
+  args: { operation: "record-review", round, planRef, reviewId, status: "pending" },
+  missionId,
+  cwd,
+  async: false,
+});
+```
+
+For an approval, persist the terminal status:
+
+```js
+subagent({
+  workflow: "pi-workflow.planning",
+  args: { operation: "record-review", round, planRef, reviewId, status: "approved" },
+  missionId,
+  cwd,
+  async: false,
+});
+```
+
+For an explicit rejection, include only the bridge's `feedbackRef`:
+
+```js
+subagent({
+  workflow: "pi-workflow.planning",
+  args: {
+    operation: "record-review",
+    round,
+    planRef,
+    reviewId,
+    status: "rejected",
+    feedbackRef,
+  },
+  missionId,
+  cwd,
+  async: false,
+});
+```
+
+`record-review` launches zero children. It revalidates current `planRef`,
+round, `reviewId`, status transition, and the bounded feedback reference. It
+does not decide what approval or rejection means. A state write failure means
+that no phase advancement or re-plan succeeded.
+
+### Re-plan and recovery
+
+When rejection is explicit and `round < 3`, reuse the same Planning resource:
+
+```js
+subagent({
+  workflow: "pi-workflow.planning",
+  args: { round: round + 1, feedbackRef },
+  missionId,
+  cwd,
+  async: false,
+});
+```
+
+The omitted `operation` is still `plan`, so the Unit 5 `{ round: 1 }`
+invocation remains valid. The next Planning round receives only `feedbackRef`,
+never the feedback body. Round 1 may launch round 2 and round 2 may launch
+round 3. A round 3 rejection stops in the canonical fail-closed/
+`needs_decision` state; never launch round 4, silently reset the round, or
+invoke `pi-workflow.implementation`.
+
+For recovery, first call Planning `review-status` with the current round and
+`planRef`:
+
+```js
+subagent({
+  workflow: "pi-workflow.planning",
+  args: { operation: "review-status", round, planRef },
+  missionId,
+  cwd,
+  async: false,
+});
+```
+
+This zero-child operation returns only Mission-bound `status`, `round`,
+`planRef`, `reviewId`, and optional `feedbackRef`. Main then asks the bridge to
+call Plannotator `review-status(reviewId)` and interprets the result. Pending
+bindings prevent a duplicate start. Missing `reviewId`, incomplete or stale
+binding, cross-Mission/cross-round/cross-Plan evidence, or an unrecoverable
+start/persistence crash window fails closed without a replacement review.
+Never use a latest/global result or a private Mission API.
+
+Unit 6 completion is an approved Plan state established through
+`record-review(status: "approved")`. Stop there. Do not start the
+Implementation, Verification, Verification Fix, Automated Review, Code Review,
+or Mission success close phases from this Skill path.
 
 ## Completion of this flow
 
-Report the compact Planning result, `planRef`, and Mission ID. Do not report or
-relay the Plan body. Do not start Plan Review, Implementation, Verification,
-Review, or close the Mission; those belong to later Units. If a prerequisite,
-native child, Artifact command, or state update fails, retain the exact failure
-and stop under the same protocol. A phase-run terminal status must not be
-reported as pi-workflow completion.
+Report the compact Planning/Plan Review result, `planRef`, review status, and
+Mission ID. Do not report or relay the Plan body or feedback body. If a
+prerequisite, bridge call, native child, Artifact command, or state update
+fails, retain the exact failure and stop under the same protocol. A phase-run
+terminal status must not be reported as pi-workflow completion.

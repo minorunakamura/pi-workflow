@@ -1,48 +1,58 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPlanReviewTool } from "../../src/tools/plan-review";
 import { registerTools } from "../../src/tools";
 
-const decision = {
-  version: 1 as const,
-  requestSummary: "Add a search endpoint.",
-  scope: { inScope: ["endpoint"], outOfScope: ["UI"] },
-  acceptanceCriteria: [{ id: "ac-1", text: "Search works." }],
-  constraints: [],
-  risks: [],
-  verification: [
-    { id: "verify-1", description: "Tests pass.", command: "pnpm test" },
-  ],
-  implementation: {
-    mode: "single" as const,
-    workUnits: [
-      {
-        id: "unit-1",
-        title: "Implement endpoint",
-        objective: "Add endpoint.",
-        dependsOn: [],
-        writeScope: ["src/api.ts"],
-        acceptanceCriteriaIds: ["ac-1"],
-        focusedVerificationIds: ["verify-1"],
-      },
-    ],
-    finalVerificationIds: ["verify-1"],
-  },
-  unresolvedDecisions: [],
-};
+async function planFile(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "pi-workflow-tool-plan-"));
+  const path = join(directory, "plan.md");
+  await writeFile(path, "# Plan\n\ncanonical\n", "utf8");
+  return path;
+}
 
 describe("pi_workflow_plan_review", () => {
-  it("exposes the declared input contract", () => {
+  it("exposes only the reference-centric input contract", () => {
     const tool = createPlanReviewTool({} as never);
 
     expect(Object.keys(tool.parameters.properties)).toEqual([
       "missionId",
-      "planningDecision",
       "round",
+      "planRef",
     ]);
     expect(tool.parameters.additionalProperties).toBe(false);
   });
 
-  it("registers beside the phase preparation tool", () => {
+  it("rejects body, path, script, and unknown fields", async () => {
+    const tool = createPlanReviewTool({} as never);
+    for (const field of [
+      "planningDecision",
+      "planContent",
+      "planPath",
+      "feedbackText",
+      "outputPath",
+      "workflowScript",
+      "unknown",
+    ]) {
+      await expect(
+        tool.execute(
+          "tool-call",
+          {
+            missionId: "mission-tool",
+            round: 1,
+            planRef: "plan-ref",
+            [field]: "not allowed",
+          } as never,
+          new AbortController().signal,
+          undefined,
+          { cwd: "/tmp" } as never,
+        ),
+      ).rejects.toThrow("unknown fields");
+    }
+  });
+
+  it("registers beside the deferred legacy phase preparation tool", () => {
     const registered: unknown[] = [];
     registerTools({
       registerTool: (tool: unknown) => registered.push(tool),
@@ -54,13 +64,15 @@ describe("pi_workflow_plan_review", () => {
     ]);
   });
 
-  it("delegates execution to the runtime boundary", async () => {
+  it("delegates execution without transporting a PlanningDecision or Plan body", async () => {
+    const planRef = await planFile();
     const responses: unknown[] = [];
     const tool = createPlanReviewTool({
       events: {
         emit: (_channel: string, data: unknown) => {
           const request = data as {
             action: string;
+            payload: Record<string, unknown>;
             respond: (response: unknown) => void;
           };
           responses.push(request.action);
@@ -86,13 +98,18 @@ describe("pi_workflow_plan_review", () => {
 
     const result = await tool.execute(
       "tool-call",
-      { missionId: "mission-tool", planningDecision: decision, round: 1 },
+      { missionId: "mission-tool", round: 1, planRef },
       new AbortController().signal,
       undefined,
       { cwd: "/tmp" } as never,
     );
 
-    expect(result.details).toMatchObject({ approved: true });
+    expect(result.details).toEqual({
+      approved: true,
+      reviewId: "tool-review",
+      planRef,
+    });
+    expect(JSON.stringify(result.details)).not.toContain("canonical");
     expect(responses).toEqual(["plan-review", "review-status"]);
   });
 });

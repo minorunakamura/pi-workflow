@@ -9,6 +9,7 @@ import {
   validateMissionState,
   type MissionStateV1,
 } from "../../src/core/state/contracts";
+import { validateResourceArgs } from "../../src/core/phases/args";
 import {
   validatePlanningDecision,
   type PlanningDecisionV1,
@@ -140,6 +141,17 @@ function missionState(
   };
 }
 
+function planState(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return missionState({
+    planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+    planningDecision: validDecision,
+    phase: "plan-review",
+    ...overrides,
+  });
+}
+
 function hostResult(overrides: Partial<HostResult> = {}): HostResult {
   return {
     key: "plan-artifact",
@@ -210,9 +222,16 @@ async function rejectedExecution(
   initialState = missionState(),
   args: Record<string, unknown> = { round: 1 },
   artifactResult = hostResult(),
+  failSetKey?: string,
 ): Promise<Error & Partial<Execution>> {
   try {
-    await executePlanning(results, initialState, args, artifactResult);
+    await executePlanning(
+      results,
+      initialState,
+      args,
+      artifactResult,
+      failSetKey,
+    );
   } catch (error) {
     return error as Error & Partial<Execution>;
   }
@@ -359,6 +378,320 @@ describe("Planning named resource contract", () => {
   });
 });
 
+describe("Plan Review control operations", () => {
+  it("prepares a review without launching any child", async () => {
+    const execution = await executePlanning([], planState(), {
+      operation: "prepare-review",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+    });
+
+    expect(execution.runCalls).toHaveLength(0);
+    expect(execution.hostCalls).toHaveLength(0);
+    expect(execution.result).toEqual({
+      status: "ready",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+    });
+    expect(execution.stateValues.planReview).toEqual({
+      version: 1,
+      status: "pending",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+    });
+  });
+
+  it("records pending, approved, and rejected states without children", async () => {
+    const prepared = planState({
+      planReview: {
+        version: 1,
+        status: "pending",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      },
+    });
+    const pending = await executePlanning([], prepared, {
+      operation: "record-review",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      reviewId: "review-1",
+      status: "pending",
+    });
+    expect(pending.runCalls).toHaveLength(0);
+    expect(pending.result).toEqual({
+      status: "pending",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      reviewId: "review-1",
+    });
+
+    const approved = await executePlanning([], pending.stateValues, {
+      operation: "record-review",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      reviewId: "review-1",
+      status: "approved",
+    });
+    expect(approved.runCalls).toHaveLength(0);
+    expect(approved.result).toMatchObject({ status: "approved" });
+
+    const rejected = await executePlanning([], prepared, {
+      operation: "record-review",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      reviewId: "review-1",
+      status: "rejected",
+      feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md",
+    });
+    expect(rejected.runCalls).toHaveLength(0);
+    expect(rejected.result).toMatchObject({
+      status: "rejected",
+      feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md",
+    });
+  });
+
+  it("returns compact Mission-bound recovery metadata", async () => {
+    const execution = await executePlanning(
+      [],
+      planState({
+        planReview: {
+          version: 1,
+          status: "pending",
+          round: 1,
+          planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+          reviewId: "review-recovery",
+        },
+      }),
+      {
+        operation: "review-status",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      },
+    );
+
+    expect(execution.runCalls).toHaveLength(0);
+    expect(execution.result).toEqual({
+      status: "pending",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      reviewId: "review-recovery",
+    });
+    expect(JSON.stringify(execution.result)).not.toContain("requestSummary");
+  });
+
+  it.each([
+    [
+      "planRef mismatch",
+      {
+        operation: "prepare-review",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/other.md",
+      },
+    ],
+    [
+      "wrong round",
+      {
+        operation: "prepare-review",
+        round: 2,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      },
+    ],
+    [
+      "unresolved decisions",
+      {
+        operation: "prepare-review",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      },
+    ],
+  ] as const)("fails closed for %s before a child", async (label, args) => {
+    const state =
+      label === "unresolved decisions"
+        ? planState({
+            planningDecision: {
+              ...validDecision,
+              unresolvedDecisions: [
+                { id: "decision", question: "Choose.", reason: "Unknown." },
+              ],
+            },
+          })
+        : label === "wrong round"
+          ? planState({
+              planReview: {
+                version: 1,
+                status: "pending",
+                round: 1,
+                planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+                reviewId: "review-current",
+              },
+            })
+          : planState();
+    const error = await rejectedExecution([], state, args);
+    expect(error.runCalls).toHaveLength(0);
+    expect(error.hostCalls).toHaveLength(0);
+  });
+
+  it("rejects stale review IDs, invalid transitions, and missing rejection feedback", async () => {
+    const state = planState({
+      planReview: {
+        version: 1,
+        status: "pending",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        reviewId: "review-current",
+      },
+    });
+    for (const args of [
+      {
+        operation: "record-review",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        reviewId: "review-old",
+        status: "approved",
+      },
+      {
+        operation: "record-review",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        reviewId: "review-current",
+        status: "rejected",
+      },
+    ] as const) {
+      const error = await rejectedExecution([], state, args);
+      expect(error.runCalls).toHaveLength(0);
+    }
+
+    const terminal = await executePlanning([], state, {
+      operation: "record-review",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      reviewId: "review-current",
+      status: "approved",
+    });
+    const transition = await rejectedExecution([], terminal.stateValues, {
+      operation: "record-review",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      reviewId: "review-current",
+      status: "pending",
+    });
+    expect(transition.runCalls).toHaveLength(0);
+  });
+
+  it("fails closed when control state persistence fails", async () => {
+    const error = await rejectedExecution(
+      [],
+      planState(),
+      {
+        operation: "prepare-review",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      },
+      hostResult(),
+      "planReview",
+    );
+    expect(error.runCalls).toHaveLength(0);
+  });
+
+  it("fails closed for an incomplete start/persistence binding", async () => {
+    const error = await rejectedExecution(
+      [],
+      planState({
+        planReview: {
+          version: 1,
+          status: "pending",
+          round: 1,
+          planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        },
+      }),
+      {
+        operation: "review-status",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      },
+    );
+    expect(error.message).toContain("reviewId");
+    expect(error.runCalls).toHaveLength(0);
+  });
+
+  it("prevents starting a second review for an existing pending binding", async () => {
+    const execution = await executePlanning(
+      [],
+      planState({
+        planReview: {
+          version: 1,
+          status: "pending",
+          round: 1,
+          planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+          reviewId: "review-existing",
+        },
+      }),
+      {
+        operation: "prepare-review",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      },
+    );
+    expect(execution.runCalls).toHaveLength(0);
+    expect(execution.result).toEqual({
+      status: "pending",
+      round: 1,
+      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      reviewId: "review-existing",
+    });
+  });
+
+  it("reuses Planning for rounds two and three but never accepts round four", async () => {
+    const rejectedRound1 = planState({
+      planReview: {
+        version: 1,
+        status: "rejected",
+        round: 1,
+        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        reviewId: "review-1",
+        feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md",
+      },
+    });
+    const round2 = await executePlanning(
+      [childResult("planning-round-2")],
+      rejectedRound1,
+      { round: 2, feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md" },
+    );
+    expect(round2.runCalls).toHaveLength(1);
+
+    const preparedRound2 = await executePlanning([], round2.stateValues, {
+      operation: "prepare-review",
+      round: 2,
+      planRef: round2.stateValues.planRef as string,
+    });
+    expect(preparedRound2.result).toMatchObject({ status: "ready", round: 2 });
+    const rejectedRound2 = await executePlanning(
+      [],
+      preparedRound2.stateValues,
+      {
+        operation: "record-review",
+        round: 2,
+        planRef: preparedRound2.stateValues.planRef,
+        reviewId: "review-2",
+        status: "rejected",
+        feedbackRef: "/tmp/pi-workflow-unit6/feedback-r2.md",
+      },
+    );
+    const round3 = await executePlanning(
+      [childResult("planning-round-3")],
+      rejectedRound2.stateValues,
+      { round: 3, feedbackRef: "/tmp/pi-workflow-unit6/feedback-r2.md" },
+    );
+    expect(round3.runCalls).toHaveLength(1);
+    expect(
+      validateResourceArgs("planning", {
+        round: 4,
+        feedbackRef: "/tmp/pi-workflow-unit6/feedback-r3.md",
+      }).ok,
+    ).toBe(false);
+  });
+});
+
 describe("Planning prerequisites", () => {
   it.each(["discoveryRef", "discoveryMeta", "researchMeta"])(
     "fails closed before child launch when %s is missing",
@@ -473,20 +806,27 @@ describe("Planning prerequisites", () => {
     );
   });
 
-  it("requires a feedback Reference already owned by this Mission", async () => {
-    const foreign = await rejectedExecution([], missionState(), {
+  it("requires feedback from the previous rejected Plan Review", async () => {
+    const previous = {
+      version: 1,
+      status: "rejected",
       round: 1,
+      planRef: "/tmp/mission-a/plan.md",
+      reviewId: "review-a",
+      feedbackRef: "/tmp/mission-a/feedback.md",
+    };
+    const state = missionState({
+      planRef: "/tmp/mission-a/plan.md",
+      planReview: previous,
+    });
+
+    const foreign = await rejectedExecution([], state, {
+      round: 2,
       feedbackRef: "/tmp/mission-b/feedback.md",
     });
     expect(foreign.message).toContain("same Mission");
     expect(foreign.runCalls).toHaveLength(0);
 
-    const state = missionState({
-      codeApproval: {
-        status: "rejected",
-        feedbackRef: "/tmp/mission-a/feedback.md",
-      },
-    });
     const accepted = await executePlanning(
       [childResult("planning-feedback")],
       state,

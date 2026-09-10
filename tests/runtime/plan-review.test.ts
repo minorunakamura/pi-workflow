@@ -1,68 +1,38 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runPlanReview } from "../../src/runtime/plannotator/plan-review";
+import {
+  recoverPlanReview,
+  runPlanReview,
+} from "../../src/runtime/plannotator/plan-review";
 import {
   PLANNOTATOR_REQUEST_CHANNEL,
   PLANNOTATOR_REVIEW_RESULT_CHANNEL,
   type PiEventBus,
 } from "../../src/runtime/plannotator/request";
-import type { PlanningDecisionV1 } from "../../src/core/planning/planning-decision";
-
-const decision: PlanningDecisionV1 = {
-  version: 1,
-  requestSummary: "Add a search endpoint.",
-  scope: { inScope: ["Search endpoint"], outOfScope: ["UI changes"] },
-  acceptanceCriteria: [{ id: "ac-search", text: "Searches records." }],
-  constraints: ["Keep the API compatible."],
-  risks: ["Large result sets may be slow."],
-  verification: [
-    {
-      id: "verify-search",
-      description: "Search tests pass.",
-      command: "pnpm test",
-    },
-  ],
-  implementation: {
-    mode: "single",
-    workUnits: [
-      {
-        id: "search-api",
-        title: "Implement search",
-        objective: "Add the endpoint.",
-        dependsOn: [],
-        writeScope: ["src/api/search.ts"],
-        acceptanceCriteriaIds: ["ac-search"],
-        focusedVerificationIds: ["verify-search"],
-      },
-    ],
-    finalVerificationIds: ["verify-search"],
-  },
-  unresolvedDecisions: [],
-};
-
-type Request = {
-  action: string;
-  payload: Record<string, unknown>;
-  respond: (response: unknown) => void;
-};
 
 class FakeEventBus implements PiEventBus {
   private readonly listeners = new Map<string, Set<(data: unknown) => void>>();
-  status: "pending" | "completed" = "pending";
+  status: "pending" | "completed" | "missing" = "pending";
   result: {
     reviewId: string;
     approved: boolean;
     feedback?: string;
   } = { reviewId: "review-1", approved: true };
   requestCount = 0;
+  startPayload?: Record<string, unknown>;
 
   emit(channel: string, data: unknown): void {
     if (channel === PLANNOTATOR_REQUEST_CHANNEL) {
-      const request = data as Request;
+      const request = data as {
+        action: string;
+        payload: Record<string, unknown>;
+        respond: (response: unknown) => void;
+      };
       this.requestCount += 1;
       if (request.action === "plan-review") {
+        this.startPayload = request.payload;
         request.respond({
           status: "handled",
           result: { status: "pending", reviewId: this.result.reviewId },
@@ -75,11 +45,10 @@ class FakeEventBus implements PiEventBus {
           result:
             this.status === "completed"
               ? { status: "completed", ...this.result }
-              : { status: "pending" },
+              : { status: this.status },
         });
-        if (this.status === "pending") {
+        if (this.status === "pending")
           setTimeout(() => this.emitReviewResult(), 0);
-        }
         return;
       }
     }
@@ -104,28 +73,41 @@ async function tempProject(): Promise<string> {
   return mkdtemp(join(tmpdir(), "pi-workflow-plan-review-"));
 }
 
+async function planFile(
+  content = "# Canonical Plan\n\nunit-marker\n",
+): Promise<string> {
+  const directory = await tempProject();
+  const path = join(directory, "canonical-plan.md");
+  await writeFile(path, content, "utf8");
+  return path;
+}
+
 describe("runPlanReview", () => {
-  it("writes the canonical plan and accepts an explicit approval", async () => {
-    const cwd = await tempProject();
+  it("reads the explicitly supplied canonical Plan Artifact", async () => {
+    const planRef = await planFile();
     const events = new FakeEventBus();
 
-    const result = await runPlanReview({ events }, cwd, {
-      missionId: "mission-1",
-      planningDecision: decision,
-      round: 1,
-    });
+    const result = await runPlanReview(
+      { events },
+      { missionId: "mission-1", round: 1, planRef },
+    );
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       approved: true,
       reviewId: "review-1",
-      planPath: join(cwd, ".pi", "pi-workflow", "mission-1", "plan-r1.md"),
+      planRef,
     });
-    expect(await readFile(result.planPath, "utf8")).toContain("# Plan");
+    expect(events.startPayload).toMatchObject({
+      planFilePath: planRef,
+      planContent: "# Canonical Plan\n\nunit-marker\n",
+      origin: "pi-workflow",
+    });
+    expect(JSON.stringify(result)).not.toContain("unit-marker");
     expect(events.requestCount).toBe(2);
   });
 
-  it("returns a rejection without treating it as approval", async () => {
-    const cwd = await tempProject();
+  it("writes rejected feedback to a package-owned Artifact and returns only feedbackRef", async () => {
+    const planRef = await planFile();
     const events = new FakeEventBus();
     events.result = {
       reviewId: "review-rejected",
@@ -133,74 +115,102 @@ describe("runPlanReview", () => {
       feedback: "Clarify the verification command.",
     };
 
-    const result = await runPlanReview({ events }, cwd, {
-      missionId: "mission-2",
-      planningDecision: decision,
-      round: 2,
-    });
+    const result = await runPlanReview(
+      { events },
+      { missionId: "mission-2", round: 2, planRef },
+    );
 
     expect(result).toMatchObject({
       approved: false,
-      feedback: "Clarify the verification command.",
+      reviewId: "review-rejected",
+      planRef,
+      feedbackRef: expect.stringContaining("pi-workflow"),
     });
+    expect(result).not.toHaveProperty("feedback");
+    if (!result.feedbackRef) throw new Error("missing feedbackRef");
+    expect(await readFile(result.feedbackRef, "utf8")).toBe(
+      "Clarify the verification command.",
+    );
+    expect(result.feedbackRef).not.toBe(planRef);
   });
 
-  it("recovers a completed review through review-status", async () => {
-    const cwd = await tempProject();
+  it("recovers a completed approval through review-status", async () => {
+    const planRef = await planFile();
     const events = new FakeEventBus();
     events.status = "completed";
     events.result = { reviewId: "review-recovered", approved: true };
 
-    const result = await runPlanReview({ events }, cwd, {
-      missionId: "mission-3",
-      planningDecision: decision,
-      round: 1,
-    });
+    const result = await runPlanReview(
+      { events },
+      { missionId: "mission-3", round: 1, planRef },
+    );
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       approved: true,
       reviewId: "review-recovered",
+      planRef,
     });
   });
 
-  it("blocks unresolved decisions before writing or requesting review", async () => {
-    const cwd = await tempProject();
+  it("recovers an existing review without starting another Plannotator review", async () => {
+    const planRef = await planFile();
     const events = new FakeEventBus();
-    const unresolved = structuredClone(decision);
-    unresolved.unresolvedDecisions = [
-      {
-        id: "decision-1",
-        question: "Which index should be used?",
-        reason: "Evidence is incomplete.",
-      },
-    ];
+    events.status = "completed";
+    events.result = { reviewId: "review-existing", approved: true };
+
+    const result = await recoverPlanReview(
+      { events },
+      { missionId: "mission-recovery", round: 1, planRef },
+      "review-existing",
+    );
+
+    expect(result).toEqual({
+      approved: true,
+      reviewId: "review-existing",
+      planRef,
+    });
+    expect(events.requestCount).toBe(1);
+    expect(events.startPayload).toBeUndefined();
+  });
+
+  it("fails before Plannotator when the Plan Artifact cannot be read", async () => {
+    const events = new FakeEventBus();
 
     await expect(
-      runPlanReview({ events }, cwd, {
-        missionId: "mission-4",
-        planningDecision: unresolved,
-        round: 1,
-      }),
-    ).rejects.toThrow("unresolved decisions must be resolved");
+      runPlanReview(
+        { events },
+        {
+          missionId: "mission-4",
+          round: 1,
+          planRef: join(await tempProject(), "missing.md"),
+        },
+      ),
+    ).rejects.toThrow("Plan Artifact cannot be read");
     expect(events.requestCount).toBe(0);
   });
 
+  it("does not turn a rejection without feedback into a re-plan signal", async () => {
+    const planRef = await planFile();
+    const events = new FakeEventBus();
+    events.result = { reviewId: "review-malformed", approved: false };
+
+    await expect(
+      runPlanReview({ events }, { missionId: "mission-5", round: 1, planRef }),
+    ).rejects.toThrow("did not include feedback");
+  });
+
   it("fails closed when Plannotator is unavailable", async () => {
-    const cwd = await tempProject();
+    const planRef = await planFile();
     const events: PiEventBus = {
       emit: (_channel, data) => {
-        const request = data as Request;
+        const request = data as { respond: (response: unknown) => void };
         request.respond({ status: "unavailable", error: "not installed" });
       },
       on: () => () => undefined,
     };
 
     await expect(
-      runPlanReview({ events }, cwd, {
-        missionId: "mission-5",
-        planningDecision: decision,
-        round: 1,
-      }),
+      runPlanReview({ events }, { missionId: "mission-6", round: 1, planRef }),
     ).rejects.toThrow("not installed");
   });
 });

@@ -26,6 +26,8 @@ describe("Planning Flow contract", () => {
     expect(runtime).not.toContain("pi-subagents");
     expect(planReview).not.toContain("@plannotator");
     expect(planReview).not.toContain("pi-subagents");
+    expect(planReview).not.toContain("PlanningDecision");
+    expect(planReview).not.toContain("renderPlan");
   });
 
   it("keeps legacy validation separate from the named Planning resource", () => {
@@ -83,6 +85,29 @@ describe("Planning Flow contract", () => {
     );
     expect(research).not.toContain("ask_user_question");
     expect(research).not.toContain("Plannotator");
+  });
+
+  it("keeps Plan Review input reference-centric and separate from code review", () => {
+    const tool = read("src/tools/plan-review.ts");
+    const bridge = read("src/runtime/plannotator/plan-review.ts");
+
+    expect(tool).toContain("missionId:");
+    expect(tool).toContain("round:");
+    expect(tool).toContain("planRef:");
+    for (const field of [
+      "planningDecision",
+      "planContent",
+      "planPath",
+      "feedbackText",
+      "outputPath",
+      "workflowScript",
+    ]) {
+      expect(tool).not.toContain(field);
+    }
+    expect(bridge).toContain("readPlanArtifact");
+    expect(bridge).toContain("writeFeedbackArtifact");
+    expect(bridge).toContain("savedPath");
+    expect(bridge).not.toContain("feedbackRef: status.savedPath");
   });
 
   it("contains native Planning Flow roles in phase templates", () => {

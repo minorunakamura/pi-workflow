@@ -18,7 +18,8 @@ export function buildWorkflowKickoff(
     `Request type: ${type}`,
     `Request: ${request}`,
     "Follow the pi-workflow Skill as the Main Session control-plane policy.",
-    "Use the model-facing subagent tool and stop after the Planning resource returns a valid planRef.",
+    "Use the named resources and Main-only Plan Review; stop after an approved Plan is persisted.",
+    "Do not start Implementation, Verification, or Code Review in this Unit 6 flow.",
   ].join("\n");
 }
 

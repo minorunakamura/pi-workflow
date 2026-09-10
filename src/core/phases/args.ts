@@ -68,8 +68,9 @@ export const ResearchArgsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const PlanningArgsSchema = Type.Object(
+const PlanningPlanArgsSchema = Type.Object(
   {
+    operation: Type.Optional(Type.Literal("plan")),
     round: Type.Integer({ minimum: 1, maximum: MAX_PLAN_REVIEW_ROUNDS }),
     humanInputs: Type.Optional(
       Type.Array(HumanInputSchema, { maxItems: MAX_HUMAN_INPUT_ENTRIES }),
@@ -78,6 +79,47 @@ export const PlanningArgsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const PlanningPrepareReviewArgsSchema = Type.Object(
+  {
+    operation: Type.Literal("prepare-review"),
+    round: Type.Integer({ minimum: 1, maximum: MAX_PLAN_REVIEW_ROUNDS }),
+    planRef: ReferenceValueSchema,
+  },
+  { additionalProperties: false },
+);
+
+const PlanningRecordReviewArgsSchema = Type.Object(
+  {
+    operation: Type.Literal("record-review"),
+    round: Type.Integer({ minimum: 1, maximum: MAX_PLAN_REVIEW_ROUNDS }),
+    planRef: ReferenceValueSchema,
+    reviewId: ReferenceValueSchema,
+    status: Type.Union([
+      Type.Literal("pending"),
+      Type.Literal("approved"),
+      Type.Literal("rejected"),
+    ]),
+    feedbackRef: Type.Optional(ReferenceValueSchema),
+  },
+  { additionalProperties: false },
+);
+
+const PlanningReviewStatusArgsSchema = Type.Object(
+  {
+    operation: Type.Literal("review-status"),
+    round: Type.Integer({ minimum: 1, maximum: MAX_PLAN_REVIEW_ROUNDS }),
+    planRef: ReferenceValueSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const PlanningArgsSchema = Type.Union([
+  PlanningPlanArgsSchema,
+  PlanningPrepareReviewArgsSchema,
+  PlanningRecordReviewArgsSchema,
+  PlanningReviewStatusArgsSchema,
+]);
 
 export const ImplementationArgsSchema = Type.Object(
   {
@@ -134,7 +176,10 @@ export const PhaseArgsSchemas = ResourceArgsSchemas;
 
 export type DiscoveryArgsV1 = Static<typeof DiscoveryArgsSchema>;
 export type ResearchArgsV1 = Static<typeof ResearchArgsSchema>;
-export type PlanningArgsV1 = Static<typeof PlanningArgsSchema>;
+export type PlanningArgsV2 = Static<typeof PlanningArgsSchema>;
+export type PlanningArgs = PlanningArgsV2;
+/** @deprecated Use PlanningArgsV2. */
+export type PlanningArgsV1 = PlanningArgsV2;
 export type ImplementationArgsV1 = Static<typeof ImplementationArgsSchema>;
 export type VerificationArgsV1 = Static<typeof VerificationArgsSchema>;
 export type VerificationFixArgsV1 = Static<typeof VerificationFixArgsSchema>;
@@ -191,13 +236,16 @@ function phaseNestedIssues(
       if (!humanInputs.ok)
         issues.push(...prefixIssues("/humanInputs", humanInputs.errors));
     }
-    if ("feedbackRef" in value && value.feedbackRef !== undefined) {
-      issues.push(
-        ...prefixIssues(
-          "/feedbackRef",
-          validateReferenceValue(value.feedbackRef).errors,
-        ),
-      );
+    for (const [key, reference] of [
+      ["planRef", "planRef" in value ? value.planRef : undefined],
+      ["reviewId", "reviewId" in value ? value.reviewId : undefined],
+      ["feedbackRef", "feedbackRef" in value ? value.feedbackRef : undefined],
+    ] as const) {
+      if (reference !== undefined) {
+        issues.push(
+          ...prefixIssues(`/${key}`, validateReferenceValue(reference).errors),
+        );
+      }
     }
   }
   if (phase === "implementation" && "mode" in value) {

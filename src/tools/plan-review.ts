@@ -1,6 +1,7 @@
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
-import { PlanningDecisionSchema } from "../core/planning/planning-decision-schema";
+import { MAX_PLAN_REVIEW_ROUNDS } from "../core/state/contracts";
+import { ReferenceValueSchema } from "../core/state/references";
 import {
   runPlanReview,
   type PlanReviewOutput,
@@ -8,12 +9,9 @@ import {
 
 const PlanReviewInputSchema = Type.Object(
   {
-    missionId: Type.String({
-      minLength: 1,
-      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
-    }),
-    planningDecision: PlanningDecisionSchema,
-    round: Type.Integer({ minimum: 1 }),
+    missionId: ReferenceValueSchema,
+    round: Type.Integer({ minimum: 1, maximum: MAX_PLAN_REVIEW_ROUNDS }),
+    planRef: ReferenceValueSchema,
   },
   { additionalProperties: false },
 );
@@ -25,10 +23,10 @@ export function createPlanReviewTool(pi: ExtensionAPI) {
     name: "pi_workflow_plan_review",
     label: "Review pi-workflow Plan",
     description:
-      "Validate a PlanningDecisionV1, write its canonical plan.md, and wait for explicit Plannotator Plan approval.",
+      "Open the canonical Plan Artifact referenced by planRef for explicit Plannotator approval.",
     parameters: PlanReviewInputSchema,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const result = await runPlanReview(pi, ctx.cwd, params, signal);
+    async execute(_toolCallId, params, signal) {
+      const result = await runPlanReview(pi, params, signal);
       return {
         content: [{ type: "text", text: JSON.stringify(result) }],
         details: result,

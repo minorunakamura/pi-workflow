@@ -56,9 +56,24 @@ describe("named workflow resource contract", () => {
     );
     for (const name of EXPECTED_RESOURCE_NAMES) {
       const contract = WORKFLOW_RESOURCE_CONTRACTS[name];
-      expect(contract.argsSchema).toMatchObject({
-        additionalProperties: false,
-      });
+      if (name === "pi-workflow.planning") {
+        const variants = (
+          contract.argsSchema as unknown as {
+            anyOf: { additionalProperties?: boolean }[];
+          }
+        ).anyOf;
+        expect(variants).toHaveLength(4);
+        expect(
+          variants.every(
+            (schema: { additionalProperties?: boolean }) =>
+              schema.additionalProperties === false,
+          ),
+        ).toBe(true);
+      } else {
+        expect(contract.argsSchema).toMatchObject({
+          additionalProperties: false,
+        });
+      }
       expect(contract.foreground).toEqual({
         main: { async: false },
         runsRun: { async: false },
@@ -135,6 +150,39 @@ describe("named workflow resource contract", () => {
           error: expect.stringContaining("not yet migrated"),
         });
       }
+    }
+  });
+
+  it("resolves Planning control operations without child or Artifact authority", () => {
+    const definition = WORKFLOW_RESOURCE_DEFINITIONS.find(
+      ({ name }) => name === "pi-workflow.planning",
+    );
+    if (!definition) throw new Error("missing Planning definition");
+
+    for (const args of [
+      {
+        operation: "prepare-review",
+        round: 1,
+        planRef: "plan-ref",
+      },
+      {
+        operation: "record-review",
+        round: 1,
+        planRef: "plan-ref",
+        reviewId: "review-id",
+        status: "approved",
+      },
+      {
+        operation: "review-status",
+        round: 1,
+        planRef: "plan-ref",
+      },
+    ]) {
+      const result = definition.resolve(args);
+      expect(result).toMatchObject({ script: expect.any(String) });
+      expect(result).not.toHaveProperty("hostCommands");
+      if (!("script" in result)) throw new Error("expected control script");
+      expect(result.script).toContain("const operation = input.operation ??");
     }
   });
 

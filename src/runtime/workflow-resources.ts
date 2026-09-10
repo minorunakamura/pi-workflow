@@ -13,7 +13,7 @@ import {
   MAX_RESOURCE_ARGS_BYTES,
   ResourceArgsSchemas,
   type DiscoveryArgsV1,
-  type PlanningArgsV1,
+  type PlanningArgsV2,
   type ResearchArgsV1,
   type ResourceArgsPhase,
   validateResourceArgs,
@@ -24,6 +24,8 @@ import {
   ResearchMetadataSchema,
   MAX_DISCOVERY_METADATA_BYTES,
   MAX_DISCOVERY_METADATA_ITEMS,
+  MAX_PLAN_REVIEW_BINDING_BYTES,
+  MAX_PLAN_REVIEW_ROUNDS,
   MAX_RESEARCH_METADATA_BYTES,
   MAX_RESEARCH_QUESTIONS,
   MAX_HUMAN_INPUT_ENTRIES,
@@ -35,6 +37,7 @@ import {
   MAX_REQUEST_BYTES,
   MISSION_STATE_KEYS,
   MissionStateSchema,
+  PlanReviewBindingSchema,
 } from "../core/state/contracts";
 import { MAX_JSON_DEPTH } from "../core/validation";
 import { PlanningDecisionSchema } from "../core/planning/planning-decision-schema";
@@ -215,19 +218,30 @@ export function buildResearchWorkflowScript(args: ResearchArgsV1): string {
 }
 
 export function buildPlanningWorkflowScript(
-  args: PlanningArgsV1,
-  binding: PlanningArtifactBinding = createPlanningArtifactBinding(),
+  args: PlanningArgsV2,
+  binding?: PlanningArtifactBinding,
 ): string {
+  const artifactBinding =
+    binding ??
+    ((args.operation ?? "plan") === "plan"
+      ? createPlanningArtifactBinding()
+      : undefined);
   const input = {
     [DISCOVERY_RESOURCE_MARKER]: "pi-workflow.planning",
     ...args,
     planningDecisionSchema: PlanningDecisionSchema,
+    planReviewBindingSchema: PlanReviewBindingSchema,
     missionStateSchema: MissionStateSchema,
     stateKeys: MISSION_STATE_KEYS,
-    planningDecisionInputPath: binding.decisionInputPath,
-    correctionDecisionInputPath: binding.correctionDecisionInputPath,
-    planArtifactPath: binding.planArtifactPath,
-    planRendererCommand: binding.rendererCommand,
+    ...(artifactBinding === undefined
+      ? {}
+      : {
+          planningDecisionInputPath: artifactBinding.decisionInputPath,
+          correctionDecisionInputPath:
+            artifactBinding.correctionDecisionInputPath,
+          planArtifactPath: artifactBinding.planArtifactPath,
+          planRendererCommand: artifactBinding.rendererCommand,
+        }),
     planningBounds: {
       stateBytes: MAX_MISSION_STATE_BYTES,
       referenceBytes: MAX_REFERENCE_BYTES,
@@ -238,6 +252,8 @@ export function buildPlanningWorkflowScript(
       humanInputs: MAX_HUMAN_INPUT_ENTRIES,
       humanValueBytes: MAX_HUMAN_INPUT_VALUE_BYTES,
       decisionBytes: MAX_PLANNING_DECISION_BYTES,
+      planReviewBindingBytes: MAX_PLAN_REVIEW_BINDING_BYTES,
+      planReviewRounds: MAX_PLAN_REVIEW_ROUNDS,
       metadataBytes: MAX_DISCOVERY_METADATA_BYTES,
       metadataItems: MAX_DISCOVERY_METADATA_ITEMS,
       jsonDepth: MAX_JSON_DEPTH,
@@ -337,15 +353,19 @@ function resolvePlanning(
       error: `Invalid args for 'pi-workflow.planning': ${formatValidationIssues(validation.errors)}`,
     };
   }
-  const binding = createPlanningArtifactBinding();
+  const argsValue = validation.value as PlanningArgsV2;
+  const operation = argsValue.operation ?? "plan";
+  const binding =
+    operation === "plan" ? createPlanningArtifactBinding() : undefined;
   return {
-    script: buildPlanningWorkflowScript(
-      validation.value as PlanningArgsV1,
-      binding,
-    ),
-    hostCommands: [
-      { key: PLAN_ARTIFACT_HOST_KEY, command: binding.rendererCommand },
-    ],
+    script: buildPlanningWorkflowScript(argsValue, binding),
+    ...(binding === undefined
+      ? {}
+      : {
+          hostCommands: [
+            { key: PLAN_ARTIFACT_HOST_KEY, command: binding.rendererCommand },
+          ],
+        }),
   };
 }
 
