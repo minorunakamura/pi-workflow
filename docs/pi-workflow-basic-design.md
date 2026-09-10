@@ -293,6 +293,19 @@ registerWorkflowResource
 
 `registerWorkflowResource` のresource definitionは `name`、positive `version`、synchronous `resolve(args)` をpackageが所有する。resolverは成功時にpackage-owned script（必要ならnative host authority）を返し、入力不備時はerrorを返す。Mainはそのscriptを受け取らない。
 
+### 7.2 Planning resource control operations
+
+Canonical resource数は7のまま維持する。Plan Review用の8個目のNamed Resourceは追加しない。既存の `pi-workflow.planning` が、Planning Artifactと `planRef` を所有するPlanning-phase Mission control operationsも所有する。
+
+| `pi-workflow.planning` operation | Child | Responsibility |
+|---|---|---|
+| `plan` | fresh built-in `reviewer` + `pi-planning` | PlanningDecision生成、Plan Artifact生成、`planRef`保存 |
+| `prepare-review` | zero children | current Plan Review bindingの検証・準備 |
+| `record-review` | zero children | Mainが解釈したcompact review status/evidenceの検証・保存 |
+| `review-status` | zero children | Mission-bound Plan Review bindingのcompact recovery status返却 |
+
+`operation`を省略した現Unit 5 invocation（例: `{ "round": 1 }`）は `operation:"plan"` と同値である。`operation:"plan"` をmandatoryにして既存呼び出しを壊さない。4 operationともMain-triggered invocationでは `async:false` とする。
+
 ---
 
 ## 8. Ownership Boundary
@@ -313,6 +326,10 @@ registerWorkflowResource
 - `outputSchema` policy
 - fail-closed prerequisite validation
 - bounded retry / fix / fanout policy
+- Planning resourceのMission-bound Plan Review control operations
+- Plan Review bindingのcompact state contract
+
+Mission stateを読む・更新する実体はNamed Resourceのworkflow scriptである。Mainはnative `state.get/state.set`を直接呼ばず、Main-facing resource resultとbounded statusだけを扱う。
 
 ### 8.2 Mainが所有しないもの
 
@@ -321,24 +338,36 @@ registerWorkflowResource
 - output schema object
 - large phase payload
 - artifact body
+- Plan bodyのMain model-facing transport
+- feedback bodyのMain model-facing transport
 - child task bodyの再transport
 - child transcript
 - private registry state
+- `src/missions/*`などのprivate Mission API import
+- Mission store filesystem path guessing / raw persistence access
 
 ### 8.3 Mainが所有するもの
+
+MainはHuman authorityの唯一の所有者であり、次を決定する。
 
 - request reception
 - active Mission guard
 - clean-tree guard
 - capability checks
-- Mission create / attach
-- phase transition
-- Human decisions / Human Gates
+- Mission create / attach（ただしnative Mission stateの直接read/writeはしない）
+- いつPlan Reviewを開始できるか
+- Plannotatorをinvoke / coordinateすること
+- Human approval / rejectionの解釈
+- phase advancement
+- re-planningを開始するかどうか
 - named resource invocation
 - bounded retry/fix choice
 - recovery entry
 - final explanation
 
+Named ResourceがMission stateへアクセスしてもHuman authorityは移譲されない。Resourceはsupplied status/evidenceのbindingを検証してcompact stateへ保存するだけで、Human responseのsemantic meaning、phase advancement、re-planningの要否を決定しない。
+
+Plan Review bridgeはMain-onlyのcoordination boundaryとして、validated `planRef` をPlan bodyへ解決し、Plannotatorを呼び、feedback Artifactを作成する。これはHuman authorityをbridgeやResourceへ移譲するものではない。
 ---
 
 ## 9. Agent / Skill構成
@@ -379,11 +408,17 @@ flowchart TD
     F -->|no| H[Research skipped]
     GRef --> I[Human clarification if needed]
     H --> I
-    I --> J[pi-workflow.planning]
+    I --> J[pi-workflow.planning / plan]
     J --> JRef[planRef + bounded PlanningDecisionV1]
-    JRef --> K[Main-only Plannotator Plan Review]
-    K -->|reject| J
-    K -->|approve| L[pi-workflow.implementation]
+    JRef --> PR[Main → planning / prepare-review]
+    PR -->|compact ready/pending| BR[Main Plan Review bridge]
+    BR -->|pending| RS[planning / review-status]
+    RS --> BR
+    BR -->|approved| RR[planning / record-review]
+    BR -->|rejected + feedbackRef| RR
+    RR -->|rejected and round < 3| RP[Main → planning / plan\nround + 1]
+    RP --> JRef
+    RR -->|approved| L[pi-workflow.implementation]
     L --> M[pi-workflow.verification]
     M -->|fail and fix round < 2| N[pi-workflow.verification-fix]
     N --> M
@@ -395,7 +430,7 @@ flowchart TD
     Q -->|approve| S[Close Mission success]
 ```
 
-各phaseの入力はMainが大きな結果を再送するのではなく、resourceが同じMission stateからReferenceとbounded dataを解決する。
+各phaseの入力はMainが大きな結果を再送するのではなく、resourceが同じMission stateからReferenceとbounded dataを解決する。Plan ReviewのHuman authorityはMainに残り、`prepare-review` / `record-review` / `review-status`のMission state accessだけをPlanning Resourceが担う。
 
 ---
 
@@ -457,6 +492,16 @@ Named resource invocationには次を併記しない。
 - phase artifact body / arbitrary output path
 
 `cwd` はouter workflowの作業directoryであり、resource内部のchildごとのhidden path transportに使わない。
+
+Planning invocationでは `operation` を省略できる。既存Unit 5の次のinputは変更しない。
+
+```json
+{
+  "round": 1
+}
+```
+
+これは `operation:"plan"` と同値である。新しい `prepare-review`、`record-review`、`review-status` は既存の `plan` operationと別branchとしてresource内部で処理する。
 
 ---
 
@@ -582,16 +627,17 @@ Human answerをstateへ保存する場合はbounded `humanDecisions` とし、�
 
 ## 16. Planning
 
-Planningは`pi-workflow.planning` resourceで、fresh built-in `reviewer` + `pi-planning`、explicit `async:false` で行う。
+Planningは`pi-workflow.planning` resourceの `operation:"plan"` で、fresh built-in `reviewer` + `pi-planning`、explicit `async:false` で行う。`operation`を省略した場合も `plan` と同値であり、Unit 5の `{ "round": 1 }` invocationを維持する。
 
 resourceはMission stateの次を内部解決する。
 
 - `discoveryRef` / `DiscoveryMetadataV1`
 - optional `researchRef` / `ResearchMetadataV1`
 - compact Human decisions
+- optional `feedbackRef`
 - native Mission objective / bounded request metadata
 
-MainはDiscovery / Research reportやpathをargsへ入れない。
+MainはDiscovery / Research reportやPlan body/pathをargsへ入れない。
 
 Planning childはbounded `PlanningDecisionV1` だけをstructured resultとして返す。resourceはsemantic validation後にstateへ保存し、package-owned deterministic rendererでcanonical `plan.md` Artifactを生成し、そのReferenceを `planRef` として保存する。
 
@@ -600,15 +646,27 @@ Full Plan prose / canonical `plan.md` と `PlanningDecisionV1` は分離する�
 - `planRef`: file-backed canonical Plan
 - `planningDecision`: implementation orchestration用のbounded machine contract
 
-unresolved decisionが残るDecisionはPlan Reviewへ進めない。validation failureのcorrectionはresource内で最大1回までとし、2回目もinvalidならfail closedとする。
+`plan`以外のPlanning operationはchildを起動しない。unresolved decisionが残るDecisionはPlan Reviewへ進めない。validation failureのcorrectionはresource内で最大1回までとし、2回目もinvalidならfail closedとする。
 
 ---
 
 ## 17. Planning / Plannotator Human Gate
 
-Plan ReviewはMain-onlyの `pi_workflow_plan_review` Toolから行う。Human authorityをnamed childへ移さない。
+### 17.1 Main-only Human authority
 
-target interfaceは次のsmall inputとする。
+MainはHuman authorityの唯一の所有者であり、次を決定する。
+
+- Plan Reviewを開始できるか
+- Plannotatorをinvoke / coordinateすること
+- Human responseをpending / approved / rejected / failureとして解釈すること
+- phaseを進めるか
+- re-planningを開始するか
+
+Named ResourceがMission stateへアクセスしても、このauthorityは移譲されない。Mainはnative Missionの直接 `state.get/state.set` APIを必要とせず、Plan Review control operationのcompact resultだけを使う。
+
+### 17.2 Main-facing input and prepare-review
+
+MainからPlan Review bridgeへ渡すmodel-facing inputは次だけである。
 
 ```ts
 interface PlanReviewInput {
@@ -618,27 +676,139 @@ interface PlanReviewInput {
 }
 ```
 
-Toolは `planRef` が同じMission stateのcanonical Planを指すことを確認し、full `PlanningDecisionV1` やPlan bodyをMainから受け取らない。
+Plan Review開始前のtarget sequenceは次である。
 
-Plannotator shared event APIの:
+```text
+Main
+→ pi-workflow.planning / prepare-review
+```
 
-- `plannotator:request`
-- `plan-review`
-- `plannotator:review-result`
-- `review-status`
+`prepare-review` はPlanning Resource内で次をforeground、zero childで実行する。
 
-を利用する。成功条件は明示的な `approved: true` のみである。
+```text
+state.get
+→ validate Planning state
+→ validate current planRef
+→ validate current Plan Review round
+→ validate unresolvedDecisions is empty
+→ validate no incompatible/stale review binding
+→ persist compact pending Plan Review binding as required
+→ return compact ready/pending result
+```
 
-- unavailable
-- error
-- cancel
-- close
-- timeout
-- invalid result
+`planRef`は`pi-workflow.planning`が生成するopaque/path-like Referenceである。`state.planRef === supplied planRef`、current Mission、supplied round、既存 `planReview` bindingのround/planRefを照合する。opaque/path-likeな`planRef`のoriginをMainが独立証明することは要求しない。v0.66.0で利用できるauthoritative checkは、同じNamed Resource Mission内のcurrent state equalityと、round/binding checksである。
 
-は未承認扱いで停止する。Plan reject時のfeedbackはbounded Human inputまたはArtifact Referenceとして次のPlanning resourceへ渡す。Plan Reviewの最大roundは3とし、上限到達後は自動loopせずMain/Humanへ戻す。
+pending bindingが存在する場合、`prepare-review` は `pending` を返し、Mainは2つ目のPlannotator reviewを起動しない。新しいレビューを起動できる場合だけ `ready` を返す。Plannotator start前にcompact `status:"pending"`、`round`、`planRef`を保存することで、重複起動を抑止する。
 
-`ask_user_question` をapproval fallbackにしない。
+### 17.3 Plan body ownership and Plannotator bridge
+
+Mainはfull Plan bodyをtransportしない。Main-only Plan Review bridgeが、`prepare-review`でvalidatedされた`planRef`を受け取り、内部でPlan Artifactをresolveして`planContent`を取得し、Plannotatorを呼び出す。
+
+| Layer | Owner |
+|---|---|
+| Plan Artifactと`planRef`の生成・ownership | `pi-workflow.planning` resource |
+| `planRef`からPlan body / `planContent`へのresolution、Plannotator call | pi-workflow Plan Review bridge |
+| Human Gateのcoordination、responseの意味付け、phase/re-plan decision | Main |
+
+Current Plannotator public behaviorは次のとおりである。
+
+| API | Contract |
+|---|---|
+| `start` | `planContent` required、`planFilePath` optional |
+| result | `reviewId`、`approved`、`feedback`、`savedPath?` |
+| `review-status` | `reviewId`でquery |
+
+bridgeはshared event APIの`plannotator:request`、`plan-review`、`plannotator:review-result`、`review-status`を利用する。
+
+bridgeは必要に応じて`planFilePath`も渡せるが、path-only integrationを要求しない。Plannotatorが現在`planContent`をpublic event payloadに要求するため、Plan bodyをbridge内部で解決する。Plan bodyはMain model-facing result/stateに返さない。Plannotator startが`reviewId`を返したら、Mainは`record-review(status:"pending", reviewId)`でcompact bindingを保存してから待機・recoveryする。start後このbinding保存前にcrashした場合はcorrelation不明としてreplacementを起動しない。
+
+`savedPath`はcanonical `feedbackRef`に使わない。これはoptionalで、`planSave` configurationに依存し、Plan/annotation snapshotであってfeedback-only Artifactではなく、Plannotator/global storageに属し、Mission/round bindingを持たないためである。
+
+### 17.4 record-review and Feedback Artifact
+
+Plannotator resultをpending / approved / rejected / failureとして解釈するのはMainである。Planning Resourceはsemantic decisionを行わない。Mainがvalidなcompact resultを解釈した後、次を呼ぶ。
+
+```text
+Main
+→ pi-workflow.planning / record-review
+```
+
+`record-review` はzero childで次を行う。
+
+```text
+state.get
+→ validate current planRef
+→ validate current round
+→ validate current reviewId binding when available
+→ validate status transition
+→ validate feedbackRef when status is rejected
+→ state.set compact Plan Review evidence
+```
+
+`record-review` が受け付けるstatusは `pending` / `approved` / `rejected` だけである。`rejected` には同じMissionのcurrent review flow、round、planRef、reviewIdにboundされたbounded `feedbackRef`を要求する。runtime failureはHuman rejectionへ変換せず、`record-review(rejected)`や自動re-planを実行しない。
+
+FeedbackはCandidate Bを採用する。
+
+```text
+Plannotator
+→ result { approved:false, feedback }
+→ pi-workflow Plan Review bridge（feedback bodyはprocess memoryに一時保持）
+→ package-owned file-backed Feedback Artifact
+→ feedbackRef
+→ Mainはcompact reference/statusだけを受け取る
+→ pi-workflow.planning / record-review
+→ 必要ならplanning round + 1
+```
+
+Feedback Artifactのownerはpi-workflow Plan Review bridgeである。bridgeはfull feedback bodyをArtifactへ書き、orchestration layerへ`feedbackRef`だけを返す。Main model-facing transportとMission stateにfull feedback bodyを入れない。bridge process memoryでPlannotatorが返したfeedback stringを一時的に扱うことだけを許可する。
+
+### 17.5 Approval, rejection, re-planning
+
+Human approvalの唯一の成功条件は `approved === true` である。request sent、browser opened、result exists、`approved` missing、cancel、timeout、unavailable、error、malformed responseはapprovalではない。
+
+`approved:false` かつvalidなHuman rejection resultだけが明示的rejectionである。rejectionはruntime failureと異なり、roundが残っていればFeedback Artifactを作成してre-planできる。cancel / error / unavailable / malformed resultはfail closedで停止し、自動re-planへ変換しない。
+
+rejectionにroundが残る場合、Mainが次をforegroundで行う。
+
+```text
+record-review(rejected + feedbackRef)
+→ Main
+→ pi-workflow.planning / plan
+    round = current round + 1
+    feedbackRef
+    async:false
+```
+
+`round 1 → 2`、`round 2 → 3`までとし、`round 3` rejectionからround 4を起動しない。上限時はcanonical Mission statusに従ってstop / `needs_decision` / fail closedとする。
+
+### 17.6 review-status and recovery split
+
+`pi-workflow.planning / review-status` はzero childで`state.get`し、次のcompact Mission-bound metadataだけを返す。
+
+```text
+status
+round
+planRef
+reviewId
+feedbackRef?
+```
+
+Plan body、feedback body、Plannotator UI transcriptは返さない。recoveryは次のsplitで行う。
+
+```text
+Main
+→ pi-workflow.planning / review-status
+→ compact Mission binding
+→ bridge recoverReviewStatus(reviewId)
+→ Main interprets result
+→ new terminal resultなら record-review
+```
+
+`reviewId`がmissing、bindingがincomplete、round mismatch、planRef mismatch、stale review、unknown correlationの場合は、replacement Human reviewを自動起動せず、latest/global resultを使わず、needs-decision / fail closedとする。
+
+Plan Review startとMission state persistenceはcurrent public APIではone atomic transactionにできない。external review start後、Mission binding persistence前にcrashするnarrow windowがある。recoveryでbindingを証明できない場合は、replacement reviewを起動せず停止する。
+
+`ask_user_question`をapproval fallbackにしない。
 
 ---
 
@@ -797,7 +967,7 @@ old implementation execution stateを新Planへ自動転用しない。
 Mission stateはnative Missionのstate fileを使用し、全体サイズのhard limitを次とする。
 
 ```text
-256 KiB = 262,144 bytes
+256 KiB = 262,144 serialized UTF-8 bytes
 ```
 
 `state.set`前に対象valueと既存stateのUTF-8 JSON byte lengthを検査する。limit超過、invalid JSON、unknown cross-Mission refはfail closedとし、Mainからlarge payloadを再供給しない。
@@ -820,6 +990,7 @@ Referenceはnative `outputReference`、`runId`、patch ref、handoff ref、evide
 | `DiscoveryMetadataV1` | 最大8 KiB、uncertainties最大8件、researchQuestions最大8件 |
 | `ResearchMetadataV1` | 最大8 KiB、unresolvedQuestions最大8件 |
 | `PlanningDecisionV1` | 最大32 KiB |
+| `PlanReviewBindingV1` | 最大8 KiB、Plan Review bindingはcurrent Missionに1件 |
 | Planning scope / constraints / risks | 各配列最大16件 |
 | Planning acceptance criteria / verification | 各最大16件 |
 | Planning WorkUnits | 最大32件 |
@@ -846,11 +1017,11 @@ PlanningDecisionのfield-level text boundは、`requestSummary`、scope各entry�
 |---|---|---|
 | Discovery | `discoveryRef`（full report Artifact）、`discoveryMeta`（bounded `DiscoveryMetadataV1`）、status | full Discovery result、transcript |
 | Research | conditional `researchRef`、`researchMeta`。未実行時は`status:"skipped"` | full Research report、Discovery body |
-| Planning | `planRef`（canonical Plan Artifact）、bounded `planningDecision`、planning status | full Plan prose、Discovery / Research body |
+| Planning | `planRef`（canonical Plan Artifact）、bounded `planningDecision`、`planReview` binding | full Plan prose、Discovery / Research body、feedback prose |
 | Implementation | singleならnative `runId` / `implementationRef`、lanesなら最大32件のnative patch/handoff refs、compact status | target filenameの再transport、child transcript、full diff |
 | Verification | `verificationRef`（Artifact/native evidence refs）、`verificationStatus`、requiredFix | full evidence、child prose |
 | Verification Fix | 最大2件の`verificationFixRuns`（round、run/ref、status） | failure report本文、unbounded fix history |
-| Review | `reviewRef`（fanout/synthesis refs）、bounded `reviewDecision`、review status、code approval ref/status | full review prose/findings、annotation body |
+| Review | `reviewRef`（fanout/synthesis refs）、bounded `reviewDecision`、review status、Code Review専用 `codeApproval` ref/status | full review prose/findings、annotation body |
 
 共通stateには必要に応じて次を置く。
 
@@ -863,7 +1034,23 @@ native Mission status mirror
 humanDecisions（最大8件）
 verificationRound（0..2）
 reviewFixWave（0..1）
+planReview（`PlanReviewBindingV1`）
 ```
+
+Plan Review bindingは`codeApproval`を再利用しない。`codeApproval`は後段のCode Review semantics専用である。
+
+```ts
+interface PlanReviewBindingV1 {
+  version: 1;
+  status: "pending" | "approved" | "rejected";
+  round: 1 | 2 | 3;
+  planRef: ReferenceValue;
+  reviewId?: ReferenceValue;
+  feedbackRef?: ReferenceValue;
+}
+```
+
+`planReview`はcompact status/referenceだけを保持し、Plan Markdown、Human feedback prose、full Plannotator payload、browser/UI transcriptを保持しない。approval/rejectionはcurrent Mission、exact Planning/Plan Review round、exact current `planRef`、availableな`reviewId`へbindingする。opaque/path-likeなReferenceが特定Mission由来であることをv0.66.0でcryptographically proveすることはできないため、Named Resource Mission binding、current state equality、round/reviewId checks、mismatch時のfail closedを安全策とする。
 
 native Mission statusがauthoritativeであり、mirror値の不一致は成功扱いにしない。Mission stateはrecovery用のreference indexであり、conversation transcriptの代替ではない。
 
@@ -872,7 +1059,10 @@ native Mission statusがauthoritativeであり、mirror値の不一致は成功�
 - Full Discovery report → `discoveryRef` Artifact
 - Discovery orchestration metadata → bounded `DiscoveryMetadataV1`
 - Full Research report → `researchRef` Artifact
-- canonical `plan.md` → `planRef` Artifact
+- canonical `plan.md` → `planRef` Artifact（Planning Resource ownership）
+- Plan body resolution for Plannotator → Plan Review bridge（Mainへbodyを返さない）
+- Plannotator `feedback` → bridge-owned package Feedback Artifact → bounded `feedbackRef`
+- `Plannotator.savedPath` → non-normative snapshot/reference。canonical `feedbackRef`には使わない
 - `PlanningDecisionV1` → bounded machine orchestration contract
 - large verification evidence → `verificationRef` Artifact/native evidence
 - `VerificationStatusV1` → bounded status
@@ -1008,7 +1198,28 @@ conditional Researcher capabilityとして扱う。Ketch tool名やextension pat
 
 ## 26. Recovery
 
-独自 `/resume`、独自recovery engine、conversation transcriptをsource of truthとする復旧は作らない。
+独自 `/resume`、独自recovery engine、conversation transcriptをsource of truthとする復旧は作らない。Mainはnative Mission state APIを直接呼ばず、Mission-bound state lookupはNamed Resource workflow scriptに閉じ込める。`src/missions/*` private import、Mission store filesystem path guessing、raw persistence access、private registry/internal APIは使用しない。
+
+### 26.1 Plan Review recovery split
+
+通常のPlan Review recoveryは次のsplitで行う。
+
+```text
+Main
+→ pi-workflow.planning / review-status
+→ compact Mission-bound { status, round, planRef, reviewId, feedbackRef? }
+→ Plan Review bridge recoverReviewStatus(reviewId)
+→ Main interprets Plannotator result
+→ new terminal resultなら pi-workflow.planning / record-review
+```
+
+- Planning ResourceはMission state / binding lookupだけを所有する。
+- Plan Review bridgeはPlannotator `review-status(reviewId)`だけを所有する。
+- Mainはpending / approved / rejected / failureを解釈し、次phase・re-plan・停止を決定する。
+- Mission-bound pending reviewが存在する間は、second Plannotator reviewを起動しない。
+- `reviewId` missing、binding incomplete、round mismatch、planRef mismatch、stale plan、unknown correlationはreplacement reviewを起動せず、latest/global resultを使わず、needs-decision / fail closedとする。
+
+### 26.2 General recovery and transaction limitation
 
 restart / compaction後のMain recoveryは次の順とする。
 
@@ -1016,15 +1227,17 @@ restart / compaction後のMain recoveryは次の順とする。
 mission.list
 → mission.show
 → linked run status
-→ Mission state / Reference確認
+→ Mission state / Reference確認（Planning Resource経由）
 → required capability確認
 → next named workflow resource
 ```
 
+Plan Review startとMission state persistenceはcurrent public APIではone atomic transactionにできない。external Plannotator review start後、Mission binding persistence前にcrashするnarrow windowがある。recoveryでMission・round・planRef・reviewIdのcorrelationを証明できない場合は、duplicate reviewを起動せず、stop in needs-decision / fail closedとする。
+
 必要な場合だけnative `resume`を使う。Recovery source of truthは次である。
 
 - native Mission
-- Mission state
+- Mission state（Named Resourceが取得するcompact binding）
 - Artifact References
 - native run status
 - patch / handoff / evidence References
@@ -1048,6 +1261,7 @@ raw `workflowScript`の再生成・再transportをrecovery stepにしない。mi
 - Discovery → Planning → Implementationのreference handoffで、full report / PlanがMainへ戻らず、Mission stateはcompact referenceだけを保持した。
 - Mission stateのhard limitは256 KiBである。
 - `file-only + outputSchema` はS2であり、structuredOutput全体がMain detailsへ残ることが確認済みである。
+- Unit 5.1のnative validation isolation、bounded `PlanningDecisionV1`、file-backed Plan Artifact、`planRef`、S2、CodeGraph Discovery policyは変更しない。
 
 runtime未実行のcapabilityは、設計上 `public-contract supported / capability check required` とする。`reviewer + pi-verification`、`reviewer + ponytail-review`、`pi-ketch.researcher`、`oracle`の未実行をarchitecture failureや成功Evidenceとして扱わない。
 
@@ -1066,6 +1280,16 @@ LLM E2Eと分離し、次をdeterministicに検証する。
 - duplicate registrationを拒否し、original resourceをreplaceしない。
 - `session_shutdown`で全disposerを実行する。
 - child / stage / phaseのforeground `async:false` policyが明示される。
+- `pi-workflow.planning`の4 operation、omitted operation → `plan`、Unit 5 `{round:1}` compatibilityを検証する。
+- `prepare-review` / `record-review` / `review-status`がzero childであることを検証する。
+- `PlanReviewBindingV1`のstatus、round、planRef、reviewId、feedbackRef boundsとcurrent Mission bindingを検証する。
+- current planRef / round / reviewId mismatch、unresolved decision、stale bindingをfail closedにする。
+- `codeApproval`をPlan Review stateへ使わないことを検証する。
+- Plan ArtifactがMain model-facing resultへ出ず、bridgeだけがbodyをresolveすることを検証する。
+- bridge-owned Feedback Artifact、bounded `feedbackRef`、feedback write failureを検証する。
+- `savedPath`をnormative feedbackRefにしないことを検証する。
+- pending reviewがduplicate Plannotator startを抑止することを検証する。
+- missing reviewId / incomplete correlation / transaction crash windowをreplacementなしでfail closedにすることを検証する。
 - S2 structured visibility ruleとcompact aggregate boundsを検証する。
 - no custom Agent、no bundle、packed resource presenceを検証する。
 
@@ -1077,6 +1301,13 @@ real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証�
 - Discovery reference handoff
 - optional Researcher
 - Planning reference handoff
+- Planning `plan` / `prepare-review` / `record-review` / `review-status` control operations
+- Unit 5 `{round:1}` invocation with omitted `operation`
+- Plan Review bridge `planRef` → `planContent` resolution
+- package-owned Feedback Artifact / `feedbackRef`
+- pending review recovery and duplicate-start prevention
+- stale cross-Mission / cross-round / stale-plan binding rejection
+- explicit Human rejection vs cancel/error/unavailable failure
 - single Worker
 - reviewer + `pi-verification`
 - `runs.lanes` / managed worktree
@@ -1094,6 +1325,37 @@ real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証�
 ### 27.4 Packed package
 
 `pnpm pack` artifactをclean consumerへinstall/loadして、Extension、7 named resources、3 own Skills、Plannotator bridge、resource-owned scriptsが解決できることを確認する。source checkoutだけのtestをpacked-install evidenceの代替にしない。
+
+### 27.5 Unit 6 Plan Review acceptance
+
+後続のUnit 6 implementationでは、少なくとも次をacceptance contractとする。
+
+```text
+[ ] operation omitted remains Unit 5 `plan`
+[ ] `plan` uses fresh reviewer + pi-planning
+[ ] prepare-review / record-review / review-status use zero children
+[ ] prepare-review validates current Mission, planRef, round, unresolvedDecisions, stale binding
+[ ] prepare-review fails closed for missing/unreadable Plan Artifact
+[ ] record-review validates pending / approved / rejected, current planRef/round/reviewId and status transition
+[ ] record-review rejects missing feedbackRef, stale planRef, stale round, stale reviewId
+[ ] cross-Mission isolation is enforced
+[ ] rejected record requires bounded feedbackRef
+[ ] review-status returns only compact Mission-bound metadata and missing reviewId fails closed during recovery
+[ ] Plan Review approval binds Mission + round + exact planRef + available reviewId
+[ ] opaque reference origin is not overclaimed as cryptographically proven
+[ ] Plan body is resolved by bridge and never returned through Main model transport
+[ ] feedback body is transient bridge memory only, never Main transport or Mission state
+[ ] bridge writes a package-owned Feedback Artifact and returns feedbackRef only
+[ ] Plannotator savedPath is not normative feedbackRef
+[ ] approved === true is the only approval success rule
+[ ] explicit rejection is distinct from cancel/error/unavailable/failure
+[ ] pending binding prevents duplicate Plannotator launch
+[ ] incomplete correlation fails closed without replacement review
+[ ] Plannotator start/state persistence crash window is documented and handled fail closed
+[ ] round limit is 3 and round 3 rejection does not start round 4
+[ ] Mission state remains <= 256 KiB with no Plan or feedback body
+[ ] ReferenceValue and feedbackRef remain bounded and file-backed
+```
 
 ---
 
@@ -1117,6 +1379,18 @@ real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証�
 [ ] required refs fail closed
 [ ] cross-Mission fallback prohibited
 [ ] Planning = reviewer + pi-planning
+[ ] Planning operations = plan / prepare-review / record-review / review-status
+[ ] omitted Planning operation is backward-compatible with Unit 5 plan
+[ ] prepare-review / record-review / review-status are zero-child operations
+[ ] compact Plan Review binding is separate from codeApproval
+[ ] Main is sole Human authority
+[ ] Mission state access is Resource-mediated; no Main native state API assumption
+[ ] Plan Review bridge resolves planRef to planContent
+[ ] bridge-owned Feedback Artifact and bounded feedbackRef
+[ ] Plannotator savedPath is non-normative
+[ ] pending duplicate review prevention and split recovery
+[ ] incomplete correlation / crash window fails closed
+[ ] max Plan Review rounds = 3
 [ ] Verification = reviewer + pi-verification
 [ ] conditional pi-ketch.researcher
 [ ] Ponytail review
