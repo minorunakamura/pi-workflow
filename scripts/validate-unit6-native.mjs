@@ -569,11 +569,11 @@ function spawnInteractive(layout, environment, piInvocation) {
   const errorLog = createWriteStream(layout.errorLog, { encoding: "utf8", mode: 0o600 });
   const child = spawn(layout.interactiveHelper, args, {
     cwd: layout.fixture,
+    // Let Plannotator's public shared-event integration decide whether the
+    // current environment can open a browser. The previous forced remote/no-op
+    // settings made a local acceptance run skip the supported opener.
     env: {
       ...environment,
-      BROWSER: "true",
-      PLANNOTATOR_BROWSER: "true",
-      PLANNOTATOR_REMOTE: "true",
       PLANNOTATOR_PORT: "19642-19652",
     },
     stdio: ["ignore", "ignore", "pipe"],
