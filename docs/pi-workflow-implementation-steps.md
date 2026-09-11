@@ -68,14 +68,14 @@ production boundaryは次の7 resourceだけとする。`registerWorkflowResourc
 | Phase | Canonical resource | Agent / Skill | 主な結果 |
 |---|---|---|---|
 | Discovery | `pi-workflow.discovery` | fresh built-in `scout` | full Discovery Artifact、`discoveryRef`、bounded `discoveryMeta` |
-| Research | `pi-workflow.research` | fresh `pi-ketch.researcher`、conditional | Research Artifact、`researchRef`、bounded `researchMeta` |
+| Research | `pi-workflow.research` | fresh package-owned `pi-workflow.researcher`、conditional | Research Artifact、`researchRef`、bounded `researchMeta` |
 | Planning | `pi-workflow.planning` | fresh built-in `reviewer` + `pi-planning` | canonical Plan Artifact、`planRef`、`PlanningDecisionV1` |
 | Implementation | `pi-workflow.implementation` | fresh built-in `worker` | native run / patch / handoff refs、compact status |
 | Verification | `pi-workflow.verification` | fresh built-in `reviewer` + `pi-verification` | verification Artifact / evidence ref、`VerificationStatusV1` |
 | Verification Fix | `pi-workflow.verification-fix` | fresh built-in `worker` | 最大2 roundのrun / handoff refs、compact status |
 | Review | `pi-workflow.review` | `reviewer` fanout + `ponytail-review` + synthesis `reviewer` | review refs、`ReviewDecisionV1` |
 
-`pi-workflow`はcustom Agentを持たない。Planningはcustom Agentではなく、常に built-in `reviewer` + `pi-planning`とする。
+`pi-workflow`が所有するAgentはResearch用のpackage-owned `pi-workflow.researcher`だけである。Planningは別custom Agentではなく、常に built-in `reviewer` + `pi-planning`とする。generic `pi-ketch.researcher`はpi-ketch-ownedであり、変更しない。
 
 `pi-workflow.planning`は次の4 operationを所有する。Named Resourceは7のままであり、8個目のPlan Review resourceは追加しない。
 
@@ -87,6 +87,32 @@ production boundaryは次の7 resourceだけとする。`registerWorkflowResourc
 | `review-status` | zero | compact Mission-bound recovery metadata |
 
 operation omittedは`plan`と同値で、Unit 5の`{ "round": 1 }`を壊さない。全Main-triggered operationは`async:false`でforeground実行する。
+
+#### Research Agent Capability Contract
+
+Research resourceのexact Agent nameはpackage-owned `pi-workflow.researcher`である。generic `pi-ketch.researcher`を直接childとして使用しない。
+
+`pi-subagents v0.66.0`にはper-run field-level tool schema restriction、per-run tool replacement、per-run extension injectionがないため、Research policyはAgent-levelで定義する。
+
+```text
+Agent-level tools: strict tools allowlist
+Agent-level extensions: subagentOnlyExtensions
+
+available:
+  restricted Search Tool
+  ketch_code
+  ketch_docs
+  ketch_scrape
+
+NOT AVAILABLE:
+  multi
+  random
+  raw arbitrary flags
+```
+
+restricted Search Toolはgeneric `ketch_search`をmodelへ直接公開せず、model-facing contractとして`query` required、`backend` optionalを最低限公開する。検索はsingle configured/defaultまたは指定backend searchだけとし、追加のsafe fieldsはimplementation時にcurrent public Ketch APIとrequirementsから決定する。`ketch_code`、`ketch_docs`、`ketch_scrape`はpi-ketchのgeneric capabilitiesを再利用し、implementationをコピーしない。
+
+Ownershipは、generic Ketch capabilities / generic `pi-ketch.researcher` = `pi-ketch`、pi-workflow Research policy / `pi-workflow.researcher` = `pi-workflow`とする。generic `pi-ketch`、generic Research Agent、generic `ketch_search`の`multi` support、other pi-ketch consumersはunchangedである。generic `pi-ketch.researcher`がgeneric `ketch_search`（`multi`を含む）を利用する汎用性も変更しない。pi-workflowはpi-ketchのsupported/public package APIだけを利用し、`pi-ketch/src/**` deep import、private runtime、registered tool internal registry、raw internal executorへ依存しない。
 
 ### 3.2 Registration lifecycle
 
@@ -170,7 +196,7 @@ phase contractの要点は次のとおりとする。
 | Phase | Required state | Mainが再送しないもの |
 |---|---|---|
 | Discovery | `discoveryRef`、bounded `discoveryMeta` | full report、transcript |
-| Research | conditional `researchRef`、`researchMeta` | Discovery body、Research body |
+| Research | conditional `researchRef`、`researchMeta` | Discovery body、Research body、generic `pi-ketch.researcher`の直接利用 |
 | Planning | `planRef`、bounded `PlanningDecisionV1` | report、Plan body/path |
 | Implementation | native `runId` / `implementationRef`、またはpatch/handoff refs、compact status | Plan body/path、full diff、transcript |
 | Verification | `verificationRef`、`VerificationStatusV1` | evidence body、child prose |
@@ -234,12 +260,13 @@ Plan ReviewとCode Reviewは明示的 `approved: true`だけをapprovalとする
 - `pi-subagents`: native Mission、resource、run、worktree、acceptanceを使う。代替runtimeを作らない。
 - CodeGraph: 必要な場合だけ`status` → `explore`を使う。index lifecycleを自動管理しない。
 - TDD: behaviorを持つcore / runtime codeに適用する。静的manifestへ機械的に適用しない。
-- `pi-ketch.researcher`: repository内だけで確定できない外部仕様が必要な場合だけ使う。
+- package-owned `pi-workflow.researcher`: repository内だけで確定できない外部仕様が必要な場合だけ使う。Ketch capabilitiesはsupported/public APIから再利用する。
+- generic `pi-ketch.researcher`: pi-ketch-owned generic consumerとして変更しない。
 - `ponytail-review`: correctnessの代替ではなく、simplicity / over-engineering reviewに使う。
 
-| Step | pi-subagents | CodeGraph | TDD | pi-ketch.researcher | Ponytail |
+| Step | pi-subagents | CodeGraph | TDD | package-owned Research Agent | Ponytail |
 |---|---|---|---|---|---|
-| 1 Foundation | resource contract確認 | 必要時 | core validationで使用 | 外部contract確認時 | 最終確認 |
+| 1 Foundation | resource contract確認 | 必要時 | core validationで使用 | Agent-level policy contract確認時 | 最終確認 |
 | 2 Planning Flow | native flow確認 | 必要時 | behavior実装で使用 | 条件付き | 最終確認 |
 | 3 Single End-to-End | real runtime必須 | 必要時 | 推奨 | 条件付き | runtime review必須 |
 | 4 Parallel / Lane Flow | lanes/worktree必須 | 必要時 | 推奨 | 条件付き | runtime review必須 |
@@ -283,8 +310,9 @@ Plan ReviewとCode Reviewは明示的 `approved: true`だけをapprovalとする
 - resource-owned workflowScriptのconstructionを定義する。Mainへscript本文を返したり、Mainからscriptを受け取ったりしない。
 - resource-owned `outputSchema`を定義する。large Artifact用schemaとcompact control data用schemaを分離する。
 - child Agent / Skill、foreground policy、state/ref prerequisite、artifact policyのownershipをresource側へ置く。
+- Research policyとpackage-owned Agent `pi-workflow.researcher`のAgent-level strict tools allowlist / `subagentOnlyExtensions`をresource/package contractへ置く。
 - native provenance / digestが実際のconsumerに必要な場合だけnative boundaryのcontractに従う。Main-facing独自hash transportは実装しない。
-- custom Agent、custom Planning Agent、Main-facing phase transport Toolを追加しない。
+- `pi-workflow.researcher`以外のcustom Agent、custom Planning Agent、Main-facing phase transport Toolを追加しない。
 
 ### Shared contracts
 
@@ -308,7 +336,11 @@ real childを起動せず、次を確認する。
 - Artifact / Reference separation
 - S2 visibility policy
 - package manifest dependency topology
-- custom Agentが存在しないこと
+- `pi-workflow.researcher`のAgent-level strict tools allowlist / `subagentOnlyExtensions`
+- restricted Search Toolのsingle-search contract、`query` required、`backend` optional、`multi` / `random` / raw arbitrary flags不可
+- `ketch_code` / `ketch_docs` / `ketch_scrape`のgeneric capability reuse
+- supported/public pi-ketch API boundary、private/deep/internal dependencyなし
+- `pi-workflow.researcher`以外のcustom Agentが存在しないこと
 
 ## Out of Scope
 
@@ -341,7 +373,8 @@ real childを起動せず、次を確認する。
 [ ] Artifact / Reference typesが定義されている
 [ ] Mission state hard limit 256 KiBが表現されている
 [ ] S2 structured output ruleがcode/contractに表現されている
-[ ] custom Agentがない
+[ ] package-owned `pi-workflow.researcher`のAgent-level policyが表現されている
+[ ] `pi-workflow.researcher`以外のcustom Agentがない
 [ ] real workflow E2EをStep 1へ先取りしていない
 ```
 
@@ -365,8 +398,9 @@ Step 1のFoundation contract、resource registration、bounded validation、stat
 → native Mission create
 → pi-workflow.discovery
 → discoveryRef + bounded discoveryMeta
-→ conditional pi-workflow.research
-→ researchRef + bounded researchMeta
+→ externalResearchRequired ?
+   → pi-workflow.research → fresh `pi-workflow.researcher` child → researchRef + bounded researchMeta
+   → pi-workflow.research zero-child skip → researchMeta.status = skipped
 → Main-only Human clarification
 → pi-workflow.planning / plan
 → planRef + bounded PlanningDecisionV1
@@ -375,7 +409,7 @@ Step 1のFoundation contract、resource registration、bounded validation、stat
 → pi-workflow.planning / record-review
 ```
 
-MainはDiscovery、Research、Planの本文やpathをphase間でtransportしない。
+MainはDiscovery、Research、Planの本文やpathをphase間でtransportしない。generic `pi-ketch`、generic `pi-ketch.researcher`、generic `ketch_search`の`multi` support、other pi-ketch consumersは変更しない。generic `pi-ketch.researcher`がgeneric `ketch_search`（`multi`を含む）を利用する汎用性も変更しない。今回変えるのはResearch childのownershipとtool policyだけである。
 
 ## Implementation Target
 
@@ -384,8 +418,11 @@ MainはDiscovery、Research、Planの本文やpathをphase間でtransportしな�
 - explicit native Mission create / attach
 - `pi-workflow.discovery`によるfresh built-in `scout`、full Discovery Artifact、`discoveryRef`、bounded `discoveryMeta`
 - Discoveryのexternal research要否判定
-- `discoveryMeta.externalResearchRequired === true`の場合だけ`pi-workflow.research`を起動
-- conditional `pi-ketch.researcher`、Research Artifact、`researchRef`、bounded `researchMeta`
+- `pi-workflow.research`をResearch phase boundaryとして使用し、`externalResearchRequired === false`ではzero-child skipを行う
+- `externalResearchRequired === true`の場合だけfresh package-owned `pi-workflow.researcher` childを`context:"fresh"`、`async:false`で起動する
+- Research Artifact、`researchRef`、bounded `researchMeta`を保存し、full reportをMainへ戻さない
+- Agent-level strict tools allowlist / `subagentOnlyExtensions`でrestricted Search Tool、`ketch_code`、`ketch_docs`、`ketch_scrape`だけを利用可能にする
+- restricted Search Toolはgeneric `ketch_search`を直接公開せず、`query` required、`backend` optional、single search onlyとする。`multi`、`random`、raw arbitrary flagsは利用不可
 - Main-only Human clarification。childからHumanへ直接質問しない
 - `pi-workflow.planning`によるfresh built-in `reviewer` + `pi-planning`
 - Planning resourceが`discoveryRef`、optional `researchRef`、bounded Human decisionsをMission stateから内部解決
@@ -481,10 +518,21 @@ Mission-bound pending reviewがある場合はduplicate Plannotator launchを行
 [ ] Discovery full resultがMainを通過しない
 [ ] discoveryRefがMission stateへ保存される
 [ ] bounded discoveryMetaが保存される
-[ ] Researchはrequiredな場合だけ実行される
+[ ] Research resourceがpackage-owned `pi-workflow.researcher`を使用する
+[ ] `externalResearchRequired === false`がzero-child skipになる
+[ ] `externalResearchRequired === true`の場合だけResearch childが起動する
+[ ] Research childが`context:"fresh"`かつ`async:false`である
+[ ] Research AgentがAgent-level strict tools allowlist / `subagentOnlyExtensions`を使用する
+[ ] restricted Search Toolがgeneric `ketch_search`を直接公開しない
+[ ] Search contractが`query` required、`backend` optional、single search onlyである
+[ ] `multi` / `random` / raw arbitrary flagsがResearch Agentで利用不可である
+[ ] `ketch_code` / `ketch_docs` / `ketch_scrape`をpi-ketch generic capabilityとして再利用する
+[ ] Researchはrequiredな場合だけchildを実行する
 [ ] Research full resultがMainを通過しない
-[ ] Research実行時にresearchRefが保存される
-[ ] Research未実行時はresearchMeta.status = "skipped"である
+[ ] Research実行時にResearch Artifactと`researchRef`が保存される
+[ ] Research未実行時は`researchMeta.status = "skipped"`で`researchRef`がない
+[ ] generic pi-ketch、generic `pi-ketch.researcher`、generic `ketch_search` multi support、other consumersがunchangedである
+[ ] pi-ketchのsupported/public APIだけを利用し、deep/private/internal dependencyがない
 [ ] Human clarificationがMain-onlyである
 [ ] Human cancel / unavailable / errorでphaseを進めない
 [ ] Planningがreviewer + pi-planningでforeground実行される
@@ -519,6 +567,25 @@ Mission-bound pending reviewがある場合はduplicate Plannotator launchを行
 ```
 
 ### Required Unit 6 test plan
+
+Research isolation:
+
+```text
+package-owned Agent name: pi-workflow.researcher
+Agent-level strict tools allowlist / subagentOnlyExtensions
+externalResearchRequired === false: zero-child skip, no Research Agent/Ketch capability requirement, no researchRef
+externalResearchRequired === true: exactly one fresh foreground Research child
+restricted Search Tool: query required, backend optional, single search only
+multi / random / raw arbitrary flags: unavailable
+ketch_code / ketch_docs / ketch_scrape: available via generic pi-ketch capabilities
+model cannot call generic ketch_search directly
+pi-ketch generic Research Agent / generic ketch_search multi / other consumers: unchanged
+supported/public pi-ketch API only; no deep/private/internal dependency
+Research body excluded from Main transport and Mission state
+Research Agent unavailable / required Ketch capability unavailable: fail closed
+```
+
+Plan Review:
 
 ```text
 planning operation discriminator: operation omitted => plan
@@ -913,7 +980,7 @@ real childを起動せず、次を検証する。
 - required ref欠落時のfail closed
 - cross-Mission isolation
 - package manifest、peer/dev dependency topology、no bundle
-- custom Agentがないこと
+- package-owned `pi-workflow.researcher`のAgent-level policyと、それ以外のcustom Agentがないこと
 
 ### 5.2 Native Runtime Integration
 
@@ -947,7 +1014,7 @@ real `pi-subagents 0.66.0`で次を確認する。
 Runtime evidence classification:
 
 - **Required**: single Worker、reviewer + `pi-verification`、reviewer + `ponytail-review`、Verification Fix、review fanout、Human Gate、Mission close。
-- **Conditional**: `pi-ketch.researcher`は`externalResearchRequired === true`のscenario、`oracle`はarchitecture consultationを実際に使用するscenarioで検証する。使用しない構成ではcapability checkと未使用理由を確認する。
+- **Conditional**: package-owned `pi-workflow.researcher`とsupported/public Ketch capabilitiesは`externalResearchRequired === true`のscenarioで検証する。generic `pi-ketch.researcher`とgeneric `ketch_search`の`multi` supportは変更せず、`oracle`はarchitecture consultationを実際に使用するscenarioで検証する。使用しない構成ではcapability checkと未使用理由を確認する。
 
 未実行capabilityをarchitecture failureやPASS evidenceとして扱わない。Step 3 / Step 4 / releaseの該当Acceptance Criteriaは、実測runtime evidenceが得られるまでuncheckedとする。
 
@@ -957,6 +1024,7 @@ Runtime evidence classification:
 
 - Extensionがloadできる。
 - peer `pi-subagents@0.66.0`がsame scopeでresolveする。
+- package-owned Agent `pi-workflow.researcher`がAgent-level strict tools allowlist / `subagentOnlyExtensions`付きでdiscoverable / invocableである。
 - 7 named resourcesがdiscoverable / invocableである。
 - package-owned Skills、commands、Human Gate bridgeが解決する。
 - resource-owned script / schemaが解決する。
@@ -985,7 +1053,7 @@ Markdown validationはrepositoryに明示的なcommandが存在する場合だ�
 - new StepのAcceptance statusは、v0.66.0 target contractを確認するまで`unchecked`とする。
 - Basic Design / Implementation Specificationに明記されたcompleted evidenceは、記載された範囲だけをFoundation evidenceとして再利用できる。
 - `runs.lanes`のcontract evidenceがあっても、Step 4のproduction behavior全体をPASS扱いしない。
-- runtime未実行の`reviewer + pi-verification`、`reviewer + ponytail-review`、conditional `pi-ketch.researcher`、conditional `oracle`を実行済みと記録しない。
+- runtime未実行の`reviewer + pi-verification`、`reviewer + ponytail-review`、conditional package-owned `pi-workflow.researcher` / Ketch capabilities、conditional `oracle`を実行済みと記録しない。generic `pi-ketch.researcher`の変更・検証をこのmigrationのPASS evidenceにしない。
 - 実装済みcodeが新SOTに適合するか未確認の場合、new Step statusは`unchecked`とする。
 - 本書はimplementation targetを定義するだけで、実装完了を宣言しない。
 

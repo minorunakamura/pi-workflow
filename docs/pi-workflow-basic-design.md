@@ -60,8 +60,9 @@
 | **Mission State** | native Missionの `state.get/state.set` で保持するreference、status、bounded structured control/decision data。独自StateStoreではない。 |
 | **Structured Output** | `outputSchema` によって生成されるmachine value。`file-only` でもMain tool detailsへ露出し得る。 |
 | **Human Gate** | Main-onlyで行うPlan Review / Code Review / clarification。childへauthorityを移さない。 |
+| **Package-owned Research Agent** | `pi-workflow.researcher`。Research policyを実行するpackage-owned Agent identity。generic Ketch capabilityやgeneric Research Agentとは別物である。 |
 
-Planning用のcustom Agentは採用しない。PlanningのAgentは常に built-in `reviewer` + `pi-planning` Skillである。
+`pi-workflow`が所有するAgentは`pi-workflow.researcher`だけである。Planning用の別custom Agentは採用せず、PlanningのAgentは常に built-in `reviewer` + `pi-planning` Skillである。
 
 ---
 
@@ -200,10 +201,11 @@ product / architecture / policy / risk acceptanceなど、人の判断を必要�
 | Plannotator | 0.27.12 | Human Plan Review / Human Code Review | External |
 | Ponytail | 4.9.0 | `ponytail-review` Skill | External |
 | CodeGraph | 1.6.0 | optional local structural discovery accelerator | External |
-| `pi-ketch` | tested compatible revision | conditional external research Agent | External |
+| `pi-ketch` | tested compatible revision | generic Ketch capabilities、generic Research Agent `pi-ketch.researcher` | External |
+| `pi-workflow.researcher` | package-owned | Research policyを持つpackage-owned Research Agent | `pi-workflow` |
 | `pi-ask-user-question` | tested compatible revision | Main-only structured Human questions | External |
 
-`pi-workflow` のsupported package topologyは次である。
+`pi-ketch`はgeneric Ketch capabilityとgeneric Research Agent `pi-ketch.researcher`を所有する。`pi-workflow`はそのgeneric Agentを変更せず、独自のResearch policy boundaryとして`pi-workflow.researcher`を所有する。
 
 ```json
 {
@@ -246,7 +248,10 @@ flowchart TD
     P --> M
 
     C --> SC[scout]
-    C --> KR[pi-ketch.researcher]
+    C --> RW[pi-workflow.researcher]
+    RW --> RS[restricted Search Tool]
+    RS --> KSA[supported/public pi-ketch Search API]
+    RW --> KC[ketch_code / ketch_docs / ketch_scrape]
     C --> RVW[reviewer]
     C --> WK[worker]
     RVW -. Skill .-> PL[pi-planning / pi-verification / ponytail-review]
@@ -267,7 +272,7 @@ Productionで登録するresourceは次の7つである。resource nameはv0.66.
 | Phase | Canonical resource name | Child / Skill |
 |---|---|---|
 | Discovery | `pi-workflow.discovery` | fresh built-in `scout` |
-| Research | `pi-workflow.research` | fresh `pi-ketch.researcher`、conditional |
+| Research | `pi-workflow.research` | fresh package-owned `pi-workflow.researcher`、conditional |
 | Planning | `pi-workflow.planning` | fresh built-in `reviewer` + `pi-planning` |
 | Implementation | `pi-workflow.implementation` | fresh built-in `worker`、single / lanes / fix |
 | Verification | `pi-workflow.verification` | fresh built-in `reviewer` + `pi-verification` |
@@ -319,6 +324,8 @@ Canonical resource数は7のまま維持する。Plan Review用の8個目のName
 - bounded args validation
 - workflow script construction / package-owned workflow script
 - child Agent selection
+- Research resourceのpackage-owned Agent identity `pi-workflow.researcher`
+- Research AgentのAgent-level strict tools allowlist / `subagentOnlyExtensions`
 - Skill selection
 - `async:false` foreground policy
 - `state.get/state.set` の呼び出し
@@ -372,12 +379,13 @@ Plan Review bridgeはMain-onlyのcoordination boundaryとして、validated `pla
 
 ## 9. Agent / Skill構成
 
-`pi-workflow` 自身はcustom Agentを持たない。Planning用のcustom Agentも追加しない。
+`pi-workflow`が所有するpackage-owned AgentはResearch用の`pi-workflow.researcher`だけである。Planning用のcustom Agentは追加せず、Planningは常に built-in `reviewer` + `pi-planning`とする。
 
 | Responsibility | Agent / Skill |
 |---|---|
 | Local repository discovery | built-in `scout` |
-| External research | `pi-ketch.researcher`（conditional） |
+| External research | package-owned `pi-workflow.researcher`（conditional） + supported/public Ketch capabilities |
+| Generic Ketch research (外部consumer) | `pi-ketch.researcher`（pi-ketch-owned、unchanged） |
 | Planning | built-in `reviewer` + `pi-planning` |
 | Architecture consultation | built-in `oracle`（conditional） |
 | Implementation | built-in `worker` |
@@ -386,7 +394,7 @@ Plan Review bridgeはMain-onlyのcoordination boundaryとして、validated `pla
 | Simplicity review | built-in `reviewer` + `ponytail-review` |
 | Review synthesis | built-in `reviewer` |
 
-childrenへ不要な`subagent` toolを与えない。native capabilityとして明示的に必要な場合だけ、対象Agentのpublic capability contractに従う。
+`pi-workflow.researcher`はAgent-level strict tools allowlistと`subagentOnlyExtensions`でResearch専用のcapability boundaryを持つ。childrenへ不要な`subagent` toolを与えず、native capabilityとして明示的に必要な場合だけ対象Agentのpublic capability contractに従う。
 
 ---
 
@@ -405,7 +413,7 @@ flowchart TD
     ERef --> F{external research required?}
     F -->|yes| G[pi-workflow.research]
     G --> GRef[researchRef + compact metadata]
-    F -->|no| H[Research skipped]
+    F -->|no| H[pi-workflow.research\nzero-child skip]
     GRef --> I[Human clarification if needed]
     H --> I
     I --> J[pi-workflow.planning / plan]
@@ -521,13 +529,14 @@ Mainはpublic `subagent` management APIで次を確認する。
 
 使用直前に次を確認する。
 
-- `pi-ketch.researcher`
+- package-owned `pi-workflow.researcher` Agent（strict tools allowlist / `subagentOnlyExtensions`を含む）
+- Research Agentが利用するsupported/public Ketch capabilities（restricted Search、`ketch_code`、`ketch_docs`、`ketch_scrape`）
 - `oracle`
 - `ask_user_question`
 - Plannotator event endpoint
 - `pi-verification` / `ponytail-review` capability metadata
 
-CodeGraphはrequired dependencyにしない。
+generic `pi-ketch.researcher`のcapabilityやgeneric `ketch_search`の`multi`を、pi-workflow Researchの前提にしない。CodeGraphはrequired dependencyにしない。
 
 ### 12.3 Failure
 
@@ -586,18 +595,63 @@ CodeGraph policyはScout taskに含める。`codegraph status` → usableなら`
 
 ## 14. External Research
 
-外部factsが必要な場合だけ `pi-workflow.research` を起動する。`discoveryMeta.externalResearchRequired === true` が前提であり、不要時にResearcherを起動しない。
+Research phaseは`pi-workflow.research` resourceで処理し、外部factsが必要な場合だけResearch Agent childを起動する。Research resourceはResearch policyを所有するpackage-owned Agent `pi-workflow.researcher`を使用し、generic `pi-ketch.researcher`を直接childとして起動しない。
 
-Research resourceは:
+### 14.1 Research Agent Capability Contract
 
-- fresh `pi-ketch.researcher`
-- explicit `async:false`
-- read-only
-- Ketch tool / extension pathを直接指定しない
-- `discoveryRef` とcompact discovery metadataをMission stateから内部解決
-- full Discovery reportをMainへ戻さない
+`pi-workflow.researcher`は、既存のAgent naming conventionに従うpi-workflow固有のResearch Agentである。Research resourceが起動するchildは常にこのAgentとし、Research policyをpi-ketch側のgeneric Agentへ押し込まない。
 
-Research reportは`outputMode:"file-only"`でArtifact化し、`researchRef`をstateへ保存する。Mission stateには次のようなbounded metadataだけを保存する。
+`pi-subagents v0.66.0`ではper-runのfield-level tool schema restriction、per-run tool replacement、per-run extension injectionを利用できない。したがってこのpolicyをResearch resourceのchild invocation argsで後付けせず、Agent-level boundaryとして定義する。
+
+Agent-level contractは次である。
+
+| Contract | Rule |
+|---|---|
+| tools | strict tools allowlistを使用する |
+| extensions | `subagentOnlyExtensions`を使用する |
+| mode | read-only、fresh、foreground |
+| generic `ketch_search` | modelへ直接公開しない |
+
+Research Agentが利用できるKetch capabilitiesは次のとおりである。
+
+| Capability | Availability / boundary |
+|---|---|
+| restricted Search Tool | available。1回の呼び出しでsingle configured/defaultまたは指定backend searchだけを行う |
+| `ketch_code` | available。pi-ketchのgeneric capabilityを再利用する |
+| `ketch_docs` | available。pi-ketchのgeneric capabilityを再利用する |
+| `ketch_scrape` | available。pi-ketchのgeneric capabilityを再利用する |
+| `multi` | **NOT AVAILABLE** |
+| `random` | **NOT AVAILABLE** |
+| raw arbitrary flags | **NOT AVAILABLE** |
+
+restricted Search Toolのmodel-facing contractは少なくとも次である。
+
+```ts
+interface ResearchSearchInput {
+  query: string;  // required
+  backend?: string; // optional
+}
+```
+
+`query`はrequired、`backend`はoptionalとする。追加のsafe search fieldsを設ける場合は、implementation時にcurrent public Ketch Search API contractとpi-workflow requirementsから決定する。`multi`、`random`、raw arbitrary flagsは追加fieldとしても公開しない。modelはgeneric `ketch_search`を直接呼ばず、restricted Search Toolだけを使う。
+
+### 14.2 Ownership and public dependency boundary
+
+| Item | Owner |
+|---|---|
+| generic Ketch capabilities | `pi-ketch` |
+| generic Research Agent `pi-ketch.researcher` | `pi-ketch` |
+| pi-workflow Research policy / package-owned Agent `pi-workflow.researcher` | `pi-workflow` |
+
+`pi-workflow`は`pi-ketch`のsupported/public package APIだけを利用する。`pi-ketch/src/**`などのdeep import、private runtime import、registered tool internal registry access、raw internal executor dependencyは使用しない。pi-ketchの具体的なinternal file structureやimplementation detailsを、このSOTのdependency contractに含めない。
+
+generic `pi-ketch`、generic `pi-ketch.researcher`、generic `ketch_search`の`multi` support、other pi-ketch consumersはunchangedである。generic `pi-ketch.researcher`がgeneric `ketch_search`（`multi`を含む）を利用する汎用性も変更しない。pi-workflow固有のsingle-search policyをpi-ketch generic capabilityへ適用しない。
+
+### 14.3 Unit 4 Research semantics
+
+Unit 4のResearch semanticsは維持し、今回変えるのはResearch childのownershipとtool policyだけである。
+
+`externalResearchRequired === false` の場合はResearch resourceのzero-child skip pathを実行する。このpathではResearch Agent / Ketch capabilityを要求しない。Research Agent childを起動せず、`researchRef`を作らず、同じMissionへ次のbounded metadataを保存する。
 
 ```ts
 interface ResearchMetadataV1 {
@@ -607,7 +661,14 @@ interface ResearchMetadataV1 {
 }
 ```
 
-`pi-ketch.researcher` が使用可能でない場合はconditional capability failureとして停止する。foreground実行の失敗をbackgroundや別CLIへ自動切替しない。
+`externalResearchRequired === true` の場合は、`context:"fresh"`、`async:false`、read-onlyでfresh `pi-workflow.researcher` childを起動する。full Research reportは`outputMode:"file-only"`のResearch Artifactへ保存し、`researchRef`とbounded `researchMeta`だけをMission state / Main-facing resultへ返す。large Research body、Discovery body、child transcriptをMainへ通過させない。
+
+```text
+large Research body through Main: NO
+Mission state: researchRef / bounded researchMeta only
+```
+
+Research childが必要なcapabilityを利用できない場合、またはforeground実行・Artifact・Reference・state保存に失敗した場合はconditional capability failureとして停止する。background、別CLI、generic `pi-ketch.researcher`への自動切替は行わない。Main-only Human clarification boundaryは変更せず、Research childからHumanへ質問しない。
 
 ---
 
@@ -1190,9 +1251,13 @@ Main Sessionだけが使用する。TUI-only / cancel / unavailableは未回答�
 
 Scoutのoptional discovery acceleratorであり、index lifecycleを所有しない。
 
-### 25.5 `pi-ketch`
+### 25.5 `pi-ketch` とResearch isolation
 
-conditional Researcher capabilityとして扱う。Ketch tool名やextension pathを`pi-workflow`のworkflow contractへ埋め込まない。
+`pi-ketch`はgeneric Ketch capabilitiesとgeneric Research Agent `pi-ketch.researcher`のownerである。generic `ketch_search`の`multi` support、generic Research Agent、そのほかのpi-ketch consumersは変更しない。
+
+`pi-workflow`はResearch policyとpackage-owned Agent `pi-workflow.researcher`をownerとする。Research resourceは`pi-workflow.researcher`を経由してKetch capabilitiesを利用し、single configured/backend search、`multi` / `random`不可、strict tools allowlist、`subagentOnlyExtensions`というpolicyをpi-ketchへ押し込まない。
+
+Ketch capabilitiesへの依存はsupported/public package APIに限定する。Ketch tool名やextension pathのprivate実装、private registry、raw executorを`pi-workflow`のworkflow contractへ埋め込まない。
 
 ---
 
@@ -1263,7 +1328,7 @@ raw `workflowScript`の再生成・再transportをrecovery stepにしない。mi
 - `file-only + outputSchema` はS2であり、structuredOutput全体がMain detailsへ残ることが確認済みである。
 - Unit 5.1のnative validation isolation、bounded `PlanningDecisionV1`、file-backed Plan Artifact、`planRef`、S2、CodeGraph Discovery policyは変更しない。
 
-runtime未実行のcapabilityは、設計上 `public-contract supported / capability check required` とする。`reviewer + pi-verification`、`reviewer + ponytail-review`、`pi-ketch.researcher`、`oracle`の未実行をarchitecture failureや成功Evidenceとして扱わない。
+runtime未実行のcapabilityは、設計上 `public-contract supported / capability check required` とする。`reviewer + pi-verification`、`reviewer + ponytail-review`、package-owned `pi-workflow.researcher`、そのsupported/public Ketch capabilities、`oracle`の未実行をarchitecture failureや成功Evidenceとして扱わない。generic `pi-ketch.researcher`の変更・検証を、このpi-workflow migrationのEvidenceとはしない。
 
 ### 27.2 Deterministic contract tests
 
@@ -1291,7 +1356,7 @@ LLM E2Eと分離し、次をdeterministicに検証する。
 - pending reviewがduplicate Plannotator startを抑止することを検証する。
 - missing reviewId / incomplete correlation / transaction crash windowをreplacementなしでfail closedにすることを検証する。
 - S2 structured visibility ruleとcompact aggregate boundsを検証する。
-- no custom Agent、no bundle、packed resource presenceを検証する。
+- package-owned `pi-workflow.researcher`のAgent-level strict tools allowlist / `subagentOnlyExtensions`、ほかのcustom Agentがないこと、no bundle、packed resource presenceを検証する。
 
 ### 27.3 Native runtime integration
 
@@ -1299,7 +1364,7 @@ real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証�
 
 - Mission create / attach
 - Discovery reference handoff
-- optional Researcher
+- conditional package-owned `pi-workflow.researcher` and supported/public Ketch capabilities
 - Planning reference handoff
 - Planning `plan` / `prepare-review` / `record-review` / `review-status` control operations
 - Unit 5 `{round:1}` invocation with omitted `operation`
@@ -1317,14 +1382,15 @@ real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証�
 - review fix wave
 - Mission recovery
 - Human Gate approval / cancel / failure
-- `pi-ketch.researcher` when required
+- package-owned `pi-workflow.researcher`とrestricted Search Tool、supported/public Ketch capabilities when required
+- generic `pi-ketch.researcher`とgeneric `ketch_search` multi supportがunchangedであること
 - conditional `oracle`
 
 全contractを毎回LLM E2Eにしない。deterministic contract test、native runtime integration、packed install testを分離する。
 
 ### 27.4 Packed package
 
-`pnpm pack` artifactをclean consumerへinstall/loadして、Extension、7 named resources、3 own Skills、Plannotator bridge、resource-owned scriptsが解決できることを確認する。source checkoutだけのtestをpacked-install evidenceの代替にしない。
+`pnpm pack` artifactをclean consumerへinstall/loadして、Extension、package-owned Agent `pi-workflow.researcher`（strict tools allowlist / `subagentOnlyExtensions`を含む）、7 named resources、3 own Skills、Plannotator bridge、resource-owned scriptsが解決できることを確認する。source checkoutだけのtestをpacked-install evidenceの代替にしない。
 
 ### 27.5 Unit 6 Plan Review acceptance
 
@@ -1365,7 +1431,9 @@ real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証�
 [ ] pi-subagents 0.66.0 required peer dependency
 [ ] pi-subagents 0.66.0 devDependency for build/tests
 [ ] no bundled / vendored pi-subagents
-[ ] no custom pi-workflow Agents
+[ ] package-owned Research Agent `pi-workflow.researcher`が存在する
+[ ] `pi-workflow.researcher`のstrict tools allowlist / `subagentOnlyExtensions`がAgent-levelで定義される
+[ ] `pi-workflow.researcher`以外のcustom pi-workflow Agentがない
 [ ] native Mission only
 [ ] 7 named workflow resources
 [ ] no raw workflowScript Main transport
@@ -1392,7 +1460,12 @@ real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証�
 [ ] incomplete correlation / crash window fails closed
 [ ] max Plan Review rounds = 3
 [ ] Verification = reviewer + pi-verification
-[ ] conditional pi-ketch.researcher
+[ ] Research = package-owned `pi-workflow.researcher` + restricted single-search policy
+[ ] Research Agentが`ketch_code` / `ketch_docs` / `ketch_scrape`を利用できる
+[ ] Research Agentで`multi` / `random` / raw arbitrary flagsが利用できない
+[ ] Research Agentがgeneric `ketch_search`をmodelへ直接公開しない
+[ ] pi-ketchのsupported/public APIだけを利用する
+[ ] generic `pi-ketch`、generic `pi-ketch.researcher`、generic `ketch_search` multi support、other consumersがunchangedである
 [ ] Ponytail review
 [ ] Plannotator Human Gates
 [ ] packed install evidence
