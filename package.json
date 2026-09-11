@@ -14,8 +14,6 @@
     "lint": "oxlint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "validate:unit5:isolated": "node scripts/validate-unit5-isolated.mjs",
-    "validate:unit6:native": "node scripts/validate-unit6-native.mjs",
     "validate:research:isolation": "node scripts/validate-research-isolation.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

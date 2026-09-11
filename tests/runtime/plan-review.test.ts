@@ -37,6 +37,7 @@ class FakeEventBus implements PiEventBus {
           status: "handled",
           result: { status: "pending", reviewId: this.result.reviewId },
         });
+        setTimeout(() => this.emitReviewResult(), 0);
         return;
       }
       if (request.action === "review-status") {
@@ -103,7 +104,7 @@ describe("runPlanReview", () => {
       origin: "pi-workflow",
     });
     expect(JSON.stringify(result)).not.toContain("unit-marker");
-    expect(events.requestCount).toBe(2);
+    expect(events.requestCount).toBe(1);
   });
 
   it("writes rejected feedback to a package-owned Artifact and returns only feedbackRef", async () => {
@@ -134,7 +135,7 @@ describe("runPlanReview", () => {
     expect(result.feedbackRef).not.toBe(planRef);
   });
 
-  it("recovers a completed approval through review-status", async () => {
+  it("accepts a terminal approval event without a status lookup", async () => {
     const planRef = await planFile();
     const events = new FakeEventBus();
     events.status = "completed";

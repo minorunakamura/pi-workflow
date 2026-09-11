@@ -23,10 +23,6 @@ const resourceArgs: Record<ResourceArgsPhase, unknown> = {
   discovery: { requestType: "feature", request: "Inspect the repository." },
   research: {},
   planning: { round: 1 },
-  implementation: { mode: "single" },
-  verification: { round: 0 },
-  "verification-fix": { round: 1 },
-  review: { wave: 0 },
 };
 
 describe("ReferenceValue contract", () => {
@@ -56,7 +52,7 @@ describe("ReferenceValue contract", () => {
 });
 
 describe("Mission state contract", () => {
-  it("accepts bounded state and rejects large or unknown data", () => {
+  it("accepts only bounded Planning MVP state", () => {
     expect(
       validateMissionState({
         version: 1,
@@ -75,51 +71,41 @@ describe("Mission state contract", () => {
       }),
     ).toMatchObject({ ok: true });
 
+    for (const key of [
+      "missionStatus",
+      "implementation",
+      "verificationRef",
+      "verificationStatus",
+      "verificationFixRuns",
+      "reviewRef",
+      "reviewDecision",
+      "codeApproval",
+      "verificationRound",
+      "reviewFixWave",
+    ]) {
+      expect(validateMissionState({ version: 1, [key]: "future" }).ok).toBe(
+        false,
+      );
+    }
     expect(
-      validateMissionState({
-        version: 1,
-        report: "full discovery report",
-      }),
-    ).toMatchObject({ ok: false });
-    expect(
-      validateMissionState({
-        version: 1,
-        artifactBody: "full Artifact body",
-        planRef: { body: "not a ReferenceValue" },
-      }),
-    ).toMatchObject({ ok: false });
-
-    expect(
-      validateMissionState({
-        version: 1,
-        discoveryMeta: {
-          version: 1,
-          status: "ready",
-          externalResearchRequired: false,
-          humanClarificationRequired: false,
-          uncertainties: [],
-          researchQuestions: [],
-          report: "not allowed",
-        },
-      }),
+      validateMissionState({ version: 1, report: "full discovery report" }),
     ).toMatchObject({ ok: false });
   });
 
-  it("enforces nested ReferenceValue bounds", () => {
+  it("enforces nested ReferenceValue bounds and the aggregate limit", () => {
     const oversized = "r".repeat(MAX_REFERENCE_BYTES);
-    const result = validateMissionState({ version: 1, planRef: oversized });
-
-    expect(result.ok).toBe(false);
-  });
-
-  it("uses the serialized aggregate state limit", () => {
+    expect(
+      validateMissionState({ version: 1, planRef: oversized }),
+    ).toMatchObject({
+      ok: false,
+    });
     expect(MAX_MISSION_STATE_BYTES).toBe(262_144);
   });
 });
 
-describe("resource args contract", () => {
+describe("named resource args contract", () => {
   it.each(Object.entries(resourceArgs) as [ResourceArgsPhase, unknown][])(
-    "accepts minimal %s args but does not execute the phase",
+    "accepts minimal %s args",
     (phase, args) => {
       expect(validateResourceArgs(phase, args)).toMatchObject({ ok: true });
     },
@@ -129,38 +115,22 @@ describe("resource args contract", () => {
     "rejects caller-owned fields for %s",
     (phase) => {
       const args = { ...(resourceArgs[phase] as object), workflowScript: "x" };
-      const result = validateResourceArgs(phase, args);
-
-      expect(result.ok).toBe(false);
+      expect(validateResourceArgs(phase, args)).toMatchObject({ ok: false });
     },
   );
 
-  it("rejects missing required fields for every resource", () => {
-    const invalid: Record<ResourceArgsPhase, unknown> = {
-      discovery: { requestType: "feature" },
-      research: {},
-      planning: {},
-      implementation: {},
-      verification: {},
-      "verification-fix": {},
-      review: {},
-    };
-
-    expect(validateResourceArgs("discovery", invalid.discovery).ok).toBe(false);
-    expect(validateResourceArgs("planning", invalid.planning).ok).toBe(false);
+  it("rejects missing required fields and removed phase names", () => {
     expect(
-      validateResourceArgs("implementation", invalid.implementation).ok,
+      validateResourceArgs("discovery", { requestType: "feature" }).ok,
     ).toBe(false);
-    expect(validateResourceArgs("verification", invalid.verification).ok).toBe(
+    expect(validateResourceArgs("planning", {}).ok).toBe(false);
+    expect(validateResourceArgs("implementation", { mode: "single" }).ok).toBe(
       false,
     );
-    expect(
-      validateResourceArgs("verification-fix", invalid["verification-fix"]).ok,
-    ).toBe(false);
-    expect(validateResourceArgs("review", invalid.review).ok).toBe(false);
+    expect(validateResourceArgs("verification", { round: 0 }).ok).toBe(false);
   });
 
-  it("enforces bounded human input and request bytes", () => {
+  it("enforces bounded Human input, request bytes, and review transitions", () => {
     expect(
       validateResourceArgs("discovery", {
         requestType: "feature",
@@ -177,24 +147,20 @@ describe("resource args contract", () => {
 
     expect(
       validateResourceArgs("planning", {
+        operation: "prepare-review",
         round: 1,
-        feedbackRef: "r".repeat(MAX_REFERENCE_BYTES - 1),
+        planRef: "plan-1",
       }),
-    ).toMatchObject({ ok: false });
-  });
-
-  it("enforces review-fix cross-field policy", () => {
+    ).toMatchObject({ ok: true });
     expect(
-      validateResourceArgs("implementation", {
-        mode: "review-fix",
-      }),
-    ).toMatchObject({ ok: false });
-    expect(
-      validateResourceArgs("implementation", {
-        mode: "single",
-        reviewFixWave: 1,
-      }),
-    ).toMatchObject({ ok: false });
+      validateResourceArgs("planning", {
+        operation: "record-review",
+        round: 1,
+        planRef: "plan-1",
+        reviewId: "review-1",
+        status: "pending",
+      }).ok,
+    ).toBe(false);
   });
 });
 

@@ -19,7 +19,7 @@ export function buildWorkflowKickoff(
     `Request: ${request}`,
     "Follow the pi-workflow Skill as the Main Session control-plane policy.",
     "Use the named resources and Main-only Plan Review; stop after an approved Plan is persisted.",
-    "Do not start Implementation, Verification, or Code Review in this Unit 6 flow.",
+    "Stop after the approved Plan; do not start Implementation, Verification, or Code Review.",
   ].join("\n");
 }
 

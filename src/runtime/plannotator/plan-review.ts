@@ -261,20 +261,6 @@ export async function runPlanReview(
   );
 
   try {
-    let recovered: PlanReviewOutput | undefined;
-    try {
-      recovered = await recoverPlanReview(pi, input, reviewId, signal);
-    } catch (error) {
-      waitController.abort();
-      await reviewResultPromise.catch(() => undefined);
-      throw error;
-    }
-    if (recovered) {
-      waitController.abort();
-      await reviewResultPromise.catch(() => undefined);
-      return recovered;
-    }
-
     const result = await reviewResultPromise;
     if (result.reviewId !== reviewId) {
       throw new Error("Plannotator returned the wrong reviewId.");

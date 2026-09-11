@@ -16,17 +16,9 @@ const piManifest = packageJson.pi as {
   subagents: { agents: string[] };
 };
 
-const workflowScripts = [
-  "discovery.js",
-  "research.js",
-  "planning.js",
-  "implementation.js",
-  "verification.js",
-  "verification-fix.js",
-  "review.js",
-];
+const workflowScripts = ["discovery.js", "research.js", "planning.js"];
 
-const skills = ["pi-workflow", "pi-planning", "pi-verification"];
+const skills = ["pi-workflow", "pi-planning"];
 
 describe("package contract", () => {
   it("requires pi-subagents 0.67.0 as a peer and development dependency", () => {
@@ -78,7 +70,16 @@ describe("package contract", () => {
     expect(existsSync(`${repoRoot}/agents/researcher.md`)).toBe(true);
   });
 
-  it("contains exactly the Step 1 workflow resources", () => {
+  it("does not expose migration milestone validator commands", () => {
+    expect(packageJson.scripts ?? {}).not.toHaveProperty(
+      "validate:unit5:isolated",
+    );
+    expect(packageJson.scripts ?? {}).not.toHaveProperty(
+      "validate:unit6:native",
+    );
+  });
+
+  it("contains exactly the Planning MVP workflow resources", () => {
     expect(readdirSync(`${repoRoot}/workflow-scripts`).toSorted()).toEqual(
       workflowScripts.toSorted(),
     );

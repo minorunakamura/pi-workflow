@@ -5,7 +5,7 @@ import {
 } from "../../src/core/phases/args";
 import { MAX_REFERENCE_BYTES } from "../../src/core/state/references";
 
-describe("PlanningArgsV2", () => {
+describe("Planning resource args", () => {
   it("keeps omitted operation equivalent to plan", () => {
     expect(validateResourceArgs("planning", { round: 1 })).toMatchObject({
       ok: true,
@@ -26,7 +26,7 @@ describe("PlanningArgsV2", () => {
       round: 1,
       planRef: "plan-1",
       reviewId: "review-1",
-      status: "pending",
+      status: "approved",
     },
     {
       operation: "review-status",

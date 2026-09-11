@@ -13,7 +13,7 @@ import {
   MAX_RESOURCE_ARGS_BYTES,
   ResourceArgsSchemas,
   type DiscoveryArgsV1,
-  type PlanningArgsV2,
+  type PlanningArgsV1,
   type ResearchArgsV1,
   type ResourceArgsPhase,
   validateResourceArgs,
@@ -58,10 +58,6 @@ export const WORKFLOW_RESOURCE_NAMES = [
   "pi-workflow.discovery",
   "pi-workflow.research",
   "pi-workflow.planning",
-  "pi-workflow.implementation",
-  "pi-workflow.verification",
-  "pi-workflow.verification-fix",
-  "pi-workflow.review",
 ] as const;
 
 export type WorkflowResourceName = (typeof WORKFLOW_RESOURCE_NAMES)[number];
@@ -218,7 +214,7 @@ export function buildResearchWorkflowScript(args: ResearchArgsV1): string {
 }
 
 export function buildPlanningWorkflowScript(
-  args: PlanningArgsV2,
+  args: PlanningArgsV1,
   binding?: PlanningArtifactBinding,
 ): string {
   const artifactBinding =
@@ -282,30 +278,6 @@ export const WORKFLOW_RESOURCE_CONTRACTS = {
     outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.planning,
     foreground: FOREGROUND_POLICY,
   },
-  "pi-workflow.implementation": {
-    argsPhase: "implementation",
-    argsSchema: ResourceArgsSchemas.implementation,
-    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.implementation,
-    foreground: FOREGROUND_POLICY,
-  },
-  "pi-workflow.verification": {
-    argsPhase: "verification",
-    argsSchema: ResourceArgsSchemas.verification,
-    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.verification,
-    foreground: FOREGROUND_POLICY,
-  },
-  "pi-workflow.verification-fix": {
-    argsPhase: "verification-fix",
-    argsSchema: ResourceArgsSchemas["verification-fix"],
-    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES["verification-fix"],
-    foreground: FOREGROUND_POLICY,
-  },
-  "pi-workflow.review": {
-    argsPhase: "review",
-    argsSchema: ResourceArgsSchemas.review,
-    outputPolicy: WORKFLOW_RESOURCE_OUTPUT_POLICIES.review,
-    foreground: FOREGROUND_POLICY,
-  },
 } as const satisfies Record<
   WorkflowResourceName,
   {
@@ -353,7 +325,7 @@ function resolvePlanning(
       error: `Invalid args for 'pi-workflow.planning': ${formatValidationIssues(validation.errors)}`,
     };
   }
-  const argsValue = validation.value as PlanningArgsV2;
+  const argsValue = validation.value as PlanningArgsV1;
   const operation = argsValue.operation ?? "plan";
   const binding =
     operation === "plan" ? createPlanningArtifactBinding() : undefined;
@@ -369,36 +341,24 @@ function resolvePlanning(
   };
 }
 
-function notMigrated(
-  name: WorkflowResourceName,
-): WorkflowResourceDefinition["resolve"] {
-  const phase = WORKFLOW_RESOURCE_CONTRACTS[name].argsPhase;
-  return (args) => {
-    const validation = validateResourceArgs(phase, args);
-    if (!validation.ok) {
-      return {
-        error: `Invalid args for '${name}': ${formatValidationIssues(validation.errors)}`,
-      };
-    }
-    return {
-      error: `Named workflow resource '${name}' is not yet migrated to the v0.67.0 resource execution path.`,
-    };
-  };
-}
-
 export const WORKFLOW_RESOURCE_DEFINITIONS: readonly WorkflowResourceDefinition[] =
-  WORKFLOW_RESOURCE_NAMES.map((name) => ({
-    name,
-    version: RESOURCE_VERSION,
-    resolve:
-      name === "pi-workflow.discovery"
-        ? resolveDiscovery
-        : name === "pi-workflow.research"
-          ? resolveResearch
-          : name === "pi-workflow.planning"
-            ? resolvePlanning
-            : notMigrated(name),
-  }));
+  [
+    {
+      name: "pi-workflow.discovery",
+      version: RESOURCE_VERSION,
+      resolve: resolveDiscovery,
+    },
+    {
+      name: "pi-workflow.research",
+      version: RESOURCE_VERSION,
+      resolve: resolveResearch,
+    },
+    {
+      name: "pi-workflow.planning",
+      version: RESOURCE_VERSION,
+      resolve: resolvePlanning,
+    },
+  ];
 
 function disposeAll(
   registrations: readonly WorkflowResourceRegistration[],

@@ -2,14 +2,12 @@ import { Type, type Static, type TSchema } from "typebox";
 import {
   isJsonValue,
   jsonBoundIssues,
-  MAX_IDENTIFIER_BYTES,
   MAX_HUMAN_INPUT_ENTRIES,
   MAX_HUMAN_INPUT_VALUE_BYTES,
+  MAX_IDENTIFIER_BYTES,
   MAX_MISSION_STATE_BYTES,
-  MAX_REVIEW_FIX_WAVES,
   MAX_REGULAR_TEXT_BYTES,
   MAX_REQUEST_BYTES,
-  MAX_VERIFICATION_FIX_ROUNDS,
   type ValidationIssue,
   validateSchema,
   type ValidationResult,
@@ -17,10 +15,6 @@ import {
 } from "../validation";
 import { PlanningDecisionSchema } from "../planning/planning-decision-schema";
 import { validatePlanningDecision } from "../planning/planning-decision";
-import {
-  ReviewDecisionSchema,
-  validateReviewDecision,
-} from "../review/review-decision-schema";
 import {
   ReferenceValueSchema,
   validateReferenceValue,
@@ -35,7 +29,6 @@ export {
   MAX_PLAN_REVIEW_ROUNDS,
   MAX_REGULAR_TEXT_BYTES,
   MAX_REQUEST_BYTES,
-  MAX_VERIFICATION_FIX_ROUNDS,
 } from "../validation";
 export { MAX_REFERENCE_BYTES } from "./references";
 
@@ -51,9 +44,6 @@ export const MAX_RESEARCH_METADATA_BYTES = 8 * 1024;
 export const MAX_PLAN_REVIEW_BINDING_BYTES = 8 * 1024;
 export const MAX_DISCOVERY_METADATA_ITEMS = 8;
 export const MAX_RESEARCH_QUESTIONS = 8;
-export const MAX_IMPLEMENTATION_LANE_RESULTS = 32;
-export const MAX_FAILED_VERIFICATION_IDS = 16;
-export const MAX_VERIFICATION_FIX_RUNS = 2;
 
 export const RequestTypeSchema = Type.Union([
   Type.Literal("feature"),
@@ -62,25 +52,11 @@ export const RequestTypeSchema = Type.Union([
   Type.Literal("hotfix"),
 ]);
 
-export const MissionStatusSchema = Type.Union([
-  Type.Literal("planned"),
-  Type.Literal("active"),
-  Type.Literal("waiting"),
-  Type.Literal("needs_decision"),
-  Type.Literal("completed"),
-  Type.Literal("failed"),
-  Type.Literal("cancelled"),
-]);
-
 export const MissionPhaseSchema = Type.Union([
   Type.Literal("discovery"),
   Type.Literal("research"),
   Type.Literal("planning"),
   Type.Literal("plan-review"),
-  Type.Literal("implementation"),
-  Type.Literal("verification"),
-  Type.Literal("verification-fix"),
-  Type.Literal("review"),
 ]);
 
 export const HumanInputSchema = Type.Object(
@@ -127,11 +103,7 @@ export const DiscoveryMetadataSchema = Type.Object(
 export const ResearchMetadataSchema = Type.Object(
   {
     version: Type.Literal(1),
-    status: Type.Union([
-      Type.Literal("skipped"),
-      Type.Literal("completed"),
-      Type.Literal("blocked"),
-    ]),
+    status: Type.Union([Type.Literal("completed"), Type.Literal("blocked")]),
     unresolvedQuestions: Type.Array(CompactText(), {
       maxItems: MAX_RESEARCH_QUESTIONS,
     }),
@@ -139,112 +111,8 @@ export const ResearchMetadataSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ImplementationStateSchema = Type.Object(
-  {
-    version: Type.Literal(1),
-    mode: Type.Union([
-      Type.Literal("single"),
-      Type.Literal("lanes"),
-      Type.Literal("review-fix"),
-    ]),
-    status: Type.Union([
-      Type.Literal("pending"),
-      Type.Literal("completed"),
-      Type.Literal("failed"),
-      Type.Literal("blocked"),
-    ]),
-    runId: Type.Optional(ReferenceValueSchema),
-    laneResults: Type.Optional(
-      Type.Array(
-        Type.Object(
-          {
-            workUnitId: Identifier(),
-            status: Type.Union([
-              Type.Literal("completed"),
-              Type.Literal("failed"),
-              Type.Literal("blocked"),
-            ]),
-            runId: Type.Optional(ReferenceValueSchema),
-            patchRef: Type.Optional(ReferenceValueSchema),
-            handoffRef: Type.Optional(ReferenceValueSchema),
-          },
-          { additionalProperties: false },
-        ),
-        { maxItems: MAX_IMPLEMENTATION_LANE_RESULTS },
-      ),
-    ),
-  },
-  { additionalProperties: false },
-);
-
-export const VerificationStatusSchema = Type.Object(
-  {
-    version: Type.Literal(1),
-    status: Type.Union([
-      Type.Literal("passed"),
-      Type.Literal("failed"),
-      Type.Literal("blocked"),
-    ]),
-    evidenceStatus: Type.Union([
-      Type.Literal("verified"),
-      Type.Literal("missing"),
-      Type.Literal("unverified"),
-    ]),
-    requiredFix: Type.Boolean(),
-    failedVerificationIds: Type.Array(Identifier(), {
-      maxItems: MAX_FAILED_VERIFICATION_IDS,
-    }),
-  },
-  { additionalProperties: false },
-);
-
-export const VerificationFixRunSchema = Type.Object(
-  {
-    round: Type.Union([
-      Type.Literal(1),
-      Type.Literal(MAX_VERIFICATION_FIX_ROUNDS),
-    ]),
-    status: Type.Union([
-      Type.Literal("completed"),
-      Type.Literal("failed"),
-      Type.Literal("blocked"),
-    ]),
-    runId: Type.Optional(ReferenceValueSchema),
-    handoffRef: Type.Optional(ReferenceValueSchema),
-  },
-  { additionalProperties: false },
-);
-
-export const VerificationFixRunsSchema = Type.Array(VerificationFixRunSchema, {
-  maxItems: MAX_VERIFICATION_FIX_RUNS,
-});
-
-export const ReviewReferenceIndexSchema = Type.Object(
-  {
-    correctnessRef: ReferenceValueSchema,
-    simplicityRef: ReferenceValueSchema,
-    synthesisRef: ReferenceValueSchema,
-  },
-  { additionalProperties: false },
-);
-
 export type RequestType = Static<typeof RequestTypeSchema>;
-export type MissionStatus = Static<typeof MissionStatusSchema>;
 export type MissionPhase = Static<typeof MissionPhaseSchema>;
-
-export const CodeApprovalSchema = Type.Object(
-  {
-    status: Type.Union([
-      Type.Literal("pending"),
-      Type.Literal("approved"),
-      Type.Literal("rejected"),
-      Type.Literal("failed"),
-    ]),
-    reviewId: Type.Optional(ReferenceValueSchema),
-    feedbackRef: Type.Optional(ReferenceValueSchema),
-  },
-  { additionalProperties: false },
-);
 
 export const PlanReviewBindingSchema = Type.Object(
   {
@@ -268,7 +136,6 @@ export const MissionStateSchema = Type.Object(
     requestType: Type.Optional(RequestTypeSchema),
     request: Type.Optional(RequestText()),
     phase: Type.Optional(MissionPhaseSchema),
-    missionStatus: Type.Optional(MissionStatusSchema),
     humanDecisions: Type.Optional(HumanInputsSchema),
     discoveryRef: Type.Optional(ReferenceValueSchema),
     discoveryMeta: Type.Optional(DiscoveryMetadataSchema),
@@ -281,19 +148,6 @@ export const MissionStateSchema = Type.Object(
       PlanningDecisionSchema,
     ),
     planReview: Type.Optional(PlanReviewBindingSchema),
-    implementation: Type.Optional(ImplementationStateSchema),
-    verificationRef: Type.Optional(ReferenceValueSchema),
-    verificationStatus: Type.Optional(VerificationStatusSchema),
-    verificationFixRuns: Type.Optional(VerificationFixRunsSchema),
-    reviewRef: Type.Optional(ReviewReferenceIndexSchema),
-    reviewDecision: Type.Optional(ReviewDecisionSchema),
-    codeApproval: Type.Optional(CodeApprovalSchema),
-    verificationRound: Type.Optional(
-      Type.Integer({ minimum: 0, maximum: MAX_VERIFICATION_FIX_ROUNDS }),
-    ),
-    reviewFixWave: Type.Optional(
-      Type.Integer({ minimum: 0, maximum: MAX_REVIEW_FIX_WAVES }),
-    ),
   },
   { additionalProperties: false },
 );
@@ -308,11 +162,6 @@ export type HumanInputV1 = Static<typeof HumanInputSchema>;
 export type HumanDecisionV1 = HumanInputV1;
 export type DiscoveryMetadataV1 = Static<typeof DiscoveryMetadataSchema>;
 export type ResearchMetadataV1 = Static<typeof ResearchMetadataSchema>;
-export type ImplementationStateV1 = Static<typeof ImplementationStateSchema>;
-export type VerificationStatusV1 = Static<typeof VerificationStatusSchema>;
-export type VerificationFixRunV1 = Static<typeof VerificationFixRunSchema>;
-export type ReviewReferenceIndexV1 = Static<typeof ReviewReferenceIndexSchema>;
-export type CodeApprovalV1 = Static<typeof CodeApprovalSchema>;
 export type PlanReviewBindingV1 = Static<typeof PlanReviewBindingSchema>;
 export type MissionStateV1 = Static<typeof MissionStateSchema>;
 
@@ -358,14 +207,9 @@ function humanInputIssues(value: HumanInputV1[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   value.forEach((item, index) => {
     issues.push(
+      ...utf8Issue(`/${index}/id`, item.id, MAX_IDENTIFIER_BYTES, "identifier"),
       ...utf8Issue(
-        `/` + index + "/id",
-        item.id,
-        MAX_IDENTIFIER_BYTES,
-        "identifier",
-      ),
-      ...utf8Issue(
-        `/` + index + "/value",
+        `/${index}/value`,
         item.value,
         MAX_HUMAN_INPUT_VALUE_BYTES,
         "human input",
@@ -454,125 +298,6 @@ function referenceIssues(
   return prefixIssues(path, validateReferenceValue(value).errors);
 }
 
-function implementationIssues(value: ImplementationStateV1): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
-  if (value.runId !== undefined)
-    issues.push(...referenceIssues("/runId", value.runId));
-  value.laneResults?.forEach((lane, index) => {
-    issues.push(
-      ...utf8Issue(
-        `/laneResults/${index}/workUnitId`,
-        lane.workUnitId,
-        MAX_IDENTIFIER_BYTES,
-        "identifier",
-      ),
-    );
-    for (const [key, reference] of [
-      ["runId", lane.runId],
-      ["patchRef", lane.patchRef],
-      ["handoffRef", lane.handoffRef],
-    ] as const) {
-      if (reference !== undefined) {
-        issues.push(
-          ...referenceIssues(`/laneResults/${index}/${key}`, reference),
-        );
-      }
-    }
-  });
-  return issues;
-}
-
-export function validateImplementationState(
-  value: unknown,
-): ValidationResult<ImplementationStateV1> {
-  return boundedSchemaResult(
-    ImplementationStateSchema,
-    value,
-    implementationIssues,
-  );
-}
-
-function verificationStatusIssues(
-  value: VerificationStatusV1,
-): ValidationIssue[] {
-  return value.failedVerificationIds.flatMap((id, index) =>
-    utf8Issue(
-      `/failedVerificationIds/${index}`,
-      id,
-      MAX_IDENTIFIER_BYTES,
-      "identifier",
-    ),
-  );
-}
-
-export function validateVerificationStatus(
-  value: unknown,
-): ValidationResult<VerificationStatusV1> {
-  return boundedSchemaResult(
-    VerificationStatusSchema,
-    value,
-    verificationStatusIssues,
-  );
-}
-
-function verificationFixIssues(
-  value: VerificationFixRunV1[],
-): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
-  value.forEach((run, index) => {
-    if (run.runId !== undefined)
-      issues.push(...referenceIssues(`/${index}/runId`, run.runId));
-    if (run.handoffRef !== undefined)
-      issues.push(...referenceIssues(`/${index}/handoffRef`, run.handoffRef));
-  });
-  return issues;
-}
-
-export function validateVerificationFixRuns(
-  value: unknown,
-): ValidationResult<VerificationFixRunV1[]> {
-  return boundedSchemaResult(
-    VerificationFixRunsSchema,
-    value,
-    verificationFixIssues,
-  );
-}
-
-function reviewReferenceIndexIssues(
-  value: ReviewReferenceIndexV1,
-): ValidationIssue[] {
-  return [
-    ...referenceIssues("/correctnessRef", value.correctnessRef),
-    ...referenceIssues("/simplicityRef", value.simplicityRef),
-    ...referenceIssues("/synthesisRef", value.synthesisRef),
-  ];
-}
-
-export function validateReviewReferenceIndex(
-  value: unknown,
-): ValidationResult<ReviewReferenceIndexV1> {
-  return boundedSchemaResult(
-    ReviewReferenceIndexSchema,
-    value,
-    reviewReferenceIndexIssues,
-  );
-}
-
-function codeApprovalIssues(value: CodeApprovalV1): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
-  if (value.reviewId !== undefined)
-    issues.push(...referenceIssues("/reviewId", value.reviewId));
-  if (value.feedbackRef !== undefined)
-    issues.push(...referenceIssues("/feedbackRef", value.feedbackRef));
-  return issues;
-}
-
-export function validateCodeApproval(
-  value: unknown,
-): ValidationResult<CodeApprovalV1> {
-  return boundedSchemaResult(CodeApprovalSchema, value, codeApprovalIssues);
-}
-
 function planReviewBindingIssues(
   value: PlanReviewBindingV1,
 ): ValidationIssue[] {
@@ -642,7 +367,6 @@ function missionStateNestedIssues(value: MissionStateV1): ValidationIssue[] {
     ["discoveryRef", value.discoveryRef],
     ["researchRef", value.researchRef],
     ["planRef", value.planRef],
-    ["verificationRef", value.verificationRef],
   ] as const) {
     if (reference !== undefined)
       issues.push(...referenceIssues(`/${key}`, reference));
@@ -661,35 +385,6 @@ function missionStateNestedIssues(value: MissionStateV1): ValidationIssue[] {
     const result = validatePlanningDecision(value.planningDecision);
     if (!result.ok)
       issues.push(...prefixIssues("/planningDecision", result.errors));
-  }
-  if (value.implementation !== undefined) {
-    const result = validateImplementationState(value.implementation);
-    if (!result.ok)
-      issues.push(...prefixIssues("/implementation", result.errors));
-  }
-  if (value.verificationStatus !== undefined) {
-    const result = validateVerificationStatus(value.verificationStatus);
-    if (!result.ok)
-      issues.push(...prefixIssues("/verificationStatus", result.errors));
-  }
-  if (value.verificationFixRuns !== undefined) {
-    const result = validateVerificationFixRuns(value.verificationFixRuns);
-    if (!result.ok)
-      issues.push(...prefixIssues("/verificationFixRuns", result.errors));
-  }
-  if (value.reviewRef !== undefined) {
-    const result = validateReviewReferenceIndex(value.reviewRef);
-    if (!result.ok) issues.push(...prefixIssues("/reviewRef", result.errors));
-  }
-  if (value.reviewDecision !== undefined) {
-    const result = validateReviewDecision(value.reviewDecision);
-    if (!result.ok)
-      issues.push(...prefixIssues("/reviewDecision", result.errors));
-  }
-  if (value.codeApproval !== undefined) {
-    const result = validateCodeApproval(value.codeApproval);
-    if (!result.ok)
-      issues.push(...prefixIssues("/codeApproval", result.errors));
   }
   if (value.planReview !== undefined) {
     const result = validatePlanReviewBinding(value.planReview);

@@ -66,20 +66,6 @@ export const WORKFLOW_RESOURCE_OUTPUT_POLICIES = {
     decision: BOUNDED_COMPACT_OUTPUT_POLICY,
     planReview: BOUNDED_COMPACT_OUTPUT_POLICY,
   },
-  implementation: {
-    result: LARGE_ARTIFACT_OUTPUT_POLICY,
-  },
-  verification: {
-    evidence: LARGE_ARTIFACT_OUTPUT_POLICY,
-    status: BOUNDED_COMPACT_OUTPUT_POLICY,
-  },
-  "verification-fix": {
-    result: LARGE_ARTIFACT_OUTPUT_POLICY,
-  },
-  review: {
-    findings: LARGE_ARTIFACT_OUTPUT_POLICY,
-    decision: BOUNDED_COMPACT_OUTPUT_POLICY,
-  },
 } as const;
 
 function isStructuredOutputRequest(

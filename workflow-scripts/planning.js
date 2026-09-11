@@ -1,5 +1,3 @@
-const input = __PI_WORKFLOW_INPUT__;
-
 /* pi-workflow: planning-resource:start */
 if (input.resource === "pi-workflow.planning") {
   const MAX_STATE_BYTES = input.planningBounds.stateBytes;
@@ -15,25 +13,7 @@ if (input.resource === "pi-workflow.planning") {
   const MAX_METADATA_ITEMS = input.planningBounds.metadataItems;
   const MAX_JSON_DEPTH = input.planningBounds.jsonDepth;
   const requestTypes = ["feature", "bug", "chore", "hotfix"];
-  const phases = [
-    "discovery",
-    "research",
-    "planning",
-    "plan-review",
-    "implementation",
-    "verification",
-    "verification-fix",
-    "review",
-  ];
-  const missionStatuses = [
-    "planned",
-    "active",
-    "waiting",
-    "needs_decision",
-    "completed",
-    "failed",
-    "cancelled",
-  ];
+  const phases = ["discovery", "research", "planning", "plan-review"];
   const stateKeys = Array.isArray(input.stateKeys) ? input.stateKeys : [];
 
   function isRecord(value) {
@@ -335,7 +315,7 @@ if (input.resource === "pi-workflow.planning") {
       throw new Error("Mission researchMeta does not match the package-owned schema.");
     }
     assertExactKeys(value, ["version", "status", "unresolvedQuestions"], "Research metadata");
-    if (value.version !== 1 || !["skipped", "completed", "blocked"].includes(value.status)) {
+    if (value.version !== 1 || !["completed", "blocked"].includes(value.status)) {
       throw new Error("Mission researchMeta has an invalid version or status.");
     }
     if (value.unresolvedQuestions.length > MAX_METADATA_ITEMS) throw new Error("Mission researchMeta exceeds the item bound.");
@@ -356,9 +336,8 @@ if (input.resource === "pi-workflow.planning") {
     if (value.requestType !== undefined && !requestTypes.includes(value.requestType)) throw new Error("Mission state requestType is invalid.");
     if (value.request !== undefined) assertText(value.request, MAX_REQUEST_BYTES, "Mission state request");
     if (value.phase !== undefined && !phases.includes(value.phase)) throw new Error("Mission state phase is invalid.");
-    if (value.missionStatus !== undefined && !missionStatuses.includes(value.missionStatus)) throw new Error("Mission state missionStatus is invalid.");
     if (value.humanDecisions !== undefined) assertHumanInputs(value.humanDecisions);
-    for (const key of ["discoveryRef", "researchRef", "planRef", "verificationRef"]) {
+    for (const key of ["discoveryRef", "researchRef", "planRef"]) {
       if (value[key] !== undefined) assertReference(value[key], `Mission state ${key}`);
     }
     if (value.discoveryMeta !== undefined) assertDiscoveryMetadata(value.discoveryMeta);
@@ -444,27 +423,6 @@ if (input.resource === "pi-workflow.planning") {
     for (const key of stateKeys) {
       const value = await state.get(key);
       if (value !== undefined) controlState[key] = value;
-    }
-    for (const key of [
-      "discovery",
-      "research",
-      "planning",
-      "planningCorrectionCount",
-      "report",
-      "artifactBody",
-      "plan",
-      "planBody",
-      "planPath",
-      "planContent",
-      "planMarkdown",
-      "feedback",
-      "feedbackBody",
-      "feedbackText",
-      "plannotatorResult",
-      "browserTranscript",
-      "eventPayload",
-    ]) {
-      if ((await state.get(key)) !== undefined) throw new Error(`Mission contains unsupported Planning state '${key}'.`);
     }
     readPlanReviewState(controlState);
     assertPlanReviewBase(controlState, input.planRef, input.round);
@@ -582,27 +540,6 @@ if (input.resource === "pi-workflow.planning") {
     const value = await state.get(key);
     if (value !== undefined) existingState[key] = value;
   }
-  for (const key of [
-    "discovery",
-    "research",
-    "planning",
-    "planningCorrectionCount",
-    "report",
-    "artifactBody",
-    "plan",
-    "planBody",
-    "planPath",
-    "planContent",
-    "planMarkdown",
-    "feedback",
-    "feedbackBody",
-    "feedbackText",
-    "plannotatorResult",
-    "browserTranscript",
-    "eventPayload",
-  ]) {
-    if ((await state.get(key)) !== undefined) throw new Error(`Mission contains unsupported Planning state '${key}'.`);
-  }
   assertMissionState(existingState, false);
 
   const discoveryRef = existingState.discoveryRef;
@@ -615,21 +552,28 @@ if (input.resource === "pi-workflow.planning") {
 
   const researchMeta = existingState.researchMeta;
   const researchRef = existingState.researchRef;
-  if (researchMeta === undefined) throw new Error("Planning requires resolved researchMeta; missing Research decision is not skipped.");
-  assertResearchMetadata(researchMeta);
-  if (discoveryMeta.externalResearchRequired && researchMeta.status !== "completed") {
-    throw new Error("Planning requires completed Research when external research is required.");
-  }
-  if (!discoveryMeta.externalResearchRequired && researchMeta.status !== "skipped") {
-    throw new Error("Planning requires explicit skipped Research when external research is not required.");
-  }
-  if (researchMeta.status === "completed") {
-    if (researchRef === undefined) throw new Error("Planning requires researchRef when Research is completed.");
+  if (discoveryMeta.externalResearchRequired) {
+    if (researchMeta === undefined) {
+      throw new Error(
+        "Planning requires completed Research when external research is required.",
+      );
+    }
+    assertResearchMetadata(researchMeta);
+    if (researchMeta.status !== "completed") {
+      throw new Error(
+        "Planning requires completed Research when external research is required.",
+      );
+    }
+    if (researchRef === undefined) {
+      throw new Error("Planning requires researchRef when Research is completed.");
+    }
     assertReference(researchRef, "Planning researchRef");
-  } else if (researchMeta.status === "skipped") {
-    if (researchRef !== undefined) throw new Error("Skipped Research must not have a researchRef.");
   } else {
-    throw new Error("Planning cannot continue while Research is blocked.");
+    if (researchMeta !== undefined || researchRef !== undefined) {
+      throw new Error(
+        "Planning requires Research state to be absent when external research is not required.",
+      );
+    }
   }
 
   if (input.humanInputs !== undefined) assertHumanInputs(input.humanInputs, "Planning humanInputs");
@@ -668,7 +612,7 @@ if (input.resource === "pi-workflow.planning") {
     existingState.request === undefined ? "" : `Request:\n${existingState.request}`,
     `Discovery Artifact Reference:\n${discoveryRef}`,
     `Bounded Discovery metadata:\n${JSON.stringify(discoveryMeta)}`,
-    researchMeta.status === "completed" ? `Research Artifact Reference:\n${researchRef}` : "Research status: skipped. No Research Artifact exists.",
+    researchMeta === undefined ? "External Research: not required. No Research Artifact exists." : `Research Artifact Reference:\n${researchRef}`,
     humanDecisions === undefined ? "" : `Bounded Human decisions:\n${JSON.stringify(humanDecisions)}`,
     input.feedbackRef === undefined ? "" : `Plan feedback Reference:\n${input.feedbackRef}`,
     "Read the referenced Discovery and Research Artifacts when needed; Main has not relayed their bodies.",
@@ -779,219 +723,3 @@ if (input.resource === "pi-workflow.planning") {
   return compactResult;
 }
 /* pi-workflow: planning-resource:end */
-
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function duplicateIdIssues(items, path, message) {
-  const seen = new Set();
-  const issues = [];
-  for (let index = 0; index < items.length; index += 1) {
-    const id = items[index].id;
-    if (seen.has(id)) issues.push({ path: `${path}/${index}/id`, message });
-    else seen.add(id);
-  }
-  return issues;
-}
-
-function missingReferenceIssues(values, path, knownIds, message) {
-  const issues = [];
-  for (let index = 0; index < values.length; index += 1) {
-    if (!knownIds.has(values[index])) {
-      issues.push({
-        path: `${path}/${index}`,
-        message: `${message} ${values[index]}`,
-      });
-    }
-  }
-  return issues;
-}
-
-// outputSchema is the native schema gate. This second gate covers relationships
-// that JSON Schema cannot express, such as WorkUnit ID references.
-function semanticIssues(value) {
-  if (!isRecord(value)) {
-    return [{ path: "/", message: "PlanningDecisionV1 must be an object" }];
-  }
-
-  const { acceptanceCriteria, verification, implementation, unresolvedDecisions } =
-    value;
-  const { workUnits, finalVerificationIds } = implementation;
-  const issues = [
-    ...duplicateIdIssues(
-      acceptanceCriteria,
-      "/acceptanceCriteria",
-      "acceptanceCriteria ids must be unique",
-    ),
-    ...duplicateIdIssues(
-      verification,
-      "/verification",
-      "verification ids must be unique",
-    ),
-    ...duplicateIdIssues(
-      workUnits,
-      "/implementation/workUnits",
-      "work unit ids must be unique",
-    ),
-    ...duplicateIdIssues(
-      unresolvedDecisions,
-      "/unresolvedDecisions",
-      "unresolved decision ids must be unique",
-    ),
-  ];
-  const acceptanceIds = new Set();
-  for (const criterion of acceptanceCriteria) acceptanceIds.add(criterion.id);
-  const verificationIds = new Set();
-  for (const item of verification) verificationIds.add(item.id);
-  const workUnitIds = new Set();
-  for (const workUnit of workUnits) workUnitIds.add(workUnit.id);
-
-  for (let index = 0; index < workUnits.length; index += 1) {
-    const workUnit = workUnits[index];
-    if (workUnit.writeScope.length === 0) {
-      issues.push({
-        path: `/implementation/workUnits/${index}/writeScope`,
-        message: "writeScope must contain at least one path",
-      });
-    }
-    for (let dependencyIndex = 0; dependencyIndex < workUnit.dependsOn.length; dependencyIndex += 1) {
-      const dependency = workUnit.dependsOn[dependencyIndex];
-      if (!workUnitIds.has(dependency)) {
-        issues.push({
-          path: `/implementation/workUnits/${index}/dependsOn/${dependencyIndex}`,
-          message: `work unit ${workUnit.id} references unknown dependency ${dependency}`,
-        });
-      }
-      if (dependency === workUnit.id) {
-        issues.push({
-          path: `/implementation/workUnits/${index}/dependsOn/${dependencyIndex}`,
-          message: "work unit cannot depend on itself",
-        });
-      }
-    }
-    issues.push(
-      ...missingReferenceIssues(
-        workUnit.acceptanceCriteriaIds,
-        `/implementation/workUnits/${index}/acceptanceCriteriaIds`,
-        acceptanceIds,
-        `work unit ${workUnit.id} references unknown acceptance criterion`,
-      ),
-      ...missingReferenceIssues(
-        workUnit.focusedVerificationIds,
-        `/implementation/workUnits/${index}/focusedVerificationIds`,
-        verificationIds,
-        `work unit ${workUnit.id} references unknown verification`,
-      ),
-    );
-  }
-
-  issues.push(
-    ...missingReferenceIssues(
-      finalVerificationIds,
-      "/implementation/finalVerificationIds",
-      verificationIds,
-      "final verification references unknown verification",
-    ),
-  );
-
-  if (implementation.mode === "lanes") {
-    for (const workUnit of workUnits) {
-      if (workUnit.dependsOn.length > 0) {
-        issues.push({
-          path: "/implementation/workUnits",
-          message: "lane mode work units must not depend on another work unit",
-        });
-        break;
-      }
-    }
-  }
-
-  return issues;
-}
-
-function validationText(errors) {
-  const lines = [];
-  for (const error of errors) lines.push(`${error.path}: ${error.message}`);
-  return lines.join("\n");
-}
-
-function requirePlanningResult(result, label) {
-  if (!result.ok) {
-    throw new Error(`${label} failed: ${result.error ?? result.output ?? "unknown error"}`);
-  }
-  if (result.structuredOutput === undefined || result.structuredOutput === null) {
-    throw new Error(`planning-invalid: ${label} did not return structured output.`);
-  }
-  if (!result.runId) throw new Error(`planning-invalid: ${label} did not return a runId.`);
-}
-
-const task = [
-  "Create a bounded read-only PlanningDecisionV1 for the requested change.",
-  "Planning context:\n" + input.task,
-  "",
-  "Define explicit scope, non-goals, acceptance criteria, risks, verification commands, WorkUnits, write scopes, and integration order.",
-  "Preserve WorkUnit order exactly as the decision contract requires.",
-  "Choose lanes only when WorkUnits are independent; otherwise choose single mode.",
-  "Do not guess material product, architecture, policy, or risk decisions.",
-  "Do not edit repository files.",
-  "Return only a PlanningDecisionV1 object matching the supplied outputSchema.",
-].join("\n");
-
-await state.set("phase", "planning");
-
-const first = await runs.run("planning", {
-  agent: "reviewer",
-  context: "fresh",
-  skill: "pi-planning",
-  task,
-  outputSchema: input.outputSchema,
-});
-requirePlanningResult(first, "initial Planning reviewer result");
-
-let result = first;
-let correctionCount = 0;
-let errors = semanticIssues(first.structuredOutput);
-
-if (errors.length > 0) {
-  correctionCount = 1;
-  await state.set("planningCorrectionCount", correctionCount);
-
-  const correctionTask = [
-    task,
-    "",
-    "The previous PlanningDecisionV1 passed schema validation but failed semantic validation.",
-    "Return a corrected PlanningDecisionV1 and fix every validation error below:",
-    validationText(errors),
-    "When a WorkUnit has no dependency, use dependsOn: [] exactly.",
-    "Never put explanatory strings such as none, なし, or N/A in an ID reference field.",
-    "ID reference fields may contain only IDs defined in this same PlanningDecisionV1.",
-  ].join("\n");
-
-  result = await runs.run("planning-correction", {
-    agent: "reviewer",
-    context: "fresh",
-    skill: "pi-planning",
-    task: correctionTask,
-    outputSchema: input.outputSchema,
-  });
-  requirePlanningResult(result, "automatic Planning correction result");
-  errors = semanticIssues(result.structuredOutput);
-  if (errors.length > 0) {
-    throw new Error(
-      `planning-invalid: semantic validation still failed after one automatic correction:\n${validationText(errors)}`,
-    );
-  }
-} else {
-  await state.set("planningCorrectionCount", correctionCount);
-}
-
-const planningDecision = result.structuredOutput;
-await state.set("planningDecision", planningDecision);
-await state.set("phase", "plan-review");
-return {
-  runId: result.runId,
-  outputReference: result.outputReference ?? null,
-  planningDecision,
-  planningCorrectionCount: correctionCount,
-};

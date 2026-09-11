@@ -121,7 +121,6 @@ function missionState(
     requestType: "feature",
     request: "Use the Discovery and Research fixture facts.",
     phase: "research",
-    missionStatus: "active",
     discoveryRef: "/tmp/pi-workflow-unit5/discovery.md",
     discoveryMeta: {
       version: 1,
@@ -342,7 +341,7 @@ describe("Planning named resource contract", () => {
     });
   });
 
-  it("accepts explicitly skipped Research without a research reference", async () => {
+  it("accepts absent Research state when Discovery says it is unnecessary", async () => {
     const state = missionState({
       discoveryMeta: {
         version: 1,
@@ -352,13 +351,9 @@ describe("Planning named resource contract", () => {
         uncertainties: [],
         researchQuestions: [],
       },
-      researchMeta: {
-        version: 1,
-        status: "skipped",
-        unresolvedQuestions: [],
-      },
     });
     delete state.researchRef;
+    delete state.researchMeta;
     const execution = await executePlanning(
       [childResult("planning-skipped")],
       state,
@@ -366,7 +361,7 @@ describe("Planning named resource contract", () => {
 
     expect(execution.runCalls[0]?.params.task).toEqual(
       expect.stringContaining(
-        "Research status: skipped. No Research Artifact exists.",
+        "External Research: not required. No Research Artifact exists.",
       ),
     );
     expect(execution.runCalls[0]?.params.task).not.toContain("research.md");
@@ -375,6 +370,7 @@ describe("Planning named resource contract", () => {
       planRef: expect.any(String),
     });
     expect(execution.stateValues).not.toHaveProperty("researchRef");
+    expect(execution.stateValues).not.toHaveProperty("researchMeta");
   });
 });
 
@@ -401,7 +397,7 @@ describe("Plan Review control operations", () => {
     });
   });
 
-  it("records pending, approved, and rejected states without children", async () => {
+  it("records a terminal approval or rejection once without children", async () => {
     const prepared = planState({
       planReview: {
         version: 1,
@@ -410,22 +406,7 @@ describe("Plan Review control operations", () => {
         planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
       },
     });
-    const pending = await executePlanning([], prepared, {
-      operation: "record-review",
-      round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
-      reviewId: "review-1",
-      status: "pending",
-    });
-    expect(pending.runCalls).toHaveLength(0);
-    expect(pending.result).toEqual({
-      status: "pending",
-      round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
-      reviewId: "review-1",
-    });
-
-    const approved = await executePlanning([], pending.stateValues, {
+    const approved = await executePlanning([], prepared, {
       operation: "record-review",
       round: 1,
       planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
@@ -573,7 +554,8 @@ describe("Plan Review control operations", () => {
       round: 1,
       planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
       reviewId: "review-current",
-      status: "pending",
+      status: "rejected",
+      feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md",
     });
     expect(transition.runCalls).toHaveLength(0);
   });
@@ -724,9 +706,7 @@ describe("Planning prerequisites", () => {
         researchRef: undefined,
       }),
     );
-    expect(absent.message).toContain(
-      "missing Research decision is not skipped",
-    );
+    expect(absent.message).toContain("completed Research");
     expect(absent.runCalls).toHaveLength(0);
   });
 
@@ -737,19 +717,6 @@ describe("Planning prerequisites", () => {
     );
     expect(missingRef.message).toContain("researchRef");
     expect(missingRef.runCalls).toHaveLength(0);
-
-    const requiredButSkipped = await rejectedExecution(
-      [],
-      missionState({
-        researchMeta: {
-          version: 1,
-          status: "skipped",
-          unresolvedQuestions: [],
-        },
-      }),
-    );
-    expect(requiredButSkipped.message).toContain("completed Research");
-    expect(requiredButSkipped.runCalls).toHaveLength(0);
 
     const skippedWithRef = await rejectedExecution(
       [],
@@ -764,12 +731,12 @@ describe("Planning prerequisites", () => {
         },
         researchMeta: {
           version: 1,
-          status: "skipped",
+          status: "completed",
           unresolvedQuestions: [],
         },
       }),
     );
-    expect(skippedWithRef.message).toContain("Skipped Research");
+    expect(skippedWithRef.message).toContain("Research state to be absent");
     expect(skippedWithRef.runCalls).toHaveLength(0);
   });
 

@@ -160,17 +160,15 @@ describe("Discovery named resource workflow", () => {
     );
   });
 
-  it("preserves existing allowed Mission state fields", async () => {
+  it("preserves existing allowed Human decisions", async () => {
     const execution = await executeDiscovery(successfulChildren(), {
       version: 1,
       requestType: "feature",
       request: "Inspect the fixture.",
-      missionStatus: "active",
       humanDecisions: [{ id: "decision-1", value: "keep" }],
     });
 
     expect(execution.stateValues).toMatchObject({
-      missionStatus: "active",
       humanDecisions: [{ id: "decision-1", value: "keep" }],
       discoveryRef: "/tmp/pi-workflow-unit3/discovery.md",
     });
@@ -190,14 +188,6 @@ describe("Discovery named resource workflow", () => {
   it("fails closed for an invalid metadata result", async () => {
     await expect(
       executeDiscovery(successfulChildren({ ...readyMetadata, unknown: true })),
-    ).rejects.toThrow();
-  });
-
-  it("rejects legacy or full Discovery bodies in Mission state", async () => {
-    await expect(
-      executeDiscovery(successfulChildren(), {
-        discovery: { report: "full Discovery report" },
-      }),
     ).rejects.toThrow();
   });
 
@@ -232,7 +222,7 @@ describe("Discovery named resource workflow", () => {
 
   it("fails before launching when the existing aggregate state is oversized", async () => {
     const execution = await executeDiscovery([], {
-      reviewDecision: "x".repeat(MAX_MISSION_STATE_BYTES),
+      planningDecision: "x".repeat(MAX_MISSION_STATE_BYTES),
     }).catch((error: unknown) => ({ error }));
 
     expect(execution).toHaveProperty("error");

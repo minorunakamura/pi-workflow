@@ -52,14 +52,13 @@ describe("pi_workflow_plan_review", () => {
     }
   });
 
-  it("registers beside the deferred legacy phase preparation tool", () => {
+  it("registers the Planning MVP review tool", () => {
     const registered: unknown[] = [];
     registerTools({
       registerTool: (tool: unknown) => registered.push(tool),
     } as never);
 
     expect(registered.map((tool) => (tool as { name: string }).name)).toEqual([
-      "pi_workflow_prepare_phase",
       "pi_workflow_plan_review",
     ]);
   });
@@ -67,6 +66,7 @@ describe("pi_workflow_plan_review", () => {
   it("delegates execution without transporting a PlanningDecision or Plan body", async () => {
     const planRef = await planFile();
     const responses: unknown[] = [];
+    const listeners = new Set<(data: unknown) => void>();
     const tool = createPlanReviewTool({
       events: {
         emit: (_channel: string, data: unknown) => {
@@ -81,18 +81,18 @@ describe("pi_workflow_plan_review", () => {
               status: "handled",
               result: { status: "pending", reviewId: "tool-review" },
             });
+            setTimeout(() => {
+              for (const listener of listeners) {
+                listener({ reviewId: "tool-review", approved: true });
+              }
+            }, 0);
             return;
           }
-          request.respond({
-            status: "handled",
-            result: {
-              status: "completed",
-              reviewId: "tool-review",
-              approved: true,
-            },
-          });
         },
-        on: () => () => undefined,
+        on: (_channel: string, handler: (data: unknown) => void) => {
+          listeners.add(handler);
+          return () => listeners.delete(handler);
+        },
       },
     } as never);
 
@@ -110,6 +110,6 @@ describe("pi_workflow_plan_review", () => {
       planRef,
     });
     expect(JSON.stringify(result.details)).not.toContain("canonical");
-    expect(responses).toEqual(["plan-review", "review-status"]);
+    expect(responses).toEqual(["plan-review"]);
   });
 });

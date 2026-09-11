@@ -1,5 +1,3 @@
-const input = __PI_WORKFLOW_INPUT__;
-
 /* pi-workflow: discovery-resource:start */
 if (input.resource === "pi-workflow.discovery") {
   const MAX_STATE_BYTES = input.discoveryBounds.stateBytes;
@@ -13,25 +11,7 @@ if (input.resource === "pi-workflow.discovery") {
   const MAX_METADATA_ITEMS = input.discoveryBounds.metadataItems;
   const MAX_JSON_DEPTH = input.discoveryBounds.jsonDepth;
   const requestTypes = ["feature", "bug", "chore", "hotfix"];
-  const phases = [
-    "discovery",
-    "research",
-    "planning",
-    "plan-review",
-    "implementation",
-    "verification",
-    "verification-fix",
-    "review",
-  ];
-  const missionStatuses = [
-    "planned",
-    "active",
-    "waiting",
-    "needs_decision",
-    "completed",
-    "failed",
-    "cancelled",
-  ];
+  const phases = ["discovery", "research", "planning", "plan-review"];
   const stateKeys = Array.isArray(input.stateKeys) ? input.stateKeys : [];
 
   function isRecord(value) {
@@ -248,11 +228,8 @@ if (input.resource === "pi-workflow.discovery") {
     if (value.phase !== undefined && !phases.includes(value.phase)) {
       throw new Error("Mission state phase is invalid.");
     }
-    if (value.missionStatus !== undefined && !missionStatuses.includes(value.missionStatus)) {
-      throw new Error("Mission state missionStatus is invalid.");
-    }
     if (value.humanDecisions !== undefined) assertHumanInputs(value.humanDecisions);
-    for (const key of ["discoveryRef", "researchRef", "planRef", "verificationRef"]) {
+    for (const key of ["discoveryRef", "researchRef", "planRef"]) {
       if (value[key] !== undefined) assertReference(value[key], `Mission state ${key}`);
     }
     if (value.discoveryMeta !== undefined) assertMetadata(value.discoveryMeta);
@@ -262,11 +239,6 @@ if (input.resource === "pi-workflow.discovery") {
   for (const key of stateKeys) {
     const value = await state.get(key);
     if (value !== undefined) existingState[key] = value;
-  }
-  for (const key of ["discovery", "report", "artifactBody"]) {
-    if ((await state.get(key)) !== undefined) {
-      throw new Error(`Mission contains unsupported Discovery state '${key}'.`);
-    }
   }
   assertMissionState(existingState, false);
 
@@ -387,49 +359,3 @@ if (input.resource === "pi-workflow.discovery") {
   return compactResult;
 }
 /* pi-workflow: discovery-resource:end */
-
-await state.set("phase", "discovery");
-
-const task = [
-  "Inspect the current repository for the requested change.",
-  "Request:\n" + input.task,
-  "",
-  "Discovery policy:",
-  "1. Run `codegraph status` first when the CodeGraph CLI is available.",
-  "2. If CodeGraph is usable, use `codegraph explore` for structural questions.",
-  "3. Read exact source only where CodeGraph is stale, changed on disk, or insufficient.",
-  "4. If CodeGraph is unavailable or unusable, use bounded read, grep, find, and ls inspection.",
-  "5. Never run codegraph init, index, sync, or upgrade.",
-  "",
-  "Do not modify repository source files.",
-  "Return only a DiscoveryResultV1 object matching the supplied outputSchema.",
-].join("\n");
-
-const result = await runs.run("discovery", {
-  agent: "scout",
-  context: "fresh",
-  async: false,
-  task,
-  outputSchema: input.outputSchema,
-  ...(input.outputPath === undefined
-    ? {}
-    : { output: input.outputPath, outputMode: "file-only" }),
-});
-
-if (!result.ok) throw new Error(result.error ?? "Discovery failed.");
-if (result.structuredOutput === undefined || result.structuredOutput === null) {
-  throw new Error("Discovery did not return structured output.");
-}
-if (!result.runId) throw new Error("Discovery did not return a runId.");
-
-const discovery = {
-  runId: result.runId,
-  outputReference: result.outputReference ?? null,
-  result: result.structuredOutput,
-};
-await state.set("discovery", discovery);
-return {
-  runId: discovery.runId,
-  outputReference: discovery.outputReference,
-  discovery: discovery.result,
-};

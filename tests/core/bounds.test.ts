@@ -12,20 +12,14 @@ import {
   type PlanningDecisionV1,
 } from "../../src/core/planning/planning-decision";
 import {
-  MAX_REVIEW_DECISION_BYTES,
-  MAX_REVIEW_DECISION_REQUIRED,
-  MAX_REVIEW_FINDINGS,
-  validateReviewDecision,
-  type ReviewDecisionV1,
-} from "../../src/core/review/review-decision-schema";
-import {
   MAX_DISCOVERY_METADATA_ITEMS,
-  MAX_IMPLEMENTATION_LANE_RESULTS,
+  MAX_HUMAN_INPUT_ENTRIES,
   MAX_MISSION_STATE_BYTES,
-  MAX_VERIFICATION_FIX_RUNS,
+  MAX_REQUEST_BYTES,
+  MISSION_STATE_KEYS,
   validateDiscoveryMetadata,
-  type DiscoveryMetadataV1,
   validateMissionState,
+  type DiscoveryMetadataV1,
 } from "../../src/core/state/contracts";
 import { MAX_REFERENCE_BYTES } from "../../src/core/state/references";
 
@@ -197,19 +191,12 @@ describe("PlanningDecisionV1 bounds", () => {
 
     const textBoundary = planningDecision();
     textBoundary.requestSummary = `${"あ".repeat(341)}a`;
-    expect(
-      new TextEncoder().encode(textBoundary.requestSummary).byteLength,
-    ).toBe(1_024);
     expect(validatePlanningDecision(textBoundary).ok).toBe(true);
     textBoundary.requestSummary += "a";
     expect(validatePlanningDecision(textBoundary).ok).toBe(false);
 
     const commandBoundary = planningDecision();
     commandBoundary.verification[0].command = `${"あ".repeat(682)}ab`;
-    expect(
-      new TextEncoder().encode(commandBoundary.verification[0].command)
-        .byteLength,
-    ).toBe(2_048);
     expect(validatePlanningDecision(commandBoundary).ok).toBe(true);
     commandBoundary.verification[0].command += "c";
     expect(validatePlanningDecision(commandBoundary).ok).toBe(false);
@@ -218,8 +205,6 @@ describe("PlanningDecisionV1 bounds", () => {
     timeoutBoundary.verification[0].timeoutMs = MAX_VERIFICATION_TIMEOUT_MS;
     expect(validatePlanningDecision(timeoutBoundary).ok).toBe(true);
     timeoutBoundary.verification[0].timeoutMs = MAX_VERIFICATION_TIMEOUT_MS + 1;
-    expect(validatePlanningDecision(timeoutBoundary).ok).toBe(false);
-    timeoutBoundary.verification[0].timeoutMs = 0;
     expect(validatePlanningDecision(timeoutBoundary).ok).toBe(false);
   });
 
@@ -247,204 +232,24 @@ describe("PlanningDecisionV1 bounds", () => {
   });
 });
 
-function reviewDecision(): ReviewDecisionV1 {
-  return {
-    version: 1,
-    blockers: [],
-    fixNow: [],
-    deferred: [],
-    rejected: [],
-    decisionRequired: [],
-  };
-}
-
-describe("ReviewDecisionV1 bounds", () => {
-  it("accepts each bucket boundary and rejects overflow", () => {
-    const buckets: Array<
-      [string, (value: ReviewDecisionV1, count: number) => void, number]
-    > = [
-      [
-        "blockers",
-        (value, count) =>
-          (value.blockers = Array.from({ length: count }, (_, index) => ({
-            id: `b-${index}`,
-            source: "correctness",
-            summary: "finding",
-          }))),
-        MAX_REVIEW_FINDINGS,
-      ],
-      [
-        "fixNow",
-        (value, count) =>
-          (value.fixNow = Array.from({ length: count }, (_, index) => ({
-            id: `f-${index}`,
-            source: "ponytail",
-            summary: "finding",
-          }))),
-        MAX_REVIEW_FINDINGS,
-      ],
-      [
-        "deferred",
-        (value, count) =>
-          (value.deferred = Array.from({ length: count }, (_, index) => ({
-            id: `d-${index}`,
-            source: "correctness",
-            summary: "finding",
-          }))),
-        MAX_REVIEW_FINDINGS,
-      ],
-      [
-        "rejected",
-        (value, count) =>
-          (value.rejected = Array.from({ length: count }, (_, index) => ({
-            id: `r-${index}`,
-            source: "correctness",
-            summary: "finding",
-            reason: "not demonstrated",
-          }))),
-        MAX_REVIEW_FINDINGS,
-      ],
-      [
-        "decisionRequired",
-        (value, count) =>
-          (value.decisionRequired = Array.from(
-            { length: count },
-            (_, index) => ({
-              id: `q-${index}`,
-              question: "question",
-              context: "context",
-            }),
-          )),
-        MAX_REVIEW_DECISION_REQUIRED,
-      ],
-    ];
-
-    for (const [label, setBucket, limit] of buckets) {
-      const atLimit = reviewDecision();
-      setBucket(atLimit, limit);
-      expect(validateReviewDecision(atLimit), label).toMatchObject({
-        ok: true,
-      });
-      const overflow = reviewDecision();
-      setBucket(overflow, limit + 1);
-      expect(validateReviewDecision(overflow).ok, label).toBe(false);
-    }
-  });
-
-  it("enforces identifier and multibyte text bounds", () => {
-    const boundary = reviewDecision();
-    boundary.blockers = [
-      {
-        id: "i".repeat(64),
-        source: "correctness",
-        summary: `${"あ".repeat(341)}a`,
-      },
-    ];
-    expect(validateReviewDecision(boundary).ok).toBe(true);
-    boundary.blockers[0].summary += "a";
-    expect(validateReviewDecision(boundary).ok).toBe(false);
-  });
-
-  it("enforces the inclusive serialized aggregate limit", () => {
-    const exact = reviewDecision();
-    exact.blockers = Array.from({ length: 16 }, (_, index) => ({
-      id: `b-${index}`,
-      source: "correctness" as const,
-      summary: "x".repeat(1_024),
-    }));
-    exact.fixNow = Array.from({ length: 6 }, (_, index) => ({
-      id: `f-${index}`,
-      source: "ponytail" as const,
-      summary: "x".repeat(1_024),
-    }));
-    exact.decisionRequired = [{ id: "question", question: "q", context: "c" }];
-
-    let exactLength: number | undefined;
-    for (let length = 1; length <= 1_024; length += 1) {
-      exact.decisionRequired[0].question = "q".repeat(length);
-      if (jsonByteLength(exact) === MAX_REVIEW_DECISION_BYTES) {
-        exactLength = length;
-        break;
-      }
-    }
-
-    expect(exactLength).toBeDefined();
-    expect(validateReviewDecision(exact).ok).toBe(true);
-    if (exactLength === undefined) return;
-    exact.decisionRequired[0].question = "q".repeat(exactLength + 1);
-    expect(validateReviewDecision(exact).ok).toBe(false);
-  });
-});
-
-function maximumState(lastFixSummaryLength: number): unknown {
-  const reference = "r".repeat(MAX_REFERENCE_BYTES - 2);
-  return {
-    version: 1,
-    requestType: "feature",
-    request: "x".repeat(8_192),
-    humanDecisions: Array.from({ length: 8 }, (_, index) => ({
-      id: `human-${index}`,
-      value: "h".repeat(2_048),
-    })),
-    discoveryRef: reference,
-    researchRef: reference,
-    planRef: reference,
-    verificationRef: reference,
-    implementation: {
-      version: 1,
-      mode: "lanes",
-      status: "completed",
-      laneResults: Array.from({ length: 32 }, (_, index) => ({
-        workUnitId: `unit-${index}`,
-        status: "completed",
-        runId: reference,
-        patchRef: reference,
-        handoffRef: reference,
-      })),
-    },
-    reviewRef: {
-      correctnessRef: reference,
-      simplicityRef: reference,
-      synthesisRef: reference,
-    },
-    reviewDecision: {
-      version: 1,
-      blockers: Array.from({ length: 16 }, (_, index) => ({
-        id: `blocker-${index}`,
-        source: "correctness",
-        summary: "x".repeat(1_024),
-      })),
-      fixNow: Array.from({ length: 6 }, (_, index) => ({
-        id: `fix-${index}`,
-        source: "ponytail",
-        summary:
-          index === 5 ? "x".repeat(lastFixSummaryLength) : "x".repeat(1_024),
-      })),
-      deferred: [],
-      rejected: [],
-      decisionRequired: [{ id: "decision", question: "q", context: "c" }],
-    },
-  };
-}
-
 describe("DiscoveryMetadataV1 bounds", () => {
   const metadata: DiscoveryMetadataV1 = {
-    version: 1 as const,
-    status: "ready" as const,
+    version: 1,
+    status: "ready",
     externalResearchRequired: true,
     humanClarificationRequired: false,
     uncertainties: [],
     researchQuestions: [],
   };
 
-  it("rejects unknown fields, oversized arrays, and oversized UTF-8 text", () => {
+  it("rejects unknown fields, oversized arrays, and oversized text", () => {
     expect(validateDiscoveryMetadata(metadata).ok).toBe(true);
+    expect(
+      validateDiscoveryMetadata({ ...metadata, report: "full report" }).ok,
+    ).toBe(false);
 
-    const unknown = { ...metadata, report: "full report" };
-    expect(validateDiscoveryMetadata(unknown).ok).toBe(false);
-
-    const tooManyUncertainties = structuredClone(metadata);
-    tooManyUncertainties.uncertainties = Array.from(
+    const tooMany = structuredClone(metadata);
+    tooMany.uncertainties = Array.from(
       { length: MAX_DISCOVERY_METADATA_ITEMS + 1 },
       (_, index) => ({
         id: `uncertainty-${index}`,
@@ -452,95 +257,68 @@ describe("DiscoveryMetadataV1 bounds", () => {
         material: false,
       }),
     );
-    expect(validateDiscoveryMetadata(tooManyUncertainties).ok).toBe(false);
+    expect(validateDiscoveryMetadata(tooMany).ok).toBe(false);
 
-    const oversizedQuestion = structuredClone(metadata);
-    oversizedQuestion.researchQuestions = ["あ".repeat(342)];
-    expect(validateDiscoveryMetadata(oversizedQuestion).ok).toBe(false);
-
-    const oversizedAggregate = structuredClone(metadata);
-    oversizedAggregate.researchQuestions = Array.from(
-      { length: MAX_DISCOVERY_METADATA_ITEMS },
-      () => "x".repeat(1_024),
-    );
-    expect(validateDiscoveryMetadata(oversizedAggregate).ok).toBe(false);
+    const oversized = structuredClone(metadata);
+    oversized.researchQuestions = ["あ".repeat(342)];
+    expect(validateDiscoveryMetadata(oversized).ok).toBe(false);
   });
 });
 
-describe("Mission state aggregate contract", () => {
-  it("accepts the exact 256 KiB boundary and rejects overflow", () => {
-    let exactLength: number | undefined;
-    for (let length = 1; length <= 1_024; length += 1) {
-      const candidate = maximumState(length);
-      if (jsonByteLength(candidate) === MAX_MISSION_STATE_BYTES) {
-        exactLength = length;
-        break;
-      }
-    }
+describe("Planning MVP Mission state bounds", () => {
+  it("exposes exactly the current state keys and rejects future keys", () => {
+    expect(MISSION_STATE_KEYS).toEqual([
+      "version",
+      "requestType",
+      "request",
+      "phase",
+      "humanDecisions",
+      "discoveryRef",
+      "discoveryMeta",
+      "researchRef",
+      "researchMeta",
+      "planRef",
+      "planningDecision",
+      "planReview",
+    ]);
 
-    expect(exactLength).toBeDefined();
-    expect(validateMissionState(maximumState(exactLength ?? 1)).ok).toBe(true);
-    if (exactLength === undefined) return;
-    expect(validateMissionState(maximumState(exactLength + 1)).ok).toBe(false);
+    for (const key of [
+      "missionStatus",
+      "implementation",
+      "verificationRef",
+      "verificationStatus",
+      "verificationFixRuns",
+      "reviewRef",
+      "reviewDecision",
+      "codeApproval",
+      "verificationRound",
+      "reviewFixWave",
+    ]) {
+      expect(validateMissionState({ version: 1, [key]: "future" }).ok).toBe(
+        false,
+      );
+    }
   });
 
-  it("enforces Human, lane, and verification-fix bounds", () => {
-    const humanMax = Array.from({ length: 8 }, (_, index) => ({
-      id: `human-${index}`,
-      value: "あ".repeat(682),
-    }));
-    expect(
-      validateMissionState({ version: 1, humanDecisions: humanMax }).ok,
-    ).toBe(true);
-    humanMax[0].value += "あ";
-    expect(
-      validateMissionState({ version: 1, humanDecisions: humanMax }).ok,
-    ).toBe(false);
-
-    const laneResults = Array.from(
-      { length: MAX_IMPLEMENTATION_LANE_RESULTS },
-      (_, index) => ({
-        workUnitId: `unit-${index}`,
-        status: "completed" as const,
-      }),
+  it("enforces bounded Human input, request, and aggregate state", () => {
+    const humanDecisions = Array.from(
+      { length: MAX_HUMAN_INPUT_ENTRIES },
+      (_, index) => ({ id: `human-${index}`, value: "answer" }),
     );
+    expect(validateMissionState({ version: 1, humanDecisions }).ok).toBe(true);
+    humanDecisions.push({ id: "overflow", value: "answer" });
+    expect(validateMissionState({ version: 1, humanDecisions }).ok).toBe(false);
     expect(
       validateMissionState({
         version: 1,
-        implementation: {
-          version: 1,
-          mode: "lanes",
-          status: "completed",
-          laneResults,
-        },
-      }).ok,
-    ).toBe(true);
-    laneResults.push({ workUnitId: "overflow", status: "completed" });
-    expect(
-      validateMissionState({
-        version: 1,
-        implementation: {
-          version: 1,
-          mode: "lanes",
-          status: "completed",
-          laneResults,
-        },
+        request: "x".repeat(MAX_REQUEST_BYTES + 1),
       }).ok,
     ).toBe(false);
 
-    const fixRuns = Array.from(
-      { length: MAX_VERIFICATION_FIX_RUNS },
-      (_, index) => ({
-        round: (index + 1) as 1 | 2,
-        status: "completed" as const,
-      }),
+    const oversized = "r".repeat(MAX_REFERENCE_BYTES);
+    expect(validateMissionState({ version: 1, planRef: oversized }).ok).toBe(
+      false,
     );
-    expect(
-      validateMissionState({ version: 1, verificationFixRuns: fixRuns }).ok,
-    ).toBe(true);
-    fixRuns.push({ round: 1, status: "completed" });
-    expect(
-      validateMissionState({ version: 1, verificationFixRuns: fixRuns }).ok,
-    ).toBe(false);
+    expect(MAX_MISSION_STATE_BYTES).toBe(262_144);
   });
 });

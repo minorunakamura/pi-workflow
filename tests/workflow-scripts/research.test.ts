@@ -45,7 +45,6 @@ function missionState(externalResearchRequired = true) {
     requestType: "feature",
     request: "Research the fixture.",
     phase: "discovery",
-    missionStatus: "active",
     discoveryRef: "/tmp/pi-workflow-unit4/discovery.md",
     discoveryMeta: {
       version: 1,
@@ -208,33 +207,15 @@ describe("Research resource Mission prerequisites", () => {
     );
   });
 
-  it("preserves same-Mission Discovery state while recording an explicit skip", async () => {
-    const execution = await executeResearch([], missionState(false));
+  it("does not launch when Discovery says external Research is unnecessary", async () => {
+    const execution = executeResearch([], missionState(false));
 
-    expect(execution.calls).toHaveLength(0);
-    expect(execution.result).toEqual({
-      status: "skipped",
-      researchMeta: {
-        version: 1,
-        status: "skipped",
-        unresolvedQuestions: [],
-      },
-    });
-    expect(execution.stateValues).toMatchObject({
-      discoveryRef: "/tmp/pi-workflow-unit4/discovery.md",
-      discoveryMeta: missionState(false).discoveryMeta,
-      researchMeta: {
-        version: 1,
-        status: "skipped",
-        unresolvedQuestions: [],
-      },
-      phase: "research",
-    });
-    expect(execution.stateValues).not.toHaveProperty("researchRef");
-    const stateValidation = validateMissionState(
-      JSON.parse(JSON.stringify(execution.stateValues)),
+    await expect(execution).rejects.toThrow(
+      /do not invoke the Research resource/,
     );
-    expect(stateValidation.ok, JSON.stringify(stateValidation)).toBe(true);
+    await execution.catch((error: Error & { calls: RunCall[] }) => {
+      expect(error.calls).toHaveLength(0);
+    });
   });
 
   it("requires external research before launching the researcher", async () => {
@@ -326,7 +307,7 @@ describe("Research resource failure behavior", () => {
   it("rejects an oversized Mission state before child launch", async () => {
     const execution = executeResearch([], {
       ...missionState(),
-      reviewDecision: "x".repeat(MAX_MISSION_STATE_BYTES),
+      planningDecision: "x".repeat(MAX_MISSION_STATE_BYTES),
     });
 
     await expect(execution).rejects.toThrow();

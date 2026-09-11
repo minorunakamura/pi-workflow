@@ -14,10 +14,7 @@ describe("extension entry point", () => {
     } as never);
 
     expect(commands).toEqual(["wf-feature", "wf-bug", "wf-chore", "wf-hotfix"]);
-    expect(tools).toEqual([
-      "pi_workflow_prepare_phase",
-      "pi_workflow_plan_review",
-    ]);
+    expect(tools).toEqual(["pi_workflow_plan_review"]);
     expect(events).toEqual(["session_start", "session_shutdown"]);
   });
 });

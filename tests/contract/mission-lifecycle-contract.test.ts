@@ -5,60 +5,52 @@ import { describe, expect, it } from "vitest";
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const skill = readFileSync(`${repoRoot}/skills/pi-workflow/SKILL.md`, "utf8");
 
+const nativeStatuses = [
+  "planned",
+  "active",
+  "waiting",
+  "needs_decision",
+  "completed",
+  "failed",
+  "cancelled",
+];
+
 describe("native Mission lifecycle contract", () => {
-  it("uses only v0.67.0 Mission status values", () => {
+  it("keeps Mission status native and phase state Planning-only", () => {
+    expect(skill).toContain("Native Mission status is authoritative");
     expect(skill).toContain(
-      "The official `pi-subagents` v0.67.0 Mission statuses",
+      "version, requestType, request, phase, humanDecisions",
     );
-    for (const status of [
-      "planned",
-      "active",
-      "waiting",
-      "needs_decision",
-      "completed",
-      "failed",
-      "cancelled",
-    ]) {
-      expect(skill).toContain(`\`${status}\``);
+    expect(skill).toContain(
+      "discoveryRef, discoveryMeta, researchRef, researchMeta",
+    );
+    expect(skill).toContain("planRef, planningDecision, planReview");
+    expect(skill).toContain('missionStatus: "active"');
+    for (const phase of ["discovery", "research", "planning", "plan-review"]) {
+      expect(skill).toContain(`\`${phase}\``);
     }
-    expect(skill).toContain("`paused` is not a Mission status");
-    expect(skill).toContain('Do not use or invent `status: "paused"`');
+    for (const status of nativeStatuses)
+      expect(skill).toContain(`\`${status}\``);
   });
 
-  it("stops without retrying after an explicit native user stop", () => {
-    expect(skill).toContain("### Explicit user stop");
+  it("does not normalize active between machine phases", () => {
     expect(skill).toContain(
-      "It is not a semantic-validation failure and is not retryable.",
+      'Do not issue an explicit `mission.update({ status: "active" })`',
     );
-    expect(skill).toContain("Do not run automatic Planning correction");
-    expect(skill).toContain("prepare a new phase");
-    expect(skill).toContain("return the exact native stop result");
+    expect(skill).not.toContain('missionUpdate: { status: "active" }');
+    expect(skill).toContain("same Mission ID");
   });
 
-  it("normalizes phase completion before the next phase", () => {
-    expect(skill).toContain('action: "mission.update"');
-    expect(skill).toContain('missionUpdate: { status: "active" }');
-    expect(skill).toContain("after Discovery, optional Research, and");
-    expect(skill).toContain("Unit 5 ends after `planRef` is available");
-  });
-
-  it("keeps Human clarification Main-only and defers Plan approval", () => {
-    expect(skill).toContain('missionUpdate: { status: "waiting" }');
-    expect(skill).toContain("### Main-only Human clarification");
-    expect(skill).toContain("Deferred Human Plan Gate (Unit 6)");
-    expect(skill).not.toContain("Before waiting for Plan Review");
-  });
-
-  it("does not finalize the Mission during Unit 5", () => {
-    expect(skill).toContain("Do not start Plan Review");
-    expect(skill).toContain("close the Mission");
-  });
-
-  it("guards recovery from transient phase completion", () => {
+  it("retains only Human, decision, and final close transitions", () => {
+    expect(skill).toContain("set native Mission status to");
+    expect(skill).toContain("`waiting`");
+    expect(skill).toContain("native `needs_decision`");
     expect(skill).toContain(
-      "`completed` on a phase workflow is not proof that pi-workflow is complete.",
+      'mission.close", missionId, missionStatus: "completed"',
     );
-    expect(skill).toContain("continue or recover with the same Mission ID");
-    expect(skill).toContain("create a replacement Mission merely because");
+    expect(skill).toContain(
+      "record-review(approved) → mission.close(completed) → STOP",
+    );
+    expect(skill).not.toContain("close the Mission as success in this flow");
   });
 });

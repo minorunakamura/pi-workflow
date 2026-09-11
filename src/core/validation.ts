@@ -11,8 +11,6 @@ export const MAX_REQUEST_BYTES = 8_192;
 export const MAX_HUMAN_INPUT_ENTRIES = 8;
 export const MAX_HUMAN_INPUT_VALUE_BYTES = 2_048;
 export const MAX_PLAN_REVIEW_ROUNDS = 3;
-export const MAX_VERIFICATION_FIX_ROUNDS = 2;
-export const MAX_REVIEW_FIX_WAVES = 1;
 export const MAX_JSON_DEPTH = 8;
 
 export interface ValidationIssue {

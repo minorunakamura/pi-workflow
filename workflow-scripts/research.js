@@ -1,5 +1,3 @@
-const input = __PI_WORKFLOW_INPUT__;
-
 /* pi-workflow: research-resource:start */
 if (input.resource === "pi-workflow.research") {
   const MAX_STATE_BYTES = input.researchBounds.stateBytes;
@@ -10,25 +8,7 @@ if (input.resource === "pi-workflow.research") {
   const MAX_METADATA_ITEMS = input.researchBounds.metadataItems;
   const MAX_JSON_DEPTH = input.researchBounds.jsonDepth;
   const requestTypes = ["feature", "bug", "chore", "hotfix"];
-  const phases = [
-    "discovery",
-    "research",
-    "planning",
-    "plan-review",
-    "implementation",
-    "verification",
-    "verification-fix",
-    "review",
-  ];
-  const missionStatuses = [
-    "planned",
-    "active",
-    "waiting",
-    "needs_decision",
-    "completed",
-    "failed",
-    "cancelled",
-  ];
+  const phases = ["discovery", "research", "planning", "plan-review"];
   const stateKeys = Array.isArray(input.stateKeys) ? input.stateKeys : [];
 
   function isRecord(value) {
@@ -227,10 +207,7 @@ if (input.resource === "pi-workflow.research") {
     if (value.phase !== undefined && !phases.includes(value.phase)) {
       throw new Error("Mission state phase is invalid.");
     }
-    if (value.missionStatus !== undefined && !missionStatuses.includes(value.missionStatus)) {
-      throw new Error("Mission state missionStatus is invalid.");
-    }
-    for (const key of ["discoveryRef", "researchRef", "planRef", "verificationRef"]) {
+    for (const key of ["discoveryRef", "researchRef", "planRef"]) {
       if (value[key] !== undefined) assertReference(value[key], `Mission state ${key}`);
     }
     if (value.discoveryMeta !== undefined) assertDiscoveryMetadata(value.discoveryMeta);
@@ -242,11 +219,6 @@ if (input.resource === "pi-workflow.research") {
     const value = await state.get(key);
     if (value !== undefined) existingState[key] = value;
   }
-  for (const key of ["discovery", "research", "report", "artifactBody"]) {
-    if ((await state.get(key)) !== undefined) {
-      throw new Error(`Mission contains unsupported Research state '${key}'.`);
-    }
-  }
   assertMissionState(existingState, false);
 
   const discoveryRef = existingState.discoveryRef;
@@ -255,37 +227,20 @@ if (input.resource === "pi-workflow.research") {
   if (discoveryMeta === undefined) throw new Error("Research requires discoveryMeta from the same Mission.");
   assertReference(discoveryRef, "Research discoveryRef");
   assertDiscoveryMetadata(discoveryMeta);
+  if (discoveryMeta.status !== "ready") {
+    throw new Error("Research requires ready Discovery metadata.");
+  }
 
-  if (existingState.researchRef !== undefined) {
+  if (
+    existingState.researchRef !== undefined ||
+    existingState.researchMeta !== undefined
+  ) {
     throw new Error("Mission already contains a Research handoff.");
   }
-  if (
-    existingState.researchMeta !== undefined &&
-    !(discoveryMeta.externalResearchRequired === false && existingState.researchMeta.status === "skipped")
-  ) {
-    throw new Error("Mission already contains Research metadata.");
-  }
-
-  if (discoveryMeta.externalResearchRequired === false) {
-    const researchMeta = existingState.researchMeta || {
-      version: 1,
-      status: "skipped",
-      unresolvedQuestions: [],
-    };
-    assertResearchMetadata(researchMeta);
-    const nextState = {
-      ...existingState,
-      version: existingState.version === undefined ? 1 : existingState.version,
-      researchMeta,
-      phase: "research",
-    };
-    assertMissionState(nextState, true);
-    for (const key of ["version", "phase", "researchMeta"]) {
-      if (existingState[key] !== nextState[key]) await state.set(key, nextState[key]);
-    }
-    const compactResult = { status: "skipped", researchMeta };
-    assertJson(compactResult, "Research result", input.researchBounds.resultBytes);
-    return compactResult;
+  if (!discoveryMeta.externalResearchRequired) {
+    throw new Error(
+      "Research is not required; do not invoke the Research resource.",
+    );
   }
 
   const questions = discoveryMeta.researchQuestions.length
@@ -355,40 +310,3 @@ if (input.resource === "pi-workflow.research") {
   return compactResult;
 }
 /* pi-workflow: research-resource:end */
-
-await state.set("phase", "research");
-
-let questionText = "";
-if (input.questions?.length) {
-  questionText = "Questions:\n";
-  for (const question of input.questions) questionText += "- " + question + "\n";
-}
-
-const task = [
-  "Collect external evidence needed for the requested change.",
-  "Request and research context:\n" + input.task,
-  questionText,
-  "",
-  "Use primary sources when possible.",
-  "Return evidence and uncertainty only; do not make product, architecture, policy, or risk-acceptance decisions.",
-].join("\n");
-
-const result = await runs.run("research", {
-  agent: "pi-workflow.researcher",
-  context: "fresh",
-  async: false,
-  task,
-  ...(input.outputPath === undefined
-    ? {}
-    : { output: input.outputPath, outputMode: "file-only" }),
-});
-
-if (!result.ok) throw new Error(result.error ?? "External research failed.");
-if (!result.runId) throw new Error("External research did not return a runId.");
-
-const research = {
-  runId: result.runId,
-  outputReference: result.outputReference ?? null,
-};
-await state.set("research", research);
-return research;

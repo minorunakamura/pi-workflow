@@ -15,10 +15,6 @@ const EXPECTED_RESOURCE_NAMES = [
   "pi-workflow.discovery",
   "pi-workflow.research",
   "pi-workflow.planning",
-  "pi-workflow.implementation",
-  "pi-workflow.verification",
-  "pi-workflow.verification-fix",
-  "pi-workflow.review",
 ] as const;
 
 function trackingRegistrar(
@@ -39,7 +35,7 @@ describe("named workflow resource contract", () => {
     expect(WORKFLOW_RESOURCE_DEFINITIONS.map(({ name }) => name)).toEqual(
       EXPECTED_RESOURCE_NAMES,
     );
-    expect(new Set(WORKFLOW_RESOURCE_NAMES).size).toBe(7);
+    expect(new Set(WORKFLOW_RESOURCE_NAMES).size).toBe(3);
     expect(
       WORKFLOW_RESOURCE_DEFINITIONS.every(({ version }) => version === 1),
     ).toBe(true);
@@ -95,7 +91,7 @@ describe("named workflow resource contract", () => {
     ).toBe("allowed");
   });
 
-  it("activates Discovery, Research, and Planning while keeping later phases fail-closed", () => {
+  it("activates only the three Planning MVP resources", () => {
     const validArgs: Record<
       (typeof EXPECTED_RESOURCE_NAMES)[number],
       Readonly<Record<string, unknown>>
@@ -106,10 +102,6 @@ describe("named workflow resource contract", () => {
       },
       "pi-workflow.research": {},
       "pi-workflow.planning": { round: 1 },
-      "pi-workflow.implementation": { mode: "single" },
-      "pi-workflow.verification": { round: 0 },
-      "pi-workflow.verification-fix": { round: 1 },
-      "pi-workflow.review": { wave: 0 },
     };
 
     for (const definition of WORKFLOW_RESOURCE_DEFINITIONS) {
@@ -142,13 +134,6 @@ describe("named workflow resource contract", () => {
             ],
           });
         }
-      } else {
-        expect(result).toMatchObject({
-          error: expect.stringContaining(definition.name),
-        });
-        expect(result).toMatchObject({
-          error: expect.stringContaining("not yet migrated"),
-        });
       }
     }
   });
