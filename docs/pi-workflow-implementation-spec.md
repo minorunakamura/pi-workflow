@@ -370,6 +370,18 @@ Ownershipは次のとおりである。
 
 generic `pi-ketch`、generic `pi-ketch.researcher`、generic `ketch_search`の`multi` support、other pi-ketch consumersはunchangedである。generic `pi-ketch.researcher`がgeneric `ketch_search`（`multi`を含む）を利用する汎用性も変更しない。single-search policyをpi-ketchへ押し込まない。
 
+#### Research Search execution and provider policy
+
+pi-workflow-owned restricted Search Toolは、1つのResearch child session内でnormalized `query`、configured/single provider mode、normalized explicit backendのsignatureを管理する。`query`と`backend`は実行前にtrimし、同一signatureは成功・失敗を問わず一度だけ`executeSearch()`へ渡す。duplicate requestにはprevious result bodyを含まないbounded `ResearchSearchGuardError`を返す。`limit`はmodel-facing schemaに公開していないためsignatureには含めない。
+
+`validation`、`precondition`、`invalid_output`の`KetchExecutionError`はfailed signatureとして記録し、unchanged retryを拒否する。`cancelled`はそのまま伝播し、`upstream` / `execution`にもwrapper automatic retryを行わない。backend omittedは`{ mode: "configured" }`、explicit backendは`{ mode: "single" }`だけに変換し、provider failureを理由にblind probingしない。`multi`、`random`、comma aggregationは引き続きrejectする。
+
+Research Agentのroutingは、official library/framework documentation → `ketch_docs`、real OSS implementation/example → `ketch_code`、known URL → `ketch_scrape`、general live web discovery → restricted Searchとする。decision-relevant questions needed by Planningにsufficient evidenceが揃ったら停止し、`supported` / `uncertain` / `unresolved`を区別する。十分なevidence後は追加探索よりResearch Artifact生成を優先する。
+
+Current supported/public `pi-ketch/search` boundaryにはconfigured provider identityまたはcredential presenceをnetwork requestなしで返すpreflight APIがない。private pi-ketch inspection、config/doctor subprocessをResearch wrapperへ追加せず、structured first-call `precondition`とfailure policyに依存する。`ketch_scrape`のURL duplicateをpi-workflowでwrap/reimplementせず、known URLの再検索禁止はAgent instructionで扱う。
+
+Numeric Research tool/turn/token budgetは、既存SOTまたは測定からのdefensible ruleがないため追加しない。pi-subagentsのrun/tool timeout、read-only Agent default、child launch overrideはsupported controlとして利用可能だが、今回のResearch correctnessに新しいnumeric limitを必須化しない。
+
 ---
 
 ## 6. Main Invocation Contract
@@ -1069,7 +1081,7 @@ codegraph status
 
 ### 11.2 Research resource
 
-Unit 4のResearch semanticsは維持し、今回変えるのはResearch childのownershipとtool policyだけである。
+Unit 4のResearch semanticsは維持し、今回変えるのはResearch childのownership、tool policy、Research provider/performance policyである。
 
 `pi-workflow.research` resolverは`ResearchArgsV1`だけを受け付ける。Discovery report、`discoveryRef`、questions本文をMainから受け取らない。Research resourceはpackage-owned Agent `pi-workflow.researcher`を起動し、generic `pi-ketch.researcher`を直接childとして起動しない。
 
@@ -1725,6 +1737,14 @@ Contract test、native runtime integration、packed install testを分離する�
 - Verification Fix max2
 - Review Fix wave max1
 - fail-closed result interpretation
+- restricted Searchのnormalized exact duplicate protection（query / provider mode / backend）
+- `validation` / `precondition` / `invalid_output` failed-signature suppression
+- `cancelled` propagation and zero wrapper automatic retries for transient failures
+- provider failureでblind probingしないこと、single-backend-only enforcement
+- docs / code / known URL / general webのtool routing and sufficient-evidence stop rule
+- Research Artifact / `researchRef` / `researchMeta` preservation
+- supported/public Ketch preflight absence and no private inspection
+- URL mechanical dedup is not added around generic `ketch_scrape`
 
 Pi context、Mission、child executionをmockせずにcore logicを検証する。
 
@@ -1827,6 +1847,9 @@ real `pi-subagents` v0.67.0で次を検証する。
 - Human Gate approval / cancel / failure
 - package-owned `pi-workflow.researcher` restricted Research Agent when required
 - supported/public Ketch capabilities (`ketch_code` / `ketch_docs` / `ketch_scrape` and restricted Search Tool)
+- restricted Search duplicate / failed-signature suppression and no automatic retry
+- provider failure policy and single-backend-only enforcement
+- routing / sufficient-evidence stop rule and artifact-first completion
 - generic `pi-ketch.researcher` / generic `ketch_search` `multi` support remain unchanged
 - conditional `oracle`
 
@@ -1909,6 +1932,14 @@ platform-sensitiveな箇所はmacOS / Linux / Windowsで確認する。ただし
 [ ] Research Agent has `ketch_code` / `ketch_docs` / `ketch_scrape`
 [ ] Research Agent does not expose generic `ketch_search` directly
 [ ] Research Agent does not expose `multi` / `random` / raw arbitrary flags
+[ ] restricted Search exact normalized duplicate cannot execute repeatedly in one child
+[ ] non-recoverable failed Search signature cannot be retried unchanged
+[ ] restricted Search wrapper performs no automatic retry
+[ ] provider failure does not trigger blind provider probing
+[ ] Research tool routing and sufficient-evidence stop rule are explicit
+[ ] Research Artifact / `researchRef` / `researchMeta` semantics remain unchanged
+[ ] provider preflight uses no unsupported/private pi-ketch inspection
+[ ] URL mechanical dedup is not added around generic `ketch_scrape`
 [ ] only supported/public pi-ketch API is used
 [ ] generic pi-ketch, generic `pi-ketch.researcher`, generic `ketch_search` `multi` support, and other consumers are unchanged
 [ ] Implementation = worker

@@ -142,8 +142,13 @@ function writeSettings(layout, piSubagentsRoot, piKetchRoot) {
 
 function buildEnvironment(layout) {
   const environment = { ...process.env };
+  // Never inherit Ketch selection or credential overrides into isolation.
   for (const key of [...Object.keys(environment), ...CLEAR_ENVIRONMENT_KEYS]) {
-    if (CLEAR_ENVIRONMENT_KEYS.has(key) || key.startsWith("PI_SUBAGENT"))
+    if (
+      CLEAR_ENVIRONMENT_KEYS.has(key) ||
+      key.startsWith("PI_SUBAGENT") ||
+      key.startsWith("KETCH_")
+    )
       delete environment[key];
   }
   environment.HOME = layout.home;
@@ -239,6 +244,19 @@ async function restrictedSearchFixture(cwd) {
     undefined,
     { cwd },
   );
+  let duplicateCode;
+  try {
+    await tool.execute(
+      "configured-duplicate",
+      { query: "configured query" },
+      undefined,
+      undefined,
+      { cwd },
+    );
+  } catch (error) {
+    duplicateCode = error?.code;
+  }
+  assert(duplicateCode === "duplicate_search", "Normalized duplicate Search was executable.");
   const single = await tool.execute(
     "single",
     { query: "single query", backend: " brave " },
@@ -280,6 +298,7 @@ async function restrictedSearchFixture(cwd) {
   assert(Array.isArray(tool.parameters.required) && tool.parameters.required.includes("query"), "Restricted Search query is not required.");
   assert(sameArray(calls[0]?.args, ["search", "configured query", "--json"]), "Configured Search did not use the configured provider path.");
   assert(sameArray(calls[1]?.args, ["search", "single query", "--backend", "brave", "--json"]), "Single Search did not use provider.mode=single.");
+  assert(calls.length === 2, "Normalized duplicate Search executed the underlying provider.");
   assert(Object.values(rejected).every(Boolean), "A forbidden Search contract input was executable.");
 
   return {
@@ -287,9 +306,39 @@ async function restrictedSearchFixture(cwd) {
     calls,
     configured: configured.details,
     single: single.details,
+    duplicateCode,
     rejected,
     allowedBackends: [...RESEARCH_SEARCH_BACKENDS],
   };
+}
+
+async function failedSearchFixture(cwd) {
+  const calls = [];
+  const pi = {
+    exec: async (command, args, options) => {
+      calls.push({ command, args, cwd: options?.cwd });
+      return { stdout: "", stderr: "missing configuration", code: 5, killed: false };
+    },
+  };
+  const tool = createResearchSearchTool(pi);
+  const errors = [];
+  for (const callId of ["failed", "failed-retry"]) {
+    try {
+      await tool.execute(
+        callId,
+        { query: "same precondition search" },
+        undefined,
+        undefined,
+        { cwd },
+      );
+    } catch (error) {
+      errors.push({ name: error?.name, code: error?.code });
+    }
+  }
+  assert(calls.length === 1, "A repeated non-recoverable Search executed twice.");
+  assert(errors[0]?.code === "precondition", "Initial precondition failure was not preserved.");
+  assert(errors[1]?.code === "failed_search", "Failed Search suppression was not distinguishable.");
+  return { calls, errors };
 }
 
 async function childToolSurface(cwd) {
@@ -359,6 +408,7 @@ async function validate(ctx) {
   const child = await childToolSurface(cwd);
   const publicSearch = await publicSearchFixture(cwd);
   const restrictedSearch = await restrictedSearchFixture(cwd);
+  const failedSearch = await failedSearchFixture(cwd);
   const publicSearchUrl = typeof import.meta.resolve === "function" ? import.meta.resolve("pi-ketch/search") : undefined;
   if (publicSearchUrl !== undefined) {
     assert(publicSearchUrl.includes("pi-ketch"), "Public Search API resolved outside pi-ketch: " + publicSearchUrl);
@@ -409,6 +459,11 @@ async function validate(ctx) {
       configuredDefault: "PASS",
       singleBackend: "PASS",
       rejected: restrictedSearch.rejected,
+      duplicateCode: restrictedSearch.duplicateCode,
+      failedSignature: {
+        calls: failedSearch.calls,
+        errors: failedSearch.errors,
+      },
     },
     resourceSelection: {
       status: "PASS",

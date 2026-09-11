@@ -653,7 +653,7 @@ generic `pi-ketch`、generic `pi-ketch.researcher`、generic `ketch_search`の`m
 
 ### 14.3 Unit 4 Research semantics
 
-Unit 4のResearch semanticsは維持し、今回変えるのはResearch childのownershipとtool policyだけである。
+Unit 4のResearch semanticsは維持し、今回変えるのはResearch childのownership、tool policy、Research provider/performance policyである。
 
 `externalResearchRequired === false` の場合はResearch resourceのzero-child skip pathを実行する。このpathではResearch Agent / Ketch capabilityを要求しない。Research Agent childを起動せず、`researchRef`を作らず、同じMissionへ次のbounded metadataを保存する。
 
@@ -673,6 +673,16 @@ Mission state: researchRef / bounded researchMeta only
 ```
 
 Research childが必要なcapabilityを利用できない場合、またはforeground実行・Artifact・Reference・state保存に失敗した場合はconditional capability failureとして停止する。background、別CLI、generic `pi-ketch.researcher`への自動切替は行わない。Main-only Human clarification boundaryは変更せず、Research childからHumanへ質問しない。
+
+### 14.4 Research evidence and provider performance policy
+
+ResearchはPlanningに必要なdecision-relevant questionsを満たすためのbounded evidence collectionとする。restricted Searchは同一Research child内で、正規化したqueryとconfigured/single provider modeの完全一致要求を一度だけ実行する。重複要求にはboundedなmachine-distinguishable guardを返し、既存のevidenceを再利用する。
+
+`validation`、`precondition`、`invalid_output`のSearch failureは同一要求を再実行せず、`cancelled`はそのまま伝播する。restricted Search wrapperはautomatic retryを持たず、`upstream` / `execution` failure後もblind retryを行わない。backend省略はconfigured/default provider、明示時はsingle backendだけとし、failureを理由にproviderを順番にprobeしない。`multi`、`random`、aggregationはResearch policyで利用不可とする。
+
+Agentは`ketch_docs`、`ketch_code`、`ketch_scrape`、restricted Searchを質問の種類に応じて使い分ける。decision-relevant questionsのevidenceが十分になった時点で停止し、findingsを`supported`、`uncertain`、`unresolved`に分ける。十分なevidence取得後はprovider状態をきれいにするための追加探索をせず、canonical Research Artifactの生成を優先する。
+
+Current supported/public `pi-ketch/search` boundaryにprovider preflight APIはないため、Researchはstructured first-call `precondition`と上記のfailure policyに依存する。generic `ketch_scrape`をwrapするpi-workflow boundaryも設けず、URL duplicate protectionはAgent instructionで扱う。Research専用のnumeric tool/turn/token budgetは現時点で追加せず、benchmark decisionへdeferする。
 
 ---
 

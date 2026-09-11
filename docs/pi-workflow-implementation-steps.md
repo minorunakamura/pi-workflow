@@ -114,6 +114,18 @@ restricted Search Toolはgeneric `ketch_search`をmodelへ直接公開せず、m
 
 Ownershipは、generic Ketch capabilities / generic `pi-ketch.researcher` = `pi-ketch`、pi-workflow Research policy / `pi-workflow.researcher` = `pi-workflow`とする。generic `pi-ketch`、generic Research Agent、generic `ketch_search`の`multi` support、other pi-ketch consumersはunchangedである。generic `pi-ketch.researcher`がgeneric `ketch_search`（`multi`を含む）を利用する汎用性も変更しない。pi-workflowはpi-ketchのsupported/public package APIだけを利用し、`pi-ketch/src/**` deep import、private runtime、registered tool internal registry、raw internal executorへ依存しない。
 
+#### Research provider / performance remediation contract
+
+Researchは次のbounded policyを実装する。
+
+- restricted Searchはnormalized `query`、configured/single mode、explicit backendのexact signatureをResearch child session内で一度だけ実行する。exact duplicateにはbounded machine-distinguishable errorを返し、previous result bodyを返さない。
+- `validation` / `precondition` / `invalid_output`のfailed signatureはunchanged retryをrejectする。`cancelled`はpropagateし、wrapper automatic retryは0とする。`upstream` / `execution`もblind retryしない。
+- backend omittedはconfigured/default、explicitはsingle backendだけとする。provider failureを理由にblind probingせず、`multi` / `random` / comma aggregationを許可しない。
+- official library/framework documentation → `ketch_docs`、real OSS implementation/example → `ketch_code`、known URL → `ketch_scrape`、general live web discovery → restricted Searchの順でroutingする。decision-relevant questions needed by Planningのevidenceがsufficientになったら停止し、`supported` / `uncertain` / `unresolved`を明示する。
+- sufficient evidence後は追加探索よりcanonical Research Artifact生成を優先する。URLのmechanical dedupはgeneric `ketch_scrape`をwrapせず、known URL policyをAgent instructionで担保する。
+- current supported/public `pi-ketch/search` APIにprovider preflightがないため、private inspectionやconfig/doctor subprocessを追加しない。
+- Research専用numeric tool/turn/token budgetはdefensibleな既存根拠がないため未設定とし、benchmark decisionへdeferする。
+
 ### 3.2 Registration lifecycle
 
 ```text
@@ -409,7 +421,7 @@ Step 1のFoundation contract、resource registration、bounded validation、stat
 → pi-workflow.planning / record-review
 ```
 
-MainはDiscovery、Research、Planの本文やpathをphase間でtransportしない。generic `pi-ketch`、generic `pi-ketch.researcher`、generic `ketch_search`の`multi` support、other pi-ketch consumersは変更しない。generic `pi-ketch.researcher`がgeneric `ketch_search`（`multi`を含む）を利用する汎用性も変更しない。今回変えるのはResearch childのownershipとtool policyだけである。
+MainはDiscovery、Research、Planの本文やpathをphase間でtransportしない。generic `pi-ketch`、generic `pi-ketch.researcher`、generic `ketch_search`の`multi` support、other pi-ketch consumersは変更しない。generic `pi-ketch.researcher`がgeneric `ketch_search`（`multi`を含む）を利用する汎用性も変更しない。今回変えるのはResearch childのownership、tool policy、Research provider/performance policyである。
 
 ## Implementation Target
 
@@ -583,6 +595,15 @@ pi-ketch generic Research Agent / generic ketch_search multi / other consumers: 
 supported/public pi-ketch API only; no deep/private/internal dependency
 Research body excluded from Main transport and Mission state
 Research Agent unavailable / required Ketch capability unavailable: fail closed
+exact normalized Search duplicate: one underlying execution, bounded guard on repeat
+non-recoverable failed Search signature: one underlying execution, unchanged retry rejected
+cancelled Search: propagated
+transient Search failure: wrapper automatic retry = 0
+provider failure: no blind provider probing; single-backend-only remains enforced
+routing and sufficient-evidence stop rule are explicit
+Research Artifact / researchRef / researchMeta remain bounded and artifact-first
+provider preflight: supported API presence checked; no private inspection
+URL mechanical dedup: no generic scrape wrapper; Agent instruction only when unsupported
 ```
 
 Plan Review:
@@ -1035,13 +1056,13 @@ source checkoutでのtestをpacked testの代替にしない。
 
 ### 5.4 このdocument taskのvalidation
 
-今回の作業では以下だけを実行対象とする。
+Document-only migrationでは以下を実行対象とする。
 
 ```text
 git diff --check
 ```
 
-Markdown validationはrepositoryに明示的なcommandが存在する場合だけ実行する。production codeのbuild / test、package install、dependency変更は行わない。
+Markdown validationはrepositoryに明示的なcommandが存在する場合だけ実行する。Research provider / performance remediationを実装するtaskでは、repositoryのtypecheck、lint、format、tests、`pnpm check`、安全な`validate:research:isolation`を別途実行し、dependency変更やreal Pi home mutationを行わない。
 
 ---
 

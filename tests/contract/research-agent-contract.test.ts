@@ -61,6 +61,30 @@ describe("package-owned Research Agent contract", () => {
     expect(research).not.toContain('agent: "pi-ketch.researcher"');
   });
 
+  it("declares evidence-oriented routing, stop, and retry policy", () => {
+    for (const instruction of [
+      "official library/framework documentation",
+      "real OSS implementation/example",
+      "known URL",
+      "general live web discovery",
+      "decision-relevant questions needed by Planning",
+      "supported",
+      "uncertain",
+      "unresolved",
+      "validation/precondition/invalid_output",
+      "same exact Search request",
+      "known URL already scraped",
+      "provider failure",
+      "Research Artifact",
+    ]) {
+      expect(agent, instruction).toContain(instruction);
+      expect(research, instruction).toContain(instruction);
+    }
+    expect(agent).toContain("do not probe other providers");
+    expect(research).toContain("do not probe other providers");
+    expect(agent).not.toContain("tools: ketch_search");
+  });
+
   it("fixes the allowed Ketch single-provider values to the current CLI contract", () => {
     expect(RESEARCH_SEARCH_BACKENDS).toEqual([
       "brave",
