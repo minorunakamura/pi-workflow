@@ -356,8 +356,23 @@ function sessionEntries(layout) {
   return { calls: [...calls.values()], results };
 }
 
+// Native subagent calls keep resource operations inside the bounded args object.
+export function acceptanceCallArguments(call) {
+  const outer = call?.arguments;
+  if (!outer || typeof outer !== "object" || Array.isArray(outer)) return {};
+  const nested = outer.args;
+  if (
+    !nested ||
+    typeof nested !== "object" ||
+    Array.isArray(nested)
+  ) {
+    return outer;
+  }
+  return { ...outer, ...nested };
+}
+
 function compactCall(call, result) {
-  const args = call?.arguments;
+  const args = acceptanceCallArguments(call);
   const compactArgs = {};
   if (args && typeof args === "object") {
     for (const key of ["workflow", "operation", "round", "status", "planRef", "reviewId", "feedbackRef", "missionId", "async"]) {
@@ -648,14 +663,21 @@ function parseOptions(argv) {
   return options;
 }
 
-function stageState(layout, stages) {
+export function stageState(layout, stages) {
   const record = missionRecord(layout);
   const mission = record?.mission;
   const state = record?.state;
   const calls = sessionEntries(layout).calls;
   const callResult = (call) => sessionEntries(layout).results.get(call.id);
   const byWorkflow = (workflow, operation) =>
-    calls.find((call) => call.name === "subagent" && call.arguments?.workflow === workflow && (operation === undefined || call.arguments?.operation === operation));
+    calls.find((call) => {
+      const args = acceptanceCallArguments(call);
+      return (
+        call.name === "subagent" &&
+        args.workflow === workflow &&
+        (operation === undefined || args.operation === operation)
+      );
+    });
   const statuses = readPlannotatorStatuses(layout);
   const reviewId = state?.planReview?.reviewId ?? extractReviewId(statuses);
 
@@ -705,7 +727,22 @@ function stageState(layout, stages) {
   }
   const pendingStatus = Object.values(statuses).find((value) => value?.status === "pending");
   const reviewCall = calls.find((call) => call.name === "pi_workflow_plan_review");
-  if (reviewCall && pendingStatus && !isTerminalReview(state)) {
+  const reviewResult = reviewCall && callResult(reviewCall);
+  if (
+    reviewCall &&
+    reviewResult?.isError !== true &&
+    isTerminalReview(state) &&
+    state.planReview?.reviewId === reviewId &&
+    state.planReview?.planRef === state.planRef
+  ) {
+    stages[5] = completeStage(stages[5], {
+      agent: "Main-only Plan Review bridge + Plannotator",
+      runKey: "pi_workflow_plan_review",
+      reviewId,
+      planRef: state.planRef,
+      result: `completed — ${state.planReview.status}`,
+    });
+  } else if (reviewCall && pendingStatus && !isTerminalReview(state)) {
     stages[5] = pendingStage(stages[5], {
       agent: "Main-only Plan Review bridge + Plannotator",
       runKey: "pi_workflow_plan_review",
