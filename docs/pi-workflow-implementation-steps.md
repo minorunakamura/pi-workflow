@@ -1,7 +1,7 @@
 # pi-workflow 実装ステップ計画
 
 - 対象: 新規 `pi-workflow`
-- 対象architecture: `pi-subagents v0.66.0`
+- 対象architecture: `pi-subagents v0.67.0`
 - 目的: 実装順序、各StepのScope、Prerequisite、Goal、Acceptance Criteriaを定義する
 - 文書種別: implementation plan
 
@@ -17,7 +17,7 @@
 
 本書と上位2文書に矛盾がある場合は、上位文書を優先し、本書を修正する。本書の旧記述からarchitectureを逆輸入しない。
 
-今回のdocument migrationではproduction code、workflow script、Skill、manifest、test、dependencyを変更しない。Unit 1–5.1の7 canonical resources、Unit 5 Planning invocation compatibility、bounded `PlanningDecisionV1`、file-backed Plan Artifact、`planRef`、S2、CodeGraph Discovery policy、Unit 5.1 native validation isolationは維持する。各Acceptance Criteriaは、将来のimplementation taskで検証するまで未確認とする。
+初期document migrationではproduction code、workflow script、Skill、manifest、test、dependencyを変更しない。今回のv0.67.0 upgrade unitではpackage/lock、compatibility tests、SOT、isolated validationだけを対象にする。Unit 1–5.1の7 canonical resources、Unit 5 Planning invocation compatibility、bounded `PlanningDecisionV1`、file-backed Plan Artifact、`planRef`、S2、CodeGraph Discovery policy、Unit 5.1 native validation isolationは維持する。v0.67.0 compatibility revalidationではlaunch contract v3 / launch-binding projection v2のdigest変更をstate identityへ採用せず、per-run field-level tool restrictionも追加しない。各Acceptance Criteriaは、将来のimplementation taskで検証するまで未確認とする。
 
 ## 2. Target Architecture と全体ルール
 
@@ -92,7 +92,7 @@ operation omittedは`plan`と同値で、Unit 5の`{ "round": 1 }`を壊さな�
 
 Research resourceのexact Agent nameはpackage-owned `pi-workflow.researcher`である。generic `pi-ketch.researcher`を直接childとして使用しない。
 
-`pi-subagents v0.66.0`にはper-run field-level tool schema restriction、per-run tool replacement、per-run extension injectionがないため、Research policyはAgent-levelで定義する。
+`pi-subagents v0.67.0`にはper-run field-level tool schema restriction、per-run tool replacement、per-run extension injectionがないため、Research policyはAgent-levelで定義する。
 
 ```text
 Agent-level tools: strict tools allowlist
@@ -278,7 +278,7 @@ Plan ReviewとCode Reviewは明示的 `approved: true`だけをapprovalとする
 
 ## Prerequisite
 
-なし。Step 1では上位2文書をSource of Truthとして読み、v0.66.0 target contractだけを基盤へ落とす。
+なし。Step 1では上位2文書をSource of Truthとして読み、v0.67.0 target contractだけを基盤へ落とす。
 
 ## Goal
 
@@ -288,10 +288,10 @@ Plan ReviewとCode Reviewは明示的 `approved: true`だけをapprovalとする
 
 ### Package contract
 
-- `package.json`の`peerDependencies`に`pi-subagents: "0.66.0"`を置く。
-- `devDependencies`にも`pi-subagents: "0.66.0"`を置く。
+- `package.json`の`peerDependencies`に`pi-subagents: "0.67.0"`を置く。
+- `devDependencies`にも`pi-subagents: "0.67.0"`を置く。
 - `pi-subagents`を`dependencies`、`bundledDependencies`、vendored sourceへ置かない。
-- `pi-workflow` + `pi-subagents 0.66.0`を同じPi package scopeで解決できる形にする。
+- `pi-workflow` + `pi-subagents 0.67.0`を同じPi package scopeで解決できる形にする。
 - package manifest、Pi extension entry point、Skills、必要なresource-owned scriptsの境界を定義する。
 
 ### Extension entry point / lifecycle
@@ -354,8 +354,8 @@ real childを起動せず、次を確認する。
 ## Acceptance Criteria
 
 ```text
-[ ] peerDependenciesにpi-subagents 0.66.0がある
-[ ] devDependenciesにpi-subagents 0.66.0がある
+[ ] peerDependenciesにpi-subagents 0.67.0がある
+[ ] devDependenciesにpi-subagents 0.67.0がある
 [ ] pi-subagentsがdependenciesにない
 [ ] pi-subagentsがbundled / vendoredされていない
 [ ] 7 Named Workflow Resourcesが存在する
@@ -378,7 +378,7 @@ real childを起動せず、次を確認する。
 [ ] real workflow E2EをStep 1へ先取りしていない
 ```
 
-Step 1のAcceptance Criteriaは、過去の別architectureのPASS結果ではなく、v0.66.0 contractに対して新たに確認する。
+Step 1のAcceptance Criteriaは、過去の別architectureのPASS結果ではなく、v0.67.0 contractに対して新たに確認する。
 
 ---
 
@@ -493,7 +493,7 @@ Main
 
 Main is the sole Human authority: start timing、Plannotator coordination、response interpretation、phase advancement、re-plan decision are Main-owned. Main does not call native Mission `state.get/state.set`; Planning Resource workflow script owns Mission state access. Full `PlanningDecisionV1`、Plan body、arbitrary path、full feedback bodyはMain model-facing transportに入れない。
 
-Plan Artifact / `planRef` ownershipは`pi-workflow.planning` Resource、`planRef`は同Resourceが生成するopaque/path-like Referenceである。pi-subagents v0.66.0では、このReferenceが特定Mission由来であることをcryptographically proveできない。SafetyはNamed Resource Mission binding、current state equality、round/reviewId checks、mismatch時のfail closedで確保する。`planRef → planContent` resolutionとFeedback Artifact writingはPlan Review bridge、Human decisionはMainとする。Current Plannotator contractは`planContent` required、`planFilePath` optional、result `{ reviewId, approved, feedback, savedPath? }`、`review-status(reviewId)`である。`savedPath`はoptionalで、`planSave` configurationに依存し、Plan/annotation snapshotであってfeedback-only Artifactではなく、Plannotator/global storageに属し、Mission/round bindingを持たないためcanonical `feedbackRef`に使わない。
+Plan Artifact / `planRef` ownershipは`pi-workflow.planning` Resource、`planRef`は同Resourceが生成するopaque/path-like Referenceである。pi-subagents v0.67.0では、このReferenceが特定Mission由来であることをcryptographically proveできない。SafetyはNamed Resource Mission binding、current state equality、round/reviewId checks、mismatch時のfail closedで確保する。`planRef → planContent` resolutionとFeedback Artifact writingはPlan Review bridge、Human decisionはMainとする。Current Plannotator contractは`planContent` required、`planFilePath` optional、result `{ reviewId, approved, feedback, savedPath? }`、`review-status(reviewId)`である。`savedPath`はoptionalで、`planSave` configurationに依存し、Plan/annotation snapshotであってfeedback-only Artifactではなく、Plannotator/global storageに属し、Mission/round bindingを持たないためcanonical `feedbackRef`に使わない。
 
 `approved === true`だけをapprovalとする。`approved:false` + valid Human resultはexplicit rejectionであり、cancel / timeout / unavailable / error / malformed / approved missingはrejectionに変換しない。Feedbackはbridgeがtransient process memoryで扱い、package-owned file-backed Artifactへ書いてbounded `feedbackRef`だけを返す。
 
@@ -644,7 +644,7 @@ implementation stateにはnative run / handoff / evidence refsとcompact status�
 
 `pi-workflow.verification`はfresh built-in `reviewer` + `pi-verification`で実行する。Plan / implementation refsをstateから内部解決し、native evidenceで全final verificationを確認する。child proseの「test passed」は証拠にしない。
 
-runtime capabilityが未実測であるため、Step 3のacceptanceにはreal `pi-subagents v0.66.0` execution PASSを必須とする。
+runtime capabilityが未実測であるため、Step 3のacceptanceにはreal `pi-subagents v0.67.0` execution PASSを必須とする。
 
 ### Verification Fix
 
@@ -706,7 +706,7 @@ Automated Reviewがcleanになった後、Main-only Plannotator Code Reviewを�
 [ ] MainがPlan body/pathをtransportしない
 [ ] Workerがapproved Write Scopeを遵守する
 [ ] implementation native refs / compact statusが保存される
-[ ] reviewer + pi-verificationのreal pi-subagents v0.66.0 runtime PASS
+[ ] reviewer + pi-verificationのreal pi-subagents v0.67.0 runtime PASS
 [ ] verification resultがreference + bounded VerificationStatusV1である
 [ ] verification failureからReviewへ進まない
 [ ] Verification Fixがmaximum 2 roundsである
@@ -883,7 +883,7 @@ clean consumerで次を確認する。
 ```text
 pi-workflow
 +
-pi-subagents 0.66.0
+pi-subagents 0.67.0
 
 → same Pi package scope
 ```
@@ -939,7 +939,7 @@ source checkoutだけではpacked-install evidenceの代替にしない。
 [ ] old Plan approvalが再利用されない
 [ ] current changesがpreserveされる
 [ ] cancel / recoveryがnative evidenceを保持する
-[ ] packed installがsame-scope pi-subagents 0.66.0を解決する
+[ ] packed installがsame-scope pi-subagents 0.67.0を解決する
 [ ] pi-subagentsがbundleされていない
 [ ] duplicate bridge / resource ownershipがない
 [ ] commands / Skills / Human Gatesがpacked consumerで解決する
@@ -984,7 +984,7 @@ real childを起動せず、次を検証する。
 
 ### 5.2 Native Runtime Integration
 
-real `pi-subagents 0.66.0`で次を確認する。
+real `pi-subagents 0.67.0`で次を確認する。
 
 - Mission create / attach
 - session-scoped resource registration / invocation / disposal
@@ -1023,7 +1023,7 @@ Runtime evidence classification:
 `pnpm pack` artifactをclean package environmentへinstall/loadする。
 
 - Extensionがloadできる。
-- peer `pi-subagents@0.66.0`がsame scopeでresolveする。
+- peer `pi-subagents@0.67.0`がsame scopeでresolveする。
 - package-owned Agent `pi-workflow.researcher`がAgent-level strict tools allowlist / `subagentOnlyExtensions`付きでdiscoverable / invocableである。
 - 7 named resourcesがdiscoverable / invocableである。
 - package-owned Skills、commands、Human Gate bridgeが解決する。
@@ -1047,10 +1047,10 @@ Markdown validationはrepositoryに明示的なcommandが存在する場合だ�
 
 ## 6. Step Status / Evidence Policy
 
-旧architectureで記録された`Step 1 complete`、`Step 2 in progress`などのstatusが存在しても、そのままv0.66.0 StepのPASSへ移行しない。
+旧architectureで記録された`Step 1 complete`、`Step 2 in progress`などのstatusが存在しても、そのままv0.67.0 StepのPASSへ移行しない。
 
-- v0.66.0 migrationで意味が変わったAcceptance Criteriaはsupersededとする。
-- new StepのAcceptance statusは、v0.66.0 target contractを確認するまで`unchecked`とする。
+- v0.67.0 compatibility migrationで意味が変わったAcceptance Criteriaはsupersededとする。
+- new StepのAcceptance statusは、v0.67.0 target contractを確認するまで`unchecked`とする。
 - Basic Design / Implementation Specificationに明記されたcompleted evidenceは、記載された範囲だけをFoundation evidenceとして再利用できる。
 - `runs.lanes`のcontract evidenceがあっても、Step 4のproduction behavior全体をPASS扱いしない。
 - runtime未実行の`reviewer + pi-verification`、`reviewer + ponytail-review`、conditional package-owned `pi-workflow.researcher` / Ketch capabilities、conditional `oracle`を実行済みと記録しない。generic `pi-ketch.researcher`の変更・検証をこのmigrationのPASS evidenceにしない。
@@ -1073,7 +1073,7 @@ Markdown validationはrepositoryに明示的なcommandが存在する場合だ�
 次の場合はStepをcompleteとしない。
 
 - failed Acceptance Criterionがある。
-- v0.66.0 architectureと矛盾する。
+- v0.67.0 architectureと矛盾する。
 - required external contractが未確認である。
 - required native evidenceが不足している。
 - missing refやlarge payloadをMain transportで補うworkaroundがある。

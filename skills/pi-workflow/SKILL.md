@@ -22,7 +22,7 @@ final Code Review, or close the Mission as success in this flow.
 For each `/wf-*` kickoff, perform these checks in order:
 
 1. Call `subagent({ action: "mission.list" })` for the current project.
-2. The official `pi-subagents` v0.66.0 Mission statuses are `planned`, `active`,
+2. The official `pi-subagents` v0.67.0 Mission statuses are `planned`, `active`,
    `waiting`, `needs_decision`, `completed`, `failed`, and `cancelled`.
    Block a new workflow when a Mission is `planned`, `active`, `waiting`, or
    `needs_decision`. Report its Mission ID, title, and status; do not resume,
@@ -111,7 +111,7 @@ subagent({
 If the next action is a Human input or approval gate, use the native
 `mission.update` with `missionUpdate: { status: "waiting" }` while waiting.
 After the Human result, restore `active` before continuing. `waiting` is a
-Mission status from the v0.66.0 contract; do not substitute an invented status.
+Mission status from the v0.67.0 contract; do not substitute an invented status.
 If a machine-invalid phase result stops the flow, use native
 `missionUpdate: { status: "needs_decision" }` when owner intervention is
 required and report the explicit failure. Do not leave the Mission's transient

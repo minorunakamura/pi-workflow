@@ -24,7 +24,7 @@ import { StringDecoder } from "node:string_decoder";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const PI_VERSION = "0.85.1";
-const PI_SUBAGENTS_VERSION = "0.66.0";
+const PI_SUBAGENTS_VERSION = "0.67.0";
 const PONYTAIL_VERSION = "4.9.0";
 const PI_SUBAGENTS_BIN = "install.mjs";
 const RESOURCE_NAMES = [
@@ -481,17 +481,25 @@ function writeTemporarySettings(layout, piSubagentsRoot, packageRoots) {
 function promptFor(researchMode) {
   const researchInstruction =
     researchMode === "completed"
-      ? "The request intentionally needs current Pi 0.85.1 and pi-subagents 0.66.0 facts, so require and complete the named Research resource."
-      : "The request needs no external facts; use the named Research resource's canonical skipped path and do not invoke a researcher.";
+      ? "The request intentionally needs current Pi 0.85.1 and pi-subagents 0.67.0 facts, so require and complete the named Research resource."
+      : "The request needs no external facts; set externalResearchRequired false, leave researchQuestions empty, use the named Research resource's canonical skipped path, and do not invoke a researcher.";
+  const requestFocus =
+    researchMode === "completed"
+      ? "validating Pi 0.85.1 / pi-subagents 0.67.0 root isolation"
+      : "validating repository-local root isolation without external facts";
+  const discoveryInstruction =
+    researchMode === "completed"
+      ? "For this no-human validation, Discovery metadata must be status ready with humanClarificationRequired false; put external facts in Research questions instead of blocking on clarification. Do not mark Discovery blocked."
+      : "For this no-human validation, Discovery metadata must be status ready with humanClarificationRequired false and externalResearchRequired false; leave researchQuestions empty and do not mark Discovery blocked.";
   return [
     "Execute exactly the current pi-workflow Unit 5 native planning-flow proof in this disposable fixture.",
     "Do not edit any fixture or source files.",
     "Do not run pnpm, npm, npx, pnpm dlx, pi install, any installer, or any package executable for version checking.",
     "Use only the authoritative named workflow resources and native pi-subagents Mission flow.",
     "",
-    "Use this Main Session sequence: mission.list, capability check, clean git check, one fresh active native Mission; invoke pi-workflow.discovery with requestType chore and a unique bounded request about validating Pi 0.85.1 / pi-subagents 0.66.0 root isolation; normalize the Mission;",
+    `Use this Main Session sequence: mission.list, capability check, clean git check, one fresh active native Mission; invoke pi-workflow.discovery with requestType chore and a unique bounded request about ${requestFocus}; normalize the Mission;`,
     researchInstruction,
-    "For this no-human validation, Discovery metadata must be status ready with humanClarificationRequired false; put external facts in Research questions instead of blocking on clarification. Do not mark Discovery blocked.",
+    discoveryInstruction,
     "normalize again; invoke named pi-workflow.planning round 1; after Planning succeeds, make one separate mandatory mission.update with status active and do not close the Mission; only then stop with the fresh planRef and Plan Artifact.",
     "Keep every named phase invocation foreground with async:false.",
     "Do not invoke Plan Review, Implementation, Verification, Review, or Unit 6.",

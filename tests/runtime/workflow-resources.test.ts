@@ -364,7 +364,7 @@ describe("named workflow resource contract", () => {
     lifecycle.dispose("session-a");
   });
 
-  it("works through the real v0.66.0 public registration boundary", () => {
+  it("works through the real v0.67.0 public registration boundary", () => {
     const sessionId = `unit-1-${randomUUID()}`;
     const lifecycle = createWorkflowResourceLifecycle(registerWorkflowResource);
 

@@ -25,12 +25,12 @@ const workflowScripts = [
 const skills = ["pi-workflow", "pi-planning", "pi-verification"];
 
 describe("package contract", () => {
-  it("requires pi-subagents 0.66.0 as a peer and development dependency", () => {
+  it("requires pi-subagents 0.67.0 as a peer and development dependency", () => {
     expect(packageJson.peerDependencies).toMatchObject({
-      "pi-subagents": "0.66.0",
+      "pi-subagents": "0.67.0",
     });
     expect(packageJson.devDependencies).toMatchObject({
-      "pi-subagents": "0.66.0",
+      "pi-subagents": "0.67.0",
     });
     expect(packageJson.dependencies ?? {}).not.toHaveProperty("pi-subagents");
     expect(packageJson.bundledDependencies ?? []).not.toContain("pi-subagents");
@@ -38,14 +38,14 @@ describe("package contract", () => {
 
   it("keeps the pnpm lockfile on the exact package version", () => {
     expect(lockfile).toMatch(
-      /pi-subagents:\n\s+specifier: 0\.66\.0\n\s+version: 0\.66\.0\(/,
+      /pi-subagents:\n\s+specifier: 0\.67\.0\n\s+version: 0\.67\.0\(/,
     );
   });
 
   it("checks pi-subagents metadata without executing its package bin", () => {
     expect(piSubagentsPackage).toMatchObject({
       name: "pi-subagents",
-      version: "0.66.0",
+      version: "0.67.0",
       bin: { "pi-subagents": "install.mjs" },
     });
   });

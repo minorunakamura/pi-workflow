@@ -381,7 +381,7 @@ function notMigrated(
       };
     }
     return {
-      error: `Named workflow resource '${name}' is not yet migrated to the v0.66.0 resource execution path.`,
+      error: `Named workflow resource '${name}' is not yet migrated to the v0.67.0 resource execution path.`,
     };
   };
 }

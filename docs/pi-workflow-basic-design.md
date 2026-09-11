@@ -5,7 +5,7 @@
 - 基準日: 2026-09-08
 - 設計基準:
   - Pi 最新公式ドキュメント
-  - `pi-subagents` v0.66.0 tagged docs / public API
+  - `pi-subagents` v0.67.0 tagged docs / public API
   - Plannotator `@plannotator/pi-extension` v0.27.12
   - Ponytail `@dietrichgebert/ponytail` v4.9.0
   - CodeGraph `@colbymchenry/codegraph` v1.6.0
@@ -16,7 +16,11 @@
 >
 > 本文書は、新規 `pi-workflow` のための設計書である。
 > 廃棄した旧 `pi-workflow` のドキュメント、仕様、実装、Library成果物は設計根拠として使用しない。
-> Integration Spikeで提示された完了済みEvidenceを、v0.66.0移行のauthoritative evidenceとして扱う。Evidenceの再実行結果を本文書へ追加しない。
+> Integration Spikeで提示された完了済みEvidenceは、historical v0.66.0 evidenceとして扱う。Evidenceの事実をv0.67.0へ書き換えず、current baselineのcompatibility revalidationは別に記録する。
+>
+> **Current validated baseline**
+>
+> `pi-subagents` v0.67.0をexact pinし、public named-resource / Mission state / foreground run / strict tool isolation前提を再検証した。v0.67.0のlaunch contract v3 / launch-binding projection v2によるdigest変更は、pi-workflowのauthoritative state identityではないためmigrationを追加しない。per-run field-level tool restrictionも引き続きpublic contractに含めない。
 
 ---
 
@@ -197,7 +201,7 @@ product / architecture / policy / risk acceptanceなど、人の判断を必要�
 | Component | Baseline | Role | Ownership |
 |---|---:|---|---|
 | Pi | current compatible Pi; initial validation target 0.85.x | host / Main Session | External |
-| `pi-subagents` | **0.66.0** | Mission / named resource resolution / workflow execution / worktree / acceptance | External |
+| `pi-subagents` | **0.67.0** | Mission / named resource resolution / workflow execution / worktree / acceptance | External |
 | Plannotator | 0.27.12 | Human Plan Review / Human Code Review | External |
 | Ponytail | 4.9.0 | `ponytail-review` Skill | External |
 | CodeGraph | 1.6.0 | optional local structural discovery accelerator | External |
@@ -210,10 +214,10 @@ product / architecture / policy / risk acceptanceなど、人の判断を必要�
 ```json
 {
   "peerDependencies": {
-    "pi-subagents": "0.66.0"
+    "pi-subagents": "0.67.0"
   },
   "devDependencies": {
-    "pi-subagents": "0.66.0"
+    "pi-subagents": "0.67.0"
   }
 }
 ```
@@ -267,7 +271,7 @@ Mainはlarge phase payload transport layerでもworkflowScript transport layer�
 
 ## 7. Named Workflow Resources
 
-Productionで登録するresourceは次の7つである。resource nameはv0.66.0のsafe name constraint（先頭は英数字、以降は英数字・`.`・`-`、最大128文字）を満たす。各versionは `1` とする。
+Productionで登録するresourceは次の7つである。resource nameはv0.67.0のsafe name constraint（先頭は英数字、以降は英数字・`.`・`-`、最大128文字）を満たす。各versionは `1` とする。
 
 | Phase | Canonical resource name | Child / Skill |
 |---|---|---|
@@ -462,7 +466,7 @@ clean-tree checkはMission作成前に1回行う。開始後はimplementationで
 
 Goal Missionは使用しない。Mainがnative `mission.create` で明示的にMissionを作成し、以後すべてのphaseを同じ `missionId` へattachする。
 
-Mission statusはv0.66.0 native valueだけを使用する。
+Mission statusはv0.67.0 native valueだけを使用する。
 
 ```text
 planned / active / waiting / needs_decision / completed / failed / cancelled
@@ -601,7 +605,7 @@ Research phaseは`pi-workflow.research` resourceで処理し、外部factsが必
 
 `pi-workflow.researcher`は、既存のAgent naming conventionに従うpi-workflow固有のResearch Agentである。Research resourceが起動するchildは常にこのAgentとし、Research policyをpi-ketch側のgeneric Agentへ押し込まない。
 
-`pi-subagents v0.66.0`ではper-runのfield-level tool schema restriction、per-run tool replacement、per-run extension injectionを利用できない。したがってこのpolicyをResearch resourceのchild invocation argsで後付けせず、Agent-level boundaryとして定義する。
+`pi-subagents v0.67.0`ではper-runのfield-level tool schema restriction、per-run tool replacement、per-run extension injectionを利用できない。したがってこのpolicyをResearch resourceのchild invocation argsで後付けせず、Agent-level boundaryとして定義する。
 
 Agent-level contractは次である。
 
@@ -757,7 +761,7 @@ state.get
 → return compact ready/pending result
 ```
 
-`planRef`は`pi-workflow.planning`が生成するopaque/path-like Referenceである。`state.planRef === supplied planRef`、current Mission、supplied round、既存 `planReview` bindingのround/planRefを照合する。opaque/path-likeな`planRef`のoriginをMainが独立証明することは要求しない。v0.66.0で利用できるauthoritative checkは、同じNamed Resource Mission内のcurrent state equalityと、round/binding checksである。
+`planRef`は`pi-workflow.planning`が生成するopaque/path-like Referenceである。`state.planRef === supplied planRef`、current Mission、supplied round、既存 `planReview` bindingのround/planRefを照合する。opaque/path-likeな`planRef`のoriginをMainが独立証明することは要求しない。v0.67.0で利用できるauthoritative checkは、同じNamed Resource Mission内のcurrent state equalityと、round/binding checksである。
 
 pending bindingが存在する場合、`prepare-review` は `pending` を返し、Mainは2つ目のPlannotator reviewを起動しない。新しいレビューを起動できる場合だけ `ready` を返す。Plannotator start前にcompact `status:"pending"`、`round`、`planRef`を保存することで、重複起動を抑止する。
 
@@ -1037,7 +1041,7 @@ Referenceはnative `outputReference`、`runId`、patch ref、handoff ref、evide
 
 ### 22.2 Target bounded design constants
 
-次の値はIntegration Spikeから機械的に得たruntime事実ではなく、v0.66.0 migrationで追加する**New v0.66.0 design decision**である。実装では一か所の共通validationとして管理する。
+次の値はIntegration Spikeから機械的に得たruntime事実ではなく、historical v0.66.0 migrationで追加した**design decision**であり、v0.67.0 upgradeでも維持する。実装では一か所の共通validationとして管理する。
 
 | Contract | Bound |
 |---|---:|
@@ -1068,7 +1072,7 @@ Referenceはnative `outputReference`、`runId`、patch ref、handoff ref、evide
 
 PlanningDecisionのfield-level text boundは、`requestSummary`、scope各entry、acceptance criterionの`text`、constraint、risk、verificationの`description`、WorkUnitの`title` / `objective`、unresolved decisionの`question` / `reason`を各1,024 UTF-8 bytes以内とする。`verification.command`、WorkUnitの`writeScope`各entryは各2,048 bytes以内、全IDは各64 bytes以内とする。Discovery / Research metadataのquestion、ReviewDecisionのsummary / location / reason / question / contextも同じregular compact text boundを使う。requestだけは8,192 bytes、Human input valueだけは各2,048 bytesとする。
 
-全string、array、objectの上限は上表とnative v0.66.0 args guardの両方を満たす必要がある。`additionalProperties:false`、unknown field rejection、empty string rejection、plain JSON、finite numberを必須とする。
+全string、array、objectの上限は上表とnative v0.67.0 args guardの両方を満たす必要がある。`additionalProperties:false`、unknown field rejection、empty string rejection、plain JSON、finite numberを必須とする。
 
 ### 22.3 Exact phase state/ref contract
 
@@ -1111,7 +1115,7 @@ interface PlanReviewBindingV1 {
 }
 ```
 
-`planReview`はcompact status/referenceだけを保持し、Plan Markdown、Human feedback prose、full Plannotator payload、browser/UI transcriptを保持しない。approval/rejectionはcurrent Mission、exact Planning/Plan Review round、exact current `planRef`、availableな`reviewId`へbindingする。opaque/path-likeなReferenceが特定Mission由来であることをv0.66.0でcryptographically proveすることはできないため、Named Resource Mission binding、current state equality、round/reviewId checks、mismatch時のfail closedを安全策とする。
+`planReview`はcompact status/referenceだけを保持し、Plan Markdown、Human feedback prose、full Plannotator payload、browser/UI transcriptを保持しない。approval/rejectionはcurrent Mission、exact Planning/Plan Review round、exact current `planRef`、availableな`reviewId`へbindingする。opaque/path-likeなReferenceが特定Mission由来であることをv0.67.0でcryptographically proveすることはできないため、Named Resource Mission binding、current state equality、round/reviewId checks、mismatch時のfail closedを安全策とする。
 
 native Mission statusがauthoritativeであり、mirror値の不一致は成功扱いにしない。Mission stateはrecovery用のreference indexであり、conversation transcriptの代替ではない。
 
@@ -1220,7 +1224,7 @@ phase + payload
 
 `workflowScript sha256` がMain transport integrityのためだけに存在する場合、named resource boundaryでは不要である。current consumer調査でMainがhashを検証する独立consumerはないため、Main-facing `sha256` contractを削除する。
 
-native v0.66.0がresource provenance / script digestを扱う範囲はnative ownershipに任せ、`pi-workflow`独自のtransport hash、raw script echo、integrity protocolを追加しない。
+native v0.67.0がresource provenance / script digestを扱う範囲はnative ownershipに任せ、`pi-workflow`独自のtransport hash、raw script echo、integrity protocolを追加しない。
 
 ### 24.3 残すTool
 
@@ -1360,7 +1364,7 @@ LLM E2Eと分離し、次をdeterministicに検証する。
 
 ### 27.3 Native runtime integration
 
-real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証する。
+real `pi-subagents` v0.67.0で、必要なcapabilityごとに次を別途検証する。
 
 - Mission create / attach
 - Discovery reference handoff
@@ -1428,8 +1432,8 @@ real `pi-subagents` v0.66.0で、必要なcapabilityごとに次を別途検証�
 ## 28. Definition of Done
 
 ```text
-[ ] pi-subagents 0.66.0 required peer dependency
-[ ] pi-subagents 0.66.0 devDependency for build/tests
+[ ] pi-subagents 0.67.0 required peer dependency
+[ ] pi-subagents 0.67.0 devDependency for build/tests
 [ ] no bundled / vendored pi-subagents
 [ ] package-owned Research Agent `pi-workflow.researcher`が存在する
 [ ] `pi-workflow.researcher`のstrict tools allowlist / `subagentOnlyExtensions`がAgent-levelで定義される
@@ -1488,9 +1492,10 @@ legacy `7 workflow templates` ではなく、production boundaryとしての `7 
 
 - Pi Packages: https://pi.dev/docs/latest/packages
 - Pi Extensions: https://pi.dev/docs/latest/extensions
-- `pi-subagents` v0.66.0 docs: https://github.com/nicobailon/pi-subagents/tree/v0.66.0/docs
-- `pi-subagents` v0.66.0 workflow resources public API: https://github.com/nicobailon/pi-subagents/blob/v0.66.0/src/api/workflow-resources.ts
-- `pi-subagents` v0.66.0 tagged workflow source: https://github.com/nicobailon/pi-subagents/blob/v0.66.0/src/workflows/workflow-resources.ts
+- `pi-subagents` v0.67.0 release: https://github.com/nicobailon/pi-subagents/releases/tag/v0.67.0
+- `pi-subagents` v0.67.0 docs: https://github.com/nicobailon/pi-subagents/tree/v0.67.0/docs
+- `pi-subagents` v0.67.0 workflow resources public API: https://github.com/nicobailon/pi-subagents/blob/v0.67.0/src/api/workflow-resources.ts
+- `pi-subagents` v0.67.0 tagged workflow source: https://github.com/nicobailon/pi-subagents/blob/v0.67.0/src/workflows/workflow-resources.ts
 - Plannotator v0.27.12: https://github.com/backnotprop/plannotator/tree/v0.27.12/apps/pi-extension
 - Ponytail v4.9.0: https://github.com/DietrichGebert/ponytail/tree/v4.9.0
 - CodeGraph v1.6.0: https://github.com/colbymchenry/codegraph/tree/v1.6.0

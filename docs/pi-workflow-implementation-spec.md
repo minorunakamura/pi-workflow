@@ -4,9 +4,9 @@
 - 対象: 新規プロジェクト `pi-workflow`
 - 基準日: 2026-09-08
 - 上位文書: `docs/pi-workflow-basic-design.md`
-- `pi-subagents` baseline: **v0.66.0**
+- `pi-subagents` baseline: **v0.67.0**
 
-本書はBasic Designのtarget architectureに従う。今回の作業は設計文書の更新であり、本書に基づくproduction TypeScript、workflow script、Skill、manifestの変更は別taskで行う。
+本書はBasic Designのtarget architectureに従う。v0.67.0 compatibility revalidationでは、launch contract v3 / launch-binding projection v2のdigest変更をpi-workflowのauthoritative state identityに採用せず、per-run field-level tool restrictionも追加しない。今回の作業は設計文書とbaselineの更新であり、本書に基づくproduction TypeScript、workflow script、Skill、manifestの変更は別taskで行う。
 
 ---
 
@@ -17,7 +17,7 @@
 ```text
 Main Session / Control Plane
   → named workflow name + bounded args + missionId + cwd + async:false
-  → pi-subagents v0.66.0 public resource resolver
+  → pi-subagents v0.67.0 public resource resolver
   → package-owned workflow script / schema / policy
   → foreground child execution
   → Artifact + native Reference
@@ -169,7 +169,7 @@ package-owned Agent `pi-workflow.researcher`は、supported publicなpi-subagent
 
 ### 3.1 `package.json` target
 
-概念形は次のとおりとする。既存のPi peer、TypeBox、toolingのdependencyは維持し、`pi-subagents`だけをv0.66.0 contractに追加する。
+概念形は次のとおりとする。既存のPi peer、TypeBox、toolingのdependencyは維持し、`pi-subagents`はv0.67.0 contractへexact pinする。
 
 ```json
 {
@@ -186,17 +186,17 @@ package-owned Agent `pi-workflow.researcher`は、supported publicなpi-subagent
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*",
-    "pi-subagents": "0.66.0"
+    "pi-subagents": "0.67.0"
   },
   "devDependencies": {
-    "pi-subagents": "0.66.0"
+    "pi-subagents": "0.67.0"
   }
 }
 ```
 
 packageのpublish file allowlistを使う場合は、package-owned Agent definitionを含む`agents`を除外しない。
 
-`pi-subagents`のsupported versionはexactly `0.66.0` とする。`^0.66.0`やfloating `latest`をruntime contractにしない。
+`pi-subagents`のsupported versionはexactly `0.67.0` とする。`^0.67.0`やfloating `latest`をruntime contractにしない。
 
 ### 3.2 禁止事項
 
@@ -208,7 +208,7 @@ packageのpublish file allowlistを使う場合は、package-owned Agent definit
 - `pi-workflow.researcher`はpackage-owned Agent-level definitionとして扱い、per-run tool restriction / tool replacement / extension injectionで代用しない。
 - 同じ機能のMission、run、worktree、patch、acceptance registryを作らない。
 
-`pi-workflow`と`pi-subagents`は同じPi package scopeへinstallすることをsupported topologyとする。peer dependencyはhost scopeにあるv0.66.0との互換契約であり、bundled runtime dependencyではない。
+`pi-workflow`と`pi-subagents`は同じPi package scopeへinstallすることをsupported topologyとする。peer dependencyはhost scopeにあるv0.67.0との互換契約であり、bundled runtime dependencyではない。
 
 ### 3.3 Packed package
 
@@ -288,7 +288,7 @@ registrationが1件でも失敗した場合は、同一sessionで先に登録し
 - disposerはidempotentに呼べるようにする。
 - `session_shutdown`後に新しいinvocationを成功扱いしない。
 
-v0.66.0のsafe resource name contractは次である。
+v0.67.0のsafe resource name contractは次である。
 
 ```text
 先頭: ASCII英数字
@@ -329,7 +329,7 @@ resource nameをphase template名、Agent名、Main command名と混同しない
 
 Research resourceが使用するAgent nameは`pi-workflow.researcher`である。これは既存の`pi-workflow.<role>` naming conventionに従うpackage-owned Research Agentであり、generic `pi-ketch.researcher`とは別のidentityである。
 
-`pi-subagents v0.66.0`ではper-run field-level tool schema restriction、per-run tool replacement、per-run extension injectionを提供しない。この制約をchild invocationで回避せず、Research policyはAgent-level contractで表現する。
+`pi-subagents v0.67.0`ではper-run field-level tool schema restriction、per-run tool replacement、per-run extension injectionを提供しない。この制約をchild invocationで回避せず、Research policyはAgent-level contractで表現する。
 
 | Agent-level capability | Contract |
 |---|---|
@@ -607,9 +607,9 @@ cross-field rules:
 - round + 1の`plan`に渡す`feedbackRef`は、同じMissionの直前roundのrejected `planReview` binding（直前round、直前`planRef`、reviewId）へboundされたReferenceでなければrejectする。
 - `planRef`、`discoveryRef`、`verificationRef`、target filename、Write Scope、full failure evidenceをargsへ追加しない。これらはresource内部でMission stateから取得する。
 
-### 8.3 Native v0.66.0 args limits
+### 8.3 Native v0.67.0 args limits
 
-v0.66.0 public resolverのplain-JSON args guardも満たす。
+v0.67.0 public resolverのplain-JSON args guardも満たす。
 
 ```text
 args total: 最大16 KiB
@@ -623,7 +623,7 @@ nesting depth: 最大8
 
 ### 8.4 pi-workflow bounds
 
-次は本migrationで導入する**New v0.66.0 design decision**である。Integration Spikeの測定値ではなく、unbounded structured dataをcompactと呼ばないためのtarget validation contractである。
+次はhistorical v0.66.0 migrationで導入し、v0.67.0 upgradeでも維持する**design decision**である。Integration Spikeの測定値ではなく、unbounded structured dataをcompactと呼ばないためのtarget validation contractである。
 
 | Value | Bound |
 |---|---:|
@@ -878,7 +878,7 @@ interface PlanReviewBindingV1 {
 }
 ```
 
-Approval/rejectionはcurrent Mission、exact Planning/Plan Review round、exact current `planRef`、availableな`reviewId`へbindingする。opaque/path-like Referenceが特定Mission由来であることはpi-subagents v0.66.0でcryptographically proveできない。安全策はNamed Resource Mission binding、current state equality、round/reviewId checks、mismatch時のfail closedである。
+Approval/rejectionはcurrent Mission、exact Planning/Plan Review round、exact current `planRef`、availableな`reviewId`へbindingする。opaque/path-like Referenceが特定Mission由来であることはpi-subagents v0.67.0でcryptographically proveできない。安全策はNamed Resource Mission binding、current state equality、round/reviewId checks、mismatch時のfail closedである。
 
 `codeApproval`は後段Code Review専用であり、Plan Reviewへ再利用しない。annotation bodyはstateへ保存しない。
 
@@ -984,7 +984,7 @@ bridge process memory: Plannotator feedback body = transiently yes
 
 ### 10.2 S2 rule
 
-v0.66.0で実測されたStructured Visibility ModelはS2である。
+v0.66.0で実測されたStructured Visibility ModelはS2であり、v0.67.0 compatibility revalidationでもこのS2を維持する。
 
 ```text
 file-only + outputSchema
@@ -1175,7 +1175,7 @@ state.get
 → return compact `ready` or `pending` result
 ```
 
-`planRef`は`pi-workflow.planning`が生成するopaque/path-like Referenceであり、Mainがそのoriginを独立またはcryptographically proveする契約ではない。same-Mission/current-state equality、round check、binding check、mismatch時のfail closedがv0.66.0で利用できるvalidationである。pending `planReview` bindingがある場合は`pending`を返し、新しいPlannotator startを許可しない。
+`planRef`は`pi-workflow.planning`が生成するopaque/path-like Referenceであり、Mainがそのoriginを独立またはcryptographically proveする契約ではない。same-Mission/current-state equality、round check、binding check、mismatch時のfail closedがv0.67.0で利用できるvalidationである。pending `planReview` bindingがある場合は`pending`を返し、新しいPlannotator startを許可しない。
 
 #### `operation:"record-review"`（zero child）
 
@@ -1794,7 +1794,7 @@ real childを起動しないdeterministic contract testで次を検証する。
 
 ### 16.4 Native runtime integration
 
-real `pi-subagents` v0.66.0で次を検証する。
+real `pi-subagents` v0.67.0で次を検証する。
 
 - Mission create / attach
 - session-scoped named resource registration
@@ -1837,7 +1837,7 @@ real `pi-subagents` v0.66.0で次を検証する。
 `pnpm pack`したartifactをclean consumerへinstallして次を確認する。
 
 - Extension load
-- peer `pi-subagents@0.66.0`でpublic resource subpathがresolveする。
+- peer `pi-subagents@0.67.0`でpublic resource subpathがresolveする。
 - package-owned Agent `pi-workflow.researcher`がAgent-level strict tools allowlist / `subagentOnlyExtensions`付きでdiscoverable / invocableである。
 - 7 named resourceがdiscoverable / invocableである。
 - 7 package-owned workflow scriptsがresource内部から解決できる。
@@ -1868,8 +1868,8 @@ platform-sensitiveな箇所はmacOS / Linux / Windowsで確認する。ただし
 ## 17. Definition of Done
 
 ```text
-[ ] pi-subagents 0.66.0 required peer dependency
-[ ] pi-subagents 0.66.0 devDependency
+[ ] pi-subagents 0.67.0 required peer dependency
+[ ] pi-subagents 0.67.0 devDependency
 [ ] no dependencies entry for pi-subagents
 [ ] no bundled / vendored pi-subagents
 [ ] pi-workflow and pi-subagents use the same Pi package scope
@@ -1935,9 +1935,10 @@ legacy `7 workflow templates`はpackage internalsの説明に限定し、product
 
 - Pi Packages: https://pi.dev/docs/latest/packages
 - Pi Extensions: https://pi.dev/docs/latest/extensions
-- `pi-subagents` v0.66.0 docs: https://github.com/nicobailon/pi-subagents/tree/v0.66.0/docs
-- `pi-subagents` v0.66.0 workflow resources public API: https://github.com/nicobailon/pi-subagents/blob/v0.66.0/src/api/workflow-resources.ts
-- `pi-subagents` v0.66.0 tagged resource implementation: https://github.com/nicobailon/pi-subagents/blob/v0.66.0/src/workflows/workflow-resources.ts
+- `pi-subagents` v0.67.0 release: https://github.com/nicobailon/pi-subagents/releases/tag/v0.67.0
+- `pi-subagents` v0.67.0 docs: https://github.com/nicobailon/pi-subagents/tree/v0.67.0/docs
+- `pi-subagents` v0.67.0 workflow resources public API: https://github.com/nicobailon/pi-subagents/blob/v0.67.0/src/api/workflow-resources.ts
+- `pi-subagents` v0.67.0 tagged resource implementation: https://github.com/nicobailon/pi-subagents/blob/v0.67.0/src/workflows/workflow-resources.ts
 - Plannotator v0.27.12: https://github.com/backnotprop/plannotator/tree/v0.27.12/apps/pi-extension
 - Ponytail v4.9.0: https://github.com/DietrichGebert/ponytail/tree/v4.9.0
 - CodeGraph v1.6.0: https://github.com/colbymchenry/codegraph/tree/v1.6.0
