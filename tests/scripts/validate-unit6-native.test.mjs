@@ -47,7 +47,11 @@ async function evidenceLayout() {
       workflowChildren: [
         { key: "discovery-artifact", status: "completed", agent: "scout" },
         { key: "discovery-metadata", status: "completed", agent: "scout" },
-        { key: "research", status: "completed", agent: "pi-workflow.researcher" },
+        {
+          key: "research",
+          status: "completed",
+          agent: "pi-workflow.researcher",
+        },
         { key: "planning", status: "completed", agent: "reviewer" },
       ],
     }),
@@ -105,7 +109,10 @@ async function evidenceLayout() {
       async: false,
     }),
   ];
-  await writeFile(join(layout.sessions, "session.jsonl"), `${calls.map(JSON.stringify).join("\n")}\n`);
+  await writeFile(
+    join(layout.sessions, "session.jsonl"),
+    `${calls.map(JSON.stringify).join("\n")}\n`,
+  );
   return { root, layout };
 }
 
