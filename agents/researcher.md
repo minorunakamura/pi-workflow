@@ -4,7 +4,7 @@ package: pi-workflow
 description: Consumer-specific read-only Research Agent for external evidence
 tools: pi_workflow_ketch_search, ketch_code, ketch_docs, ketch_scrape
 extensions: ../node_modules/pi-ketch, ../../pi-ketch
-subagentOnlyExtensions: ../src/researcher-tools.ts
+subagentOnlyExtensions: ../src/research/researcher-extension.ts
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: false

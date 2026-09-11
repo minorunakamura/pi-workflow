@@ -174,6 +174,38 @@ describe("runPlanReview", () => {
     expect(events.startPayload).toBeUndefined();
   });
 
+  it("fails closed when recovery returns the wrong reviewId", async () => {
+    const planRef = await planFile();
+    const events = new FakeEventBus();
+    events.status = "completed";
+    events.result = { reviewId: "review-other", approved: true };
+
+    await expect(
+      recoverPlanReview(
+        { events },
+        { missionId: "mission-wrong-id", round: 1, planRef },
+        "review-requested",
+      ),
+    ).rejects.toThrow("wrong reviewId");
+    expect(events.requestCount).toBe(1);
+  });
+
+  it("fails closed when recovery cannot find the requested review", async () => {
+    const planRef = await planFile();
+    const events = new FakeEventBus();
+    events.status = "missing";
+
+    await expect(
+      recoverPlanReview(
+        { events },
+        { missionId: "mission-missing-review", round: 1, planRef },
+        "review-missing",
+      ),
+    ).rejects.toThrow("is missing");
+    expect(events.requestCount).toBe(1);
+    expect(events.startPayload).toBeUndefined();
+  });
+
   it("fails before Plannotator when the Plan Artifact cannot be read", async () => {
     const events = new FakeEventBus();
 

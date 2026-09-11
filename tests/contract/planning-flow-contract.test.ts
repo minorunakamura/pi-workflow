@@ -40,8 +40,7 @@ describe("Planning MVP contract", () => {
     expect(skill).toContain('workflow: "pi-workflow.planning"');
     expect(skill).not.toContain("prepare_phase");
     expect(skill).not.toContain("workflowScript");
-    expect(skill).not.toContain("Unit 5");
-    expect(skill).not.toContain("Unit 6");
+    expect(skill).not.toMatch(/Unit [56]/u);
   });
 
   it("makes Research skip explicit through absence of Research state", () => {

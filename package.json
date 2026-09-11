@@ -4,6 +4,7 @@
   "description": "Thin workflow orchestration package for Pi.",
   "files": [
     "src",
+    "runtime",
     "workflow-scripts",
     "skills",
     "agents",
@@ -14,7 +15,7 @@
     "lint": "oxlint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "validate:research:isolation": "node scripts/validate-research-isolation.mjs",
+    "validate:native": "node scripts/native-smoke.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"

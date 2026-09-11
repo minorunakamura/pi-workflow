@@ -40,8 +40,7 @@ describe("packed package contract", () => {
         "package/workflow-scripts/discovery.js",
         "package/workflow-scripts/research.js",
         "package/workflow-scripts/planning.js",
-        "package/src/core/planning/render-plan-runtime.js",
-        "package/src/runtime/plan-artifact.js",
+        "package/runtime/plan-artifact.mjs",
       ]),
     );
   });

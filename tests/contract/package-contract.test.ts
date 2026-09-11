@@ -70,13 +70,20 @@ describe("package contract", () => {
     expect(existsSync(`${repoRoot}/agents/researcher.md`)).toBe(true);
   });
 
-  it("does not expose migration milestone validator commands", () => {
-    expect(packageJson.scripts ?? {}).not.toHaveProperty(
-      "validate:unit5:isolated",
-    );
-    expect(packageJson.scripts ?? {}).not.toHaveProperty(
-      "validate:unit6:native",
-    );
+  it("does not retain migration milestone validators", () => {
+    expect(
+      Object.keys(packageJson.scripts ?? {}).filter((script) =>
+        /unit[56]|research:isolation/u.test(script),
+      ),
+    ).toEqual([]);
+
+    const scriptsRoot = `${repoRoot}/scripts`;
+    const scriptFiles = existsSync(scriptsRoot) ? readdirSync(scriptsRoot) : [];
+    expect(
+      scriptFiles.filter((file) =>
+        /validate-(?:unit[56].*|research-isolation)\.mjs/u.test(file),
+      ),
+    ).toEqual([]);
   });
 
   it("contains exactly the Planning MVP workflow resources", () => {

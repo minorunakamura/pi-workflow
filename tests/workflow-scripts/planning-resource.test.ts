@@ -14,7 +14,6 @@ import {
   validatePlanningDecision,
   type PlanningDecisionV1,
 } from "../../src/core/planning/planning-decision";
-import { renderPlan } from "../../src/core/planning/render-plan";
 import { PlanningDecisionSchema } from "../../src/core/planning/planning-decision-schema";
 import { WORKFLOW_RESOURCE_DEFINITIONS } from "../../src/runtime/workflow-resources";
 
@@ -59,7 +58,7 @@ type PlanningResourceDefinition = {
 };
 
 const planArtifactScript = fileURLToPath(
-  new URL("../../src/runtime/plan-artifact.js", import.meta.url),
+  new URL("../../runtime/plan-artifact.mjs", import.meta.url),
 );
 
 const validDecision: PlanningDecisionV1 = {
@@ -121,7 +120,7 @@ function missionState(
     requestType: "feature",
     request: "Use the Discovery and Research fixture facts.",
     phase: "research",
-    discoveryRef: "/tmp/pi-workflow-unit5/discovery.md",
+    discoveryRef: "/tmp/pi-workflow/discovery.md",
     discoveryMeta: {
       version: 1,
       status: "ready",
@@ -130,7 +129,7 @@ function missionState(
       uncertainties: [],
       researchQuestions: [],
     },
-    researchRef: "/tmp/pi-workflow-unit5/research.md",
+    researchRef: "/tmp/pi-workflow/research.md",
     researchMeta: {
       version: 1,
       status: "completed",
@@ -144,7 +143,7 @@ function planState(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return missionState({
-    planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+    planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
     planningDecision: validDecision,
     phase: "plan-review",
     ...overrides,
@@ -157,7 +156,7 @@ function hostResult(overrides: Partial<HostResult> = {}): HostResult {
     kind: "command",
     ok: true,
     state: "passed",
-    outputPath: "/tmp/pi-workflow-unit5/plan.md",
+    outputPath: "/tmp/pi-workflow/plan.md",
     stdout: "plan-artifact-written",
     ...overrides,
   };
@@ -326,8 +325,8 @@ describe("Planning named resource contract", () => {
       "DISCOVERY_PLAN_FACT",
     );
     expect(execution.stateValues).toMatchObject({
-      discoveryRef: "/tmp/pi-workflow-unit5/discovery.md",
-      researchRef: "/tmp/pi-workflow-unit5/research.md",
+      discoveryRef: "/tmp/pi-workflow/discovery.md",
+      researchRef: "/tmp/pi-workflow/research.md",
       planningDecision: validDecision,
       planRef: expect.stringMatching(/\/pi-workflow\/plan-[0-9a-f-]+\.md$/),
       phase: "plan-review",
@@ -379,7 +378,7 @@ describe("Plan Review control operations", () => {
     const execution = await executePlanning([], planState(), {
       operation: "prepare-review",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
     });
 
     expect(execution.runCalls).toHaveLength(0);
@@ -387,13 +386,13 @@ describe("Plan Review control operations", () => {
     expect(execution.result).toEqual({
       status: "ready",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
     });
     expect(execution.stateValues.planReview).toEqual({
       version: 1,
       status: "pending",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
     });
   });
 
@@ -403,31 +402,33 @@ describe("Plan Review control operations", () => {
         version: 1,
         status: "pending",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       },
     });
     const approved = await executePlanning([], prepared, {
       operation: "record-review",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       reviewId: "review-1",
       status: "approved",
     });
     expect(approved.runCalls).toHaveLength(0);
+    expect(approved.writes.map(({ key }) => key)).toEqual(["planReview"]);
     expect(approved.result).toMatchObject({ status: "approved" });
 
     const rejected = await executePlanning([], prepared, {
       operation: "record-review",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       reviewId: "review-1",
       status: "rejected",
-      feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md",
+      feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r1.md",
     });
     expect(rejected.runCalls).toHaveLength(0);
+    expect(rejected.writes.map(({ key }) => key)).toEqual(["planReview"]);
     expect(rejected.result).toMatchObject({
       status: "rejected",
-      feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md",
+      feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r1.md",
     });
   });
 
@@ -439,14 +440,14 @@ describe("Plan Review control operations", () => {
           version: 1,
           status: "pending",
           round: 1,
-          planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+          planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
           reviewId: "review-recovery",
         },
       }),
       {
         operation: "review-status",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       },
     );
 
@@ -454,7 +455,7 @@ describe("Plan Review control operations", () => {
     expect(execution.result).toEqual({
       status: "pending",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       reviewId: "review-recovery",
     });
     expect(JSON.stringify(execution.result)).not.toContain("requestSummary");
@@ -466,7 +467,7 @@ describe("Plan Review control operations", () => {
       {
         operation: "prepare-review",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/other.md",
+        planRef: "/tmp/pi-workflow/plan-review/other.md",
       },
     ],
     [
@@ -474,7 +475,7 @@ describe("Plan Review control operations", () => {
       {
         operation: "prepare-review",
         round: 2,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       },
     ],
     [
@@ -482,7 +483,7 @@ describe("Plan Review control operations", () => {
       {
         operation: "prepare-review",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       },
     ],
   ] as const)("fails closed for %s before a child", async (label, args) => {
@@ -502,7 +503,7 @@ describe("Plan Review control operations", () => {
                 version: 1,
                 status: "pending",
                 round: 1,
-                planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+                planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
                 reviewId: "review-current",
               },
             })
@@ -518,7 +519,7 @@ describe("Plan Review control operations", () => {
         version: 1,
         status: "pending",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
         reviewId: "review-current",
       },
     });
@@ -526,14 +527,14 @@ describe("Plan Review control operations", () => {
       {
         operation: "record-review",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
         reviewId: "review-old",
         status: "approved",
       },
       {
         operation: "record-review",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
         reviewId: "review-current",
         status: "rejected",
       },
@@ -545,19 +546,20 @@ describe("Plan Review control operations", () => {
     const terminal = await executePlanning([], state, {
       operation: "record-review",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       reviewId: "review-current",
       status: "approved",
     });
     const transition = await rejectedExecution([], terminal.stateValues, {
       operation: "record-review",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       reviewId: "review-current",
       status: "rejected",
-      feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md",
+      feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r1.md",
     });
     expect(transition.runCalls).toHaveLength(0);
+    expect(transition.writes).toHaveLength(0);
   });
 
   it("fails closed when control state persistence fails", async () => {
@@ -567,7 +569,7 @@ describe("Plan Review control operations", () => {
       {
         operation: "prepare-review",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       },
       hostResult(),
       "planReview",
@@ -583,13 +585,13 @@ describe("Plan Review control operations", () => {
           version: 1,
           status: "pending",
           round: 1,
-          planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+          planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
         },
       }),
       {
         operation: "review-status",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       },
     );
     expect(error.message).toContain("reviewId");
@@ -604,21 +606,21 @@ describe("Plan Review control operations", () => {
           version: 1,
           status: "pending",
           round: 1,
-          planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+          planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
           reviewId: "review-existing",
         },
       }),
       {
         operation: "prepare-review",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       },
     );
     expect(execution.runCalls).toHaveLength(0);
     expect(execution.result).toEqual({
       status: "pending",
       round: 1,
-      planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
       reviewId: "review-existing",
     });
   });
@@ -629,15 +631,15 @@ describe("Plan Review control operations", () => {
         version: 1,
         status: "rejected",
         round: 1,
-        planRef: "/tmp/pi-workflow-unit6/plan-r1.md",
+        planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
         reviewId: "review-1",
-        feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md",
+        feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r1.md",
       },
     });
     const round2 = await executePlanning(
       [childResult("planning-round-2")],
       rejectedRound1,
-      { round: 2, feedbackRef: "/tmp/pi-workflow-unit6/feedback-r1.md" },
+      { round: 2, feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r1.md" },
     );
     expect(round2.runCalls).toHaveLength(1);
 
@@ -656,19 +658,19 @@ describe("Plan Review control operations", () => {
         planRef: preparedRound2.stateValues.planRef,
         reviewId: "review-2",
         status: "rejected",
-        feedbackRef: "/tmp/pi-workflow-unit6/feedback-r2.md",
+        feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r2.md",
       },
     );
     const round3 = await executePlanning(
       [childResult("planning-round-3")],
       rejectedRound2.stateValues,
-      { round: 3, feedbackRef: "/tmp/pi-workflow-unit6/feedback-r2.md" },
+      { round: 3, feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r2.md" },
     );
     expect(round3.runCalls).toHaveLength(1);
     expect(
       validateResourceArgs("planning", {
         round: 4,
-        feedbackRef: "/tmp/pi-workflow-unit6/feedback-r3.md",
+        feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r3.md",
       }).ok,
     ).toBe(false);
   });
@@ -932,8 +934,8 @@ describe("Plan Artifact and Mission state failure semantics", () => {
   it("keeps Plan prose out of state and workflow.value while preserving upstream state", async () => {
     const execution = await executePlanning([childResult("planning-run")]);
     const state = execution.stateValues as MissionStateV1;
-    expect(state.discoveryRef).toBe("/tmp/pi-workflow-unit5/discovery.md");
-    expect(state.researchRef).toBe("/tmp/pi-workflow-unit5/research.md");
+    expect(state.discoveryRef).toBe("/tmp/pi-workflow/discovery.md");
+    expect(state.researchRef).toBe("/tmp/pi-workflow/research.md");
     expect(state).not.toHaveProperty("planBody");
     expect(state).not.toHaveProperty("report");
     expect(JSON.stringify(execution.result)).not.toContain("# Plan");
@@ -959,7 +961,11 @@ describe("Plan Artifact and Mission state failure semantics", () => {
       );
 
       expect(marker).toBe("plan-artifact-written");
-      expect(readFileSync(outputPath, "utf8")).toBe(renderPlan(second));
+      expect(readFileSync(outputPath, "utf8")).toBe(
+        execFileSync(process.execPath, [planArtifactScript, secondPath], {
+          encoding: "utf8",
+        }),
+      );
       expect(readFileSync(outputPath, "utf8")).not.toBe(JSON.stringify(second));
     } finally {
       rmSync(directory, { recursive: true, force: true });

@@ -16,7 +16,22 @@ function sourceFiles(root: string): string[] {
   });
 }
 
+function sourceJavaScriptFiles(root: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${root}/${entry.name}`;
+    return entry.isDirectory()
+      ? sourceJavaScriptFiles(path)
+      : path.endsWith(".js") || path.endsWith(".mjs")
+        ? [path]
+        : [];
+  });
+}
+
 describe("architecture contract", () => {
+  it("keeps plain Node runtime assets outside src", () => {
+    expect(sourceJavaScriptFiles(`${repoRoot}/src`)).toEqual([]);
+  });
+
   it("keeps core independent from Pi and adapter layers", () => {
     const forbiddenImports = [
       "@earendil-works/pi-coding-agent",

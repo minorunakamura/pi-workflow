@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { RESEARCH_SEARCH_BACKENDS } from "../../src/researcher-tools";
+import { RESEARCH_SEARCH_BACKENDS } from "../../src/research/researcher-extension";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const agent = readFileSync(`${repoRoot}/agents/researcher.md`, "utf8");
@@ -10,7 +10,7 @@ const research = readFileSync(
   "utf8",
 );
 const restrictedSearch = readFileSync(
-  `${repoRoot}/src/researcher-tools.ts`,
+  `${repoRoot}/src/research/researcher-extension.ts`,
   "utf8",
 );
 
@@ -32,7 +32,7 @@ describe("package-owned Research Agent contract", () => {
       "extensions: ../node_modules/pi-ketch, ../../pi-ketch",
     );
     expect(agent).toContain(
-      "subagentOnlyExtensions: ../src/researcher-tools.ts",
+      "subagentOnlyExtensions: ../src/research/researcher-extension.ts",
     );
     expect(agent).toContain(`tools: ${tools.join(", ")}`);
     expect(agent).not.toContain("tools: ketch_search");

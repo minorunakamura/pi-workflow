@@ -77,7 +77,7 @@ const PLANNING_DECISION_INPUT_DIR = join(realpathSync(tmpdir()), "pi-workflow");
 const PLANNING_DECISION_INPUT_BASENAME = "planning-decision.json";
 const PLAN_ARTIFACT_HOST_KEY = "plan-artifact";
 const PLAN_RENDERER_PATH = fileURLToPath(
-  new URL("./plan-artifact.js", import.meta.url),
+  new URL("../../runtime/plan-artifact.mjs", import.meta.url),
 );
 
 function shellQuote(value: string): string {

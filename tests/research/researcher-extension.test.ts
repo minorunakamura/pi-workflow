@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import researcherTools, {
   createResearchSearchTool,
-} from "../../src/researcher-tools";
+} from "../../src/research/researcher-extension";
 
 function createExecution() {
   const exec = vi.fn().mockResolvedValue({
