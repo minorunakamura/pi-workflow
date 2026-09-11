@@ -206,6 +206,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      pi-ketch:
+        specifier: git+https://github.com/minorunakamura/pi-ketch.git#e49fd9ea48b675eef2ede729c9f13f7e12d44c20
+        version: https://codeload.github.com/minorunakamura/pi-ketch/tar.gz/e49fd9ea48b675eef2ede729c9f13f7e12d44c20(@earendil-works/pi-coding-agent@0.85.1(ws@8.21.3))(typebox@1.3.7)
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.5.12
@@ -1487,6 +1491,13 @@ packages:
   path-key@3.1.1:
     resolution: {integrity: sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q==}
     engines: {node: '>=8'}
+
+  pi-ketch@https://codeload.github.com/minorunakamura/pi-ketch/tar.gz/e49fd9ea48b675eef2ede729c9f13f7e12d44c20:
+    resolution: {gitHosted: true, integrity: sha512-yEf9R78gU6Z7duRxKD30oAfAQP6VKSbKfQGGN8Xj/9bqUBAS1f0nVwwMQbYxDQtvSbg8lL9Y+fmi/ORzaMOLFg==, tarball: https://codeload.github.com/minorunakamura/pi-ketch/tar.gz/e49fd9ea48b675eef2ede729c9f13f7e12d44c20}
+    version: 1.0.0
+    peerDependencies:
+      '@earendil-works/pi-coding-agent': '*'
+      typebox: '*'
 
   pi-subagents@0.67.0:
     resolution: {integrity: sha512-43FGBi82sbxEGhEfsaj0P7I/rRJfsw1UPuFSVSkjZw0Fy92lrBIB9d3gDTpwmK5hLj3ZzZUnvtlqiKQatySCTw==}
@@ -2819,6 +2830,11 @@ snapshots:
   partial-json@0.1.7: {}
 
   path-key@3.1.1: {}
+
+  pi-ketch@https://codeload.github.com/minorunakamura/pi-ketch/tar.gz/e49fd9ea48b675eef2ede729c9f13f7e12d44c20(@earendil-works/pi-coding-agent@0.85.1(ws@8.21.3))(typebox@1.3.7):
+    dependencies:
+      '@earendil-works/pi-coding-agent': 0.85.1(ws@8.21.3)
+      typebox: 1.3.7
 
   pi-subagents@0.67.0(@earendil-works/pi-agent-core@0.85.1(ws@8.21.3))(@earendil-works/pi-ai@0.85.1(ws@8.21.3))(@earendil-works/pi-coding-agent@0.85.1(ws@8.21.3))(@earendil-works/pi-tui@0.85.1)(ws@8.21.3):
     dependencies:

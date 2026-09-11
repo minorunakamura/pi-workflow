@@ -6,6 +6,7 @@
     "src",
     "workflow-scripts",
     "skills",
+    "agents",
     "README.md"
   ],
   "scripts": {
@@ -29,7 +30,12 @@
     ],
     "skills": [
       "./skills"
-    ]
+    ],
+    "subagents": {
+      "agents": [
+        "./agents"
+      ]
+    }
   },
   "devEngines": {
     "packageManager": {
@@ -39,6 +45,9 @@
     }
   },
   "type": "module",
+  "dependencies": {
+    "pi-ketch": "git+https://github.com/minorunakamura/pi-ketch.git#e49fd9ea48b675eef2ede729c9f13f7e12d44c20"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
     "@earendil-works/pi-coding-agent": "^0.85.1",

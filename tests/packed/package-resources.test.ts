@@ -37,6 +37,7 @@ describe("packed package contract", () => {
         "package/skills/pi-workflow/SKILL.md",
         "package/skills/pi-planning/SKILL.md",
         "package/skills/pi-verification/SKILL.md",
+        "package/agents/researcher.md",
         "package/workflow-scripts/discovery.js",
         "package/workflow-scripts/research.js",
         "package/workflow-scripts/planning.js",

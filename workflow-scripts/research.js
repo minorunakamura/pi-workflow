@@ -292,7 +292,7 @@ if (input.resource === "pi-workflow.research") {
     ? "Research questions:\n" + discoveryMeta.researchQuestions.map((question) => "- " + question).join("\n")
     : "Research questions: none supplied.";
   const result = await runs.run("research", {
-    agent: "pi-ketch.researcher",
+    agent: "pi-workflow.researcher",
     context: "fresh",
     async: false,
     task: [
@@ -369,8 +369,9 @@ const task = [
 ].join("\n");
 
 const result = await runs.run("research", {
-  agent: "pi-ketch.researcher",
+  agent: "pi-workflow.researcher",
   context: "fresh",
+  async: false,
   task,
   ...(input.outputPath === undefined
     ? {}

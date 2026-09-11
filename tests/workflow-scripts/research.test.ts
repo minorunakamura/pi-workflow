@@ -136,7 +136,7 @@ describe("Research resource args and ownership", () => {
 
     expect(execution.calls.map(({ key }) => key)).toEqual(["research"]);
     expect(params).toMatchObject({
-      agent: "pi-ketch.researcher",
+      agent: "pi-workflow.researcher",
       context: "fresh",
       async: false,
       output: "research.md",

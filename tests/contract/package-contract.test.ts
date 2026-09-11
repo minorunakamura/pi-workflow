@@ -10,7 +10,11 @@ const lockfile = readFileSync(`${repoRoot}/pnpm-lock.yaml`, "utf8");
 const piSubagentsPackage = JSON.parse(
   readFileSync(`${repoRoot}/node_modules/pi-subagents/package.json`, "utf8"),
 ) as { name: string; version: string; bin?: Record<string, string> };
-const piManifest = packageJson.pi as { extensions: string[]; skills: string[] };
+const piManifest = packageJson.pi as {
+  extensions: string[];
+  skills: string[];
+  subagents: { agents: string[] };
+};
 
 const workflowScripts = [
   "discovery.js",
@@ -55,6 +59,7 @@ describe("package contract", () => {
     expect(piManifest).toEqual({
       extensions: ["./src/index.ts"],
       skills: ["./skills"],
+      subagents: { agents: ["./agents"] },
     });
   });
 
@@ -63,11 +68,14 @@ describe("package contract", () => {
     expect(packageJson.bundledDependencies ?? []).not.toContain("pi-subagents");
     expect(packageJson.dependencies ?? {}).not.toHaveProperty("plannotator");
     expect(packageJson.dependencies ?? {}).not.toHaveProperty("ponytail");
-    expect(packageJson.dependencies ?? {}).not.toHaveProperty("pi-ketch");
+    expect(packageJson.dependencies).toMatchObject({
+      "pi-ketch": expect.stringContaining("github.com/minorunakamura/pi-ketch"),
+    });
+    expect(packageJson.bundledDependencies ?? []).not.toContain("pi-ketch");
     expect(packageJson.dependencies ?? {}).not.toHaveProperty(
       "pi-ask-user-question",
     );
-    expect(existsSync(`${repoRoot}/agents`)).toBe(false);
+    expect(existsSync(`${repoRoot}/agents/researcher.md`)).toBe(true);
   });
 
   it("contains exactly the Step 1 workflow resources", () => {

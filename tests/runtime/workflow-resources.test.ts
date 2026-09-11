@@ -129,7 +129,7 @@ describe("named workflow resource contract", () => {
         if (definition.name === "pi-workflow.discovery") {
           expect(result.script).toContain('agent: "scout"');
         } else if (definition.name === "pi-workflow.research") {
-          expect(result.script).toContain('agent: "pi-ketch.researcher"');
+          expect(result.script).toContain('agent: "pi-workflow.researcher"');
           expect(result.script).toContain('output: "research.md"');
           expect(result.script).toContain("researchMeta");
         } else {

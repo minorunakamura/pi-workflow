@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -58,7 +58,9 @@ describe("architecture contract", () => {
     expect(runtime).not.toContain("globalThis");
   });
 
-  it("does not declare custom Agents", () => {
-    expect(existsSync(`${repoRoot}/agents`)).toBe(false);
+  it("declares only the package-owned Research Agent", () => {
+    expect(readdirSync(`${repoRoot}/agents`).toSorted()).toEqual([
+      "researcher.md",
+    ]);
   });
 });

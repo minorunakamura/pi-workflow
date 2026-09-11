@@ -65,7 +65,7 @@ describe("Planning Flow contract", () => {
     expect(research).toContain(
       'if (input.resource === "pi-workflow.research")',
     );
-    expect(research).toContain('agent: "pi-ketch.researcher"');
+    expect(research).toContain('agent: "pi-workflow.researcher"');
     expect(research).toContain("async: false");
   });
 
@@ -114,7 +114,7 @@ describe("Planning Flow contract", () => {
     const planning = read("workflow-scripts/planning.js");
     expect(read("workflow-scripts/discovery.js")).toContain('agent: "scout"');
     expect(read("workflow-scripts/research.js")).toContain(
-      'agent: "pi-ketch.researcher"',
+      'agent: "pi-workflow.researcher"',
     );
     expect(planning).toContain('agent: "reviewer"');
     expect(planning).toContain('skill: "pi-planning"');
@@ -156,7 +156,8 @@ describe("Planning Flow contract", () => {
     expect(skill).toContain("Every ID-reference field may contain only an ID");
   });
 
-  it("does not add custom Agents", () => {
-    expect(existsSync(`${repoRoot}/agents`)).toBe(false);
+  it("declares only the package-owned Research Agent", () => {
+    expect(existsSync(`${repoRoot}/agents/researcher.md`)).toBe(true);
+    expect(existsSync(`${repoRoot}/agents/planner.md`)).toBe(false);
   });
 });

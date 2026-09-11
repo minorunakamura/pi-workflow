@@ -164,8 +164,11 @@ when needed; otherwise use bounded `read`/`grep`/`find`/`ls`. Never run
 
 Read only the compact `discoveryMeta` result from the Discovery resource. If and
 only if `discoveryMeta.externalResearchRequired === true`, first confirm that
-the exact `pi-ketch.researcher` capability is present and executable. Then
-invoke the active named resource:
+the package-owned `pi-workflow.researcher` and its required Ketch capabilities
+are present and executable. Its strict allowlist is the restricted
+`pi_workflow_ketch_search`, `ketch_code`, `ketch_docs`, and `ketch_scrape`; the
+generic `ketch_search` is not a Research capability. Then invoke the active
+named resource:
 
 ```js
 subagent({
@@ -180,10 +183,10 @@ subagent({
 The Research resource resolves `discoveryRef`, `discoveryMeta`, and bounded
 `researchQuestions` from the same Mission state. Main never reads, copies, or
 relays the Discovery Artifact body, path, or report into the invocation. The
-resource launches one fresh `pi-ketch.researcher` with explicit `async: false`,
-read-only policy, and a fixed `file-only` Artifact output. Its result is only a
-bounded `researchRef` and `researchMeta`; the full report is not returned to
-Main or stored in Mission state.
+resource launches one fresh `pi-workflow.researcher` with explicit
+`context: "fresh"`, `async: false`, read-only policy, and a fixed `file-only`
+Artifact output. Its result is only a bounded `researchRef` and `researchMeta`;
+the full report is not returned to Main or stored in Mission state.
 
 When `externalResearchRequired === false`, invoke the same named resource only
 as its control-only skip path. It must launch zero children, create no

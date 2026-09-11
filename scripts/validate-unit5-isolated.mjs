@@ -999,8 +999,11 @@ function collectEvidence({
   if (agents.filter((agent) => agent === "scout").length < 2)
     fail("Discovery did not run two fresh scout children.");
   if (!agents.includes("reviewer")) fail("Planning did not run reviewer.");
-  if (researchMode === "completed" && !agents.includes("pi-ketch.researcher"))
-    fail("Research did not run pi-ketch.researcher.");
+  if (
+    researchMode === "completed" &&
+    !agents.includes("pi-workflow.researcher")
+  )
+    fail("Research did not run pi-workflow.researcher.");
   const allRuntimePaths = [
     missionPath,
     statePath,
