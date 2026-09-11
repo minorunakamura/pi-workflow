@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,7 +77,7 @@ const RESEARCH_RESOURCE_START = "/* pi-workflow: research-resource:start */";
 const RESEARCH_RESOURCE_END = "/* pi-workflow: research-resource:end */";
 const PLANNING_RESOURCE_START = "/* pi-workflow: planning-resource:start */";
 const PLANNING_RESOURCE_END = "/* pi-workflow: planning-resource:end */";
-const PLANNING_DECISION_INPUT_DIR = join(tmpdir(), "pi-workflow");
+const PLANNING_DECISION_INPUT_DIR = join(realpathSync(tmpdir()), "pi-workflow");
 const PLANNING_DECISION_INPUT_BASENAME = "planning-decision.json";
 const PLAN_ARTIFACT_HOST_KEY = "plan-artifact";
 const PLAN_RENDERER_PATH = fileURLToPath(
