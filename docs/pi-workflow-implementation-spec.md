@@ -234,11 +234,26 @@ written.
 For a `plan` operation, the resolver creates resource-owned temporary paths for
 the decision input, optional correction input, and Plan Artifact. It registers a
 host command for `runtime/plan-artifact.mjs`, then the resource persists
-`planningDecision`, `planRef`, and the appropriate `planReview`/`phase` fields.
+`planningDecision` and `planRef`. It returns the existing compact fields plus
+this bounded review-readiness handoff:
 
-Round 1 enters `plan-review`. Rounds 2 and 3 require the previous rejected
-`feedbackRef` and create a new pending Plan Review binding. Control operations
-validate current `planRef`, round, phase, and binding before changing state.
+```json
+{
+  "reviewReady": true,
+  "unresolvedDecisions": []
+}
+```
+
+`reviewReady` is `true` exactly when the validated decision has no unresolved
+Human decision. Technical uncertainty resolvable by repository inspection,
+build, test, packaging, or verification is represented in risks, verification,
+or WorkUnit objectives, not in `unresolvedDecisions`.
+
+When ready, round 1 enters `plan-review`; rounds 2 and 3 require the previous
+rejected `feedbackRef` and create a new pending Plan Review binding. When not
+ready, all Planning rounds keep phase `planning` and do not create a pending
+binding for the current round. Control operations validate current `planRef`,
+round, phase, and binding before changing state.
 
 ## 11. Plan Artifact renderer
 
@@ -268,7 +283,7 @@ Plannotator is an external capability; it is not a package dependency.
 | --- | --- | --- |
 | Discovery resource | Discovery report and metadata | `discoveryRef`, `discoveryMeta` |
 | Research resource | Research report and metadata | `researchRef`, `researchMeta` |
-| Planning resource | Planning decision and Plan | `planningDecision`, `planRef` |
+| Planning resource | Planning decision and Plan | `planRef`, bounded readiness handoff |
 | Plan Review bridge | rejection feedback | `feedbackRef` |
 | Main Session | Human decisions and native status calls | bounded decisions/status |
 

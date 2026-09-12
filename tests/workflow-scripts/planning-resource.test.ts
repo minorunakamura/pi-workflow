@@ -11,6 +11,7 @@ import {
 } from "../../src/core/state/contracts";
 import { validateResourceArgs } from "../../src/core/phases/args";
 import {
+  MAX_UNRESOLVED_DECISIONS,
   validatePlanningDecision,
   type PlanningDecisionV1,
 } from "../../src/core/planning/planning-decision";
@@ -318,6 +319,8 @@ describe("Planning named resource contract", () => {
       runId: "planning-run-1",
       planRef: expect.stringMatching(/\/pi-workflow\/plan-[0-9a-f-]+\.md$/),
       planningCorrectionCount: 0,
+      reviewReady: true,
+      unresolvedDecisions: [],
     });
     expect(execution.result).not.toHaveProperty("planningDecision");
     expect(execution.result).not.toHaveProperty("output");
@@ -337,6 +340,105 @@ describe("Planning named resource contract", () => {
       validateMissionState(execution.stateValues as MissionStateV1),
     ).toMatchObject({
       ok: true,
+    });
+  });
+
+  it("returns a bounded readiness handoff and keeps unresolved Planning in planning", async () => {
+    const decision = structuredClone(validDecision);
+    decision.unresolvedDecisions = [
+      {
+        id: "decision-packaging",
+        question: "Which packaging path should the owner approve?",
+        reason: "The choice changes the supported release policy.",
+      },
+    ];
+    const execution = await executePlanning([
+      childResult("planning-needs-decision", decision),
+    ]);
+
+    expect(execution.result).toEqual({
+      status: "completed",
+      runId: "planning-needs-decision",
+      planRef: expect.stringMatching(/\/pi-workflow\/plan-[0-9a-f-]+\.md$/),
+      planningCorrectionCount: 0,
+      reviewReady: false,
+      unresolvedDecisions: decision.unresolvedDecisions,
+    });
+    expect(execution.stateValues).toMatchObject({
+      planningDecision: decision,
+      planRef: expect.stringMatching(/\/pi-workflow\/plan-[0-9a-f-]+\.md$/),
+      phase: "planning",
+    });
+    expect(execution.stateValues).not.toHaveProperty("planReview");
+    expect(execution.writes.map(({ key }) => key)).toEqual([
+      "planningDecision",
+      "planRef",
+      "phase",
+    ]);
+    expect(
+      validateMissionState(execution.stateValues as MissionStateV1),
+    ).toMatchObject({
+      ok: true,
+    });
+  });
+
+  it("keeps the maximum bounded unresolved handoff within its result bound", async () => {
+    const decision = structuredClone(validDecision);
+    decision.unresolvedDecisions = Array.from(
+      { length: MAX_UNRESOLVED_DECISIONS },
+      (_, index) => ({
+        id: `decision-${index}`,
+        question: "q".repeat(1_024),
+        reason: "r".repeat(1_024),
+      }),
+    );
+    const execution = await executePlanning([
+      childResult("planning-max-needs-decision", decision),
+    ]);
+
+    expect(execution.result).toMatchObject({
+      status: "completed",
+      reviewReady: false,
+      unresolvedDecisions: decision.unresolvedDecisions,
+    });
+  });
+
+  it("does not create a current-round pending binding for an unresolved replan", async () => {
+    const previousPlanReview = {
+      version: 1,
+      status: "rejected" as const,
+      round: 1,
+      planRef: "/tmp/pi-workflow/plan-review/plan-r1.md",
+      reviewId: "review-r1",
+      feedbackRef: "/tmp/pi-workflow/plan-review/feedback-r1.md",
+    };
+    const decision = structuredClone(validDecision);
+    decision.unresolvedDecisions = [
+      {
+        id: "decision-policy",
+        question: "Which policy should the owner choose?",
+        reason: "The repository cannot determine the risk acceptance.",
+      },
+    ];
+    const execution = await executePlanning(
+      [childResult("planning-round-2-needs-decision", decision)],
+      planState({ planReview: previousPlanReview }),
+      {
+        round: 2,
+        feedbackRef: previousPlanReview.feedbackRef,
+      },
+    );
+
+    expect(execution.result).toMatchObject({
+      status: "completed",
+      reviewReady: false,
+      unresolvedDecisions: decision.unresolvedDecisions,
+    });
+    expect(execution.stateValues.phase).toBe("planning");
+    expect(execution.stateValues.planReview).toEqual(previousPlanReview);
+    expect(execution.stateValues.planReview).not.toMatchObject({
+      status: "pending",
+      round: 2,
     });
   });
 
@@ -367,6 +469,8 @@ describe("Planning named resource contract", () => {
     expect(execution.result).toMatchObject({
       status: "completed",
       planRef: expect.any(String),
+      reviewReady: true,
+      unresolvedDecisions: [],
     });
     expect(execution.stateValues).not.toHaveProperty("researchRef");
     expect(execution.stateValues).not.toHaveProperty("researchMeta");
@@ -511,6 +615,11 @@ describe("Plan Review control operations", () => {
     const error = await rejectedExecution([], state, args);
     expect(error.runCalls).toHaveLength(0);
     expect(error.hostCalls).toHaveLength(0);
+    if (label === "unresolved decisions") {
+      expect(error.message).toContain(
+        "Plan Review requires all unresolved decisions to be resolved.",
+      );
+    }
   });
 
   it("rejects stale review IDs, invalid transitions, and missing rejection feedback", async () => {
@@ -836,6 +945,8 @@ describe("Planning decision validation and correction", () => {
     expect(execution.result).toMatchObject({
       status: "completed",
       planningCorrectionCount: 1,
+      reviewReady: true,
+      unresolvedDecisions: [],
     });
     expect(execution.hostCalls).toHaveLength(1);
   });

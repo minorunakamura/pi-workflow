@@ -63,6 +63,32 @@ describe("Planning MVP contract", () => {
     expect(planning).toContain("placeholders");
   });
 
+  it("classifies technical uncertainty separately from Human decisions and gates Plan Review", () => {
+    const mainSkill = read("skills/pi-workflow/SKILL.md");
+    const planningSkill = read("skills/pi-planning/SKILL.md");
+    const planning = read("workflow-scripts/planning.js");
+
+    expect(planningSkill).toContain(
+      "Only unresolved Human product / architecture / policy / risk-acceptance decisions",
+    );
+    expect(planningSkill).toContain("repository inspection");
+    expect(planningSkill).toContain("build, test, packaging, and verification");
+    expect(planningSkill).toContain("`risks`, `verification`");
+    expect(planning).toContain(
+      "Do not classify machine-verifiable technical uncertainty as an unresolved decision",
+    );
+    expect(mainSkill).toContain("`reviewReady === false`");
+    expect(mainSkill).toContain("unresolved Human decisions remain");
+    expect(mainSkill).toContain("do not call `prepare-review`");
+    expect(mainSkill).toContain("native Mission status to");
+    expect(mainSkill).toContain("`needs_decision`");
+    expect(mainSkill).toContain("phase remains `planning`");
+    expect(mainSkill).toContain(
+      "do not create a current-round pending Plan Review binding",
+    );
+    expect(mainSkill).toContain("do not call Plannotator");
+  });
+
   it("makes Research skip explicit through absence of Research state", () => {
     const skill = read("skills/pi-workflow/SKILL.md");
     const research = read("workflow-scripts/research.js");

@@ -106,8 +106,9 @@ For each command, Main:
 2. checks core `scout`/`reviewer` and Skill capabilities;
 3. creates exactly one native Mission with status `active`;
 4. invokes Discovery, then the conditional Research and clarification branches;
-5. invokes Planning and the Main-only Plan Review loop;
-6. closes the Mission as `completed` only after approval.
+5. invokes Planning and inspects its bounded review-readiness handoff;
+6. enters the Main-only Plan Review loop only when the handoff is ready;
+7. closes the Mission as `completed` only after approval.
 
 Main may set native status to `waiting` while asking a Human and to
 `needs_decision` when owner intervention is required. It does not copy native
@@ -181,21 +182,45 @@ package-owned `PlanningDecisionV1` schema.
 
 The decision contains request summary, scope, acceptance criteria, constraints,
 risks, verification commands, implementation mode, ordered WorkUnits and their
-write scopes, final verification references, and unresolved decisions. The
-resource validates schema, byte bounds, IDs, and cross-references. One automatic
-correction is allowed for a schema-valid but semantically or byte-invalid result;
-a second failure stops the flow.
+write scopes, final verification references, and unresolved decisions. Only
+Human product, architecture, policy, or risk-acceptance decisions belong in
+`unresolvedDecisions`; repository inspection, build, test, packaging, and
+verification can resolve technical uncertainty mechanically, which belongs in
+risks, verification, or WorkUnit objectives instead. The resource validates
+schema, byte bounds, IDs, and cross-references. One automatic correction is
+allowed for a schema-valid but semantically or byte-invalid result; a second
+failure stops the flow.
 
 The resource renders a canonical file-backed Plan from the validated decision,
-persists `planningDecision` and `planRef`, and marks the appropriate phase.
-Unresolved decisions prevent Plan Review.
+persists `planningDecision` and `planRef`, and returns this bounded compact
+handoff without transporting either Artifact body or the full decision:
+
+```json
+{
+  "status": "completed",
+  "runId": "...",
+  "planRef": "...",
+  "planningCorrectionCount": 0,
+  "reviewReady": true,
+  "unresolvedDecisions": []
+}
+```
+
+When `reviewReady` is `false`, the resource keeps the package phase as
+`planning` and does not create a pending binding for the current round. Main
+reports the bounded decisions, sets native Mission status to `needs_decision`,
+and stops without `prepare-review` or Plannotator. This is a normal owner-
+decision boundary, not a Mission failure. The behavior applies to round 1 and
+replan rounds. Only `reviewReady: true` enters Plan Review.
 
 ## 11. Plan Review
 
-Before each Human review, Main calls the zero-child `prepare-review` operation
-with the current `planRef` and round. A successful preparation binds the Plan in
-Mission state. Main then sets native status to `waiting` and calls
-`pi_workflow_plan_review` with exactly `missionId`, `round`, and `planRef`.
+After the Planning readiness gate permits review, Main calls the zero-child
+`prepare-review` operation with the current `planRef` and round. A successful
+preparation binds the Plan in Mission state. Main then sets native status to
+`waiting` and calls `pi_workflow_plan_review` with exactly `missionId`, `round`,
+and `planRef`. Main never calls this operation or Plannotator while unresolved
+Human decisions remain.
 
 The bridge reads the canonical Plan file and sends it to the external Plannotator
 integration. It returns a terminal approval or rejection. Main records that

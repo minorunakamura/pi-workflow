@@ -47,6 +47,16 @@ The decision must make all of these explicit:
 - final verification references
 - unresolved Human decisions
 
+## unresolvedDecisions classification
+
+Only unresolved Human product / architecture / policy / risk-acceptance decisions
+belong in `unresolvedDecisions`. Do not put matters that repository inspection,
+build, test, packaging, and verification can mechanically resolve there. This
+includes build/package wiring, path/resource inclusion, pack/native artifact
+reflection, test-verifiable behavior, and implementation/configuration details.
+Represent those technical checks in `risks`, `verification`, or the relevant
+WorkUnit `objective` and `focusedVerificationIds` instead.
+
 Preserve WorkUnit array order. Choose `lanes` only for genuinely independent
 WorkUnits; parallel WorkUnits must not depend on one another. Do not infer a
 new integration order from a dependency graph. Do not guess material product,
