@@ -621,6 +621,9 @@ if (input.resource === "pi-workflow.planning") {
     "Choose lanes only when WorkUnits are independent; otherwise choose single mode.",
     "Do not guess material product, architecture, policy, or risk decisions.",
     "Do not edit repository files.",
+    "pi-subagents 0.67.0 structured_output contract: call the final structured_output tool with exactly { \"value\": <PlanningDecisionV1> }, where value is the complete substantive decision.",
+    "Do not pass PlanningDecisionV1 fields directly at the structured_output tool root or wrap individual fields.",
+    "If structured_output returns a tool-call validation error, fix only the value envelope and preserve the substantive planning content; never replace it with placeholders such as \"x\", \"todo\", or \"dummy\" merely to satisfy the schema.",
     "Return only a PlanningDecisionV1 object matching the supplied outputSchema.",
   ].filter((line) => line !== "").join("\n\n");
 
