@@ -253,7 +253,7 @@ export function buildPlanningWorkflowScript(
       metadataBytes: MAX_DISCOVERY_METADATA_BYTES,
       metadataItems: MAX_DISCOVERY_METADATA_ITEMS,
       jsonDepth: MAX_JSON_DEPTH,
-      resultBytes: MAX_RESOURCE_ARGS_BYTES,
+      resultBytes: MAX_PLANNING_DECISION_BYTES,
     },
   };
   return `const input = ${JSON.stringify(input)};\n${planningWorkflowTemplate()}`;

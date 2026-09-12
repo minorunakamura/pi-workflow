@@ -144,6 +144,35 @@ feedback from the same Mission. It writes a bounded `PlanningDecisionV1` and a
 canonical file-backed `planRef`; the resource may make one automatic correction
 for a machine-invalid result, then fails closed.
 
+A successful Planning resource run returns only this bounded compact handoff in
+addition to its existing fields; Main must not transport the full
+`PlanningDecision` or Plan Artifact body:
+
+```json
+{
+  "status": "completed",
+  "runId": "...",
+  "planRef": "...",
+  "planningCorrectionCount": 0,
+  "reviewReady": true,
+  "unresolvedDecisions": []
+}
+```
+
+`reviewReady` is derived from the persisted PlanningDecision, and the list is
+bounded. Main uses this handoff rather than re-parsing Mission state.
+
+Before any Plan Review dispatch, apply this owner-decision boundary. When
+`reviewReady === false`, unresolved Human decisions remain. Planning was still a
+normal completion: do not call `prepare-review`, do not call Plannotator,
+do not create a current-round pending Plan Review binding, report the bounded
+`unresolvedDecisions` to the Human, set native Mission status to
+`needs_decision`, and stop. The package phase remains `planning`; do not fail or
+close the Mission. This rule applies to round 1 and every replan round.
+
+Only when `reviewReady === true` and `unresolvedDecisions` is empty may Main
+enter the existing Plan Review sequence.
+
 ## Human Plan Review
 
 The review sequence is:

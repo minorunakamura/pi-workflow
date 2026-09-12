@@ -619,6 +619,9 @@ if (input.resource === "pi-workflow.planning") {
     "Define explicit scope, non-goals, acceptance criteria, risks, verification commands, WorkUnits, write scopes, and integration order.",
     "Preserve WorkUnit order exactly as the decision contract requires.",
     "Choose lanes only when WorkUnits are independent; otherwise choose single mode.",
+    "Only unresolved Human product / architecture / policy / risk-acceptance decisions belong in unresolvedDecisions.",
+    "Do not classify machine-verifiable technical uncertainty as an unresolved decision; repository inspection, build, test, packaging, and verification can resolve it.",
+    "This includes build/package wiring, path/resource inclusion, pack/native artifact reflection, test-verifiable behavior, and implementation/configuration details; put those checks in risks, verification, or WorkUnit objective/focusedVerificationIds instead.",
     "Do not guess material product, architecture, policy, or risk decisions.",
     "Do not edit repository files.",
     "pi-subagents 0.67.0 structured_output contract: call the final structured_output tool with exactly { \"value\": <PlanningDecisionV1> }, where value is the complete substantive decision.",
@@ -692,8 +695,9 @@ if (input.resource === "pi-workflow.planning") {
     throw new Error("Plan Artifact generation produced an empty Artifact.");
   }
 
+  const reviewReady = planningDecision.unresolvedDecisions.length === 0;
   const nextPlanReview =
-    input.round > 1
+    reviewReady && input.round > 1
       ? {
           version: 1,
           status: "pending",
@@ -708,7 +712,7 @@ if (input.resource === "pi-workflow.planning") {
     planningDecision,
     planRef: input.planArtifactPath,
     ...(nextPlanReview === undefined ? {} : { planReview: nextPlanReview }),
-    phase: input.round > 1 ? "planning" : "plan-review",
+    phase: reviewReady ? (input.round > 1 ? "planning" : "plan-review") : "planning",
   };
   assertMissionState(nextState, true);
 
@@ -721,6 +725,10 @@ if (input.resource === "pi-workflow.planning") {
     runId: result.runId,
     planRef: input.planArtifactPath,
     planningCorrectionCount: correctionCount,
+    reviewReady,
+    unresolvedDecisions: planningDecision.unresolvedDecisions.map(
+      ({ id, question, reason }) => ({ id, question, reason }),
+    ),
   };
   assertJson(compactResult, "Planning result", input.planningBounds.resultBytes);
   return compactResult;
