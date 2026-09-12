@@ -16,6 +16,23 @@ When `outputSchema` is provided, do not finish with prose. Always use the
 runtime `structured_output` tool to return the final schema-valid result; the
 structured result is authoritative even if the preceding reasoning is prose.
 
+## structured_output envelope
+
+In `pi-subagents` 0.67.0, the `structured_output` tool expects the supplied
+schema inside a required `value` envelope. The final tool call must use exactly
+this shape:
+
+```json
+{ "value": <PlanningDecisionV1> }
+```
+
+`<PlanningDecisionV1>` is the complete substantive decision. Do not pass its
+fields directly at the `structured_output` tool root or wrap its fields
+individually. If the tool call returns a validation error, fix only the
+`value` envelope and preserve the substantive planning content. Never replace
+that content with schema-only placeholders such as `"x"`, `"todo"`, or
+`"dummy"`.
+
 The decision must make all of these explicit:
 
 - request summary

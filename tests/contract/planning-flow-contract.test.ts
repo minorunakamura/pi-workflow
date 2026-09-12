@@ -43,6 +43,26 @@ describe("Planning MVP contract", () => {
     expect(skill).not.toMatch(/Unit [56]/u);
   });
 
+  it("documents the structured_output envelope without weakening plan content", () => {
+    const skill = read("skills/pi-planning/SKILL.md");
+    const planning = read("workflow-scripts/planning.js");
+
+    expect(skill).toContain('{ "value": <PlanningDecisionV1> }');
+    expect(skill).toContain("fix only the");
+    expect(skill).toContain("preserve the substantive planning content");
+    expect(skill).toContain('"x"');
+    expect(skill).toContain('"todo"');
+    expect(skill).toContain('"dummy"');
+
+    expect(planning).toContain(
+      "pi-subagents 0.67.0 structured_output contract",
+    );
+    expect(planning).toContain("<PlanningDecisionV1>");
+    expect(planning).toContain("fix only the value envelope");
+    expect(planning).toContain("preserve the substantive planning content");
+    expect(planning).toContain("placeholders");
+  });
+
   it("makes Research skip explicit through absence of Research state", () => {
     const skill = read("skills/pi-workflow/SKILL.md");
     const research = read("workflow-scripts/research.js");
