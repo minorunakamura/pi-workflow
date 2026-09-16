@@ -1,0 +1,673 @@
+import { randomUUID } from "node:crypto";
+
+import {
+  hasOnlyKeys,
+  invalidResult,
+  isBoundedString,
+  isNormalizedOpaqueId,
+  isRecord,
+  isSafeRelativePath,
+  validResult,
+  type ValidationResult,
+} from "./validation.ts";
+
+export const WORKFLOW_TYPES = ["feature", "bug", "chore", "hotfix"] as const;
+export type WorkflowType = (typeof WORKFLOW_TYPES)[number];
+
+export const WORKFLOW_COMMANDS = {
+  "/wf-feature": "feature",
+  "/wf-bug": "bug",
+  "/wf-chore": "chore",
+  "/wf-hotfix": "hotfix",
+} as const satisfies Readonly<Record<`/wf-${string}`, WorkflowType>>;
+
+export type WorkflowId = string & { readonly __workflowId: unique symbol };
+export type RunId = string & { readonly __runId: unique symbol };
+export type RequestId = string & { readonly __requestId: unique symbol };
+export type ReviewId = string & { readonly __reviewId: unique symbol };
+export type FindingId = string & { readonly __findingId: unique symbol };
+export type PlanHashValue = string & { readonly __planHash: unique symbol };
+
+export type WorkflowPhase =
+  | "IDLE"
+  | "PLANNING"
+  | "PLAN_REVIEW"
+  | "IMPLEMENTING"
+  | "CODE_REVIEW"
+  | "READY_FOR_MERGE"
+  | "FAILED"
+  | "CANCELLED";
+
+export type WorkflowLifecycleState = "IDLE" | "ACTIVE" | "TERMINAL";
+
+export type PlanningStatus =
+  | "NOT_STARTED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+
+export type ImplementationStatus =
+  | "NOT_STARTED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+
+export interface WorkflowRequest {
+  workflowId: WorkflowId;
+  workflowType: WorkflowType;
+  request: string;
+  cwd: string;
+  createdAt: string;
+}
+
+export type TddMode = "required" | "optional" | "not-applicable";
+
+export interface TestStrategy {
+  kind: "unit" | "integration" | "mixed" | "none";
+  required: boolean;
+  summary: string;
+}
+
+export interface PlanHash {
+  algorithm: "SHA-256";
+  encoding: "hex";
+  value: PlanHashValue;
+}
+
+export type ArtifactMediaType =
+  | "text/markdown"
+  | "application/json"
+  | "text/plain"
+  | "text/x-diff";
+
+export interface ArtifactRef {
+  kind: "managed";
+  path: string;
+  mediaType: ArtifactMediaType;
+}
+
+export type ApprovalValue = boolean | null;
+
+export interface PendingInteraction {
+  kind: "human" | "plan-review" | "code-review";
+  requestId: RequestId;
+  coordinatorRunId: RunId;
+  reviewId?: ReviewId;
+}
+
+export interface CodeReviewResultSummary {
+  requestId: RequestId;
+  status: "approved" | "rejected" | "unavailable" | "timeout" | "failed";
+  approved: boolean;
+  feedbackRef?: ArtifactRef;
+  annotationsRef?: ArtifactRef;
+}
+
+export interface RootWorkflowState {
+  schemaVersion: 1;
+  workflowId: WorkflowId;
+  workflowType: WorkflowType;
+  phase: WorkflowPhase;
+  planningRunId?: RunId;
+  planningStatus: PlanningStatus;
+  planningHandoffRef?: ArtifactRef;
+  reviewId?: ReviewId;
+  approvedPlanHash?: PlanHashValue;
+  approval: ApprovalValue;
+  approvalFeedback?: string;
+  implementationRunId?: RunId;
+  implementationStatus: ImplementationStatus;
+  pendingInteraction?: PendingInteraction;
+  codeReviewResult?: CodeReviewResultSummary;
+  finalStatus: "NONE" | "READY_FOR_MERGE" | "FAILED" | "CANCELLED";
+}
+
+const UUID_BODY =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const UUID_PATTERN = new RegExp(`^${UUID_BODY}$`, "u");
+const WORKFLOW_ID_PATTERN = new RegExp(`^wf-${UUID_BODY}$`, "u");
+const PLAN_HASH_PATTERN = /^[0-9a-f]{64}$/u;
+
+export function isWorkflowType(value: unknown): value is WorkflowType {
+  return (
+    typeof value === "string" &&
+    (WORKFLOW_TYPES as readonly string[]).includes(value)
+  );
+}
+
+export function workflowTypeForCommand(
+  command: string,
+): WorkflowType | undefined {
+  if (!Object.hasOwn(WORKFLOW_COMMANDS, command)) {
+    return undefined;
+  }
+  return WORKFLOW_COMMANDS[command as keyof typeof WORKFLOW_COMMANDS];
+}
+
+export function createWorkflowId(uuid = randomUUID()): WorkflowId {
+  const normalized = uuid.trim();
+  if (!UUID_PATTERN.test(normalized)) {
+    throw new TypeError("Workflow ID requires a UUID");
+  }
+  return `wf-${normalized}` as WorkflowId;
+}
+
+export function createRequestId(uuid = randomUUID()): RequestId {
+  const normalized = uuid.trim();
+  if (!UUID_PATTERN.test(normalized)) {
+    throw new TypeError("Request ID requires a UUID");
+  }
+  return normalized as RequestId;
+}
+
+export function createRunId(value: string): RunId {
+  const normalized = value.trim();
+  if (!isNormalizedOpaqueId(normalized)) {
+    throw new TypeError("Run ID must be a non-empty opaque ID");
+  }
+  return normalized as RunId;
+}
+
+export function createReviewId(value: string): ReviewId {
+  const normalized = value.trim();
+  if (!isNormalizedOpaqueId(normalized)) {
+    throw new TypeError("Review ID must be a non-empty opaque ID");
+  }
+  return normalized as ReviewId;
+}
+
+export function isValidWorkflowId(value: unknown): value is WorkflowId {
+  return typeof value === "string" && WORKFLOW_ID_PATTERN.test(value);
+}
+
+export function isValidRunId(value: unknown): value is RunId {
+  return isNormalizedOpaqueId(value);
+}
+
+export function isValidRequestId(value: unknown): value is RequestId {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+export function isValidReviewId(value: unknown): value is ReviewId {
+  return isNormalizedOpaqueId(value);
+}
+
+export function isValidPlanHashValue(value: unknown): value is PlanHashValue {
+  return typeof value === "string" && PLAN_HASH_PATTERN.test(value);
+}
+
+export function isWorkflowPhase(value: unknown): value is WorkflowPhase {
+  return (
+    typeof value === "string" &&
+    [
+      "IDLE",
+      "PLANNING",
+      "PLAN_REVIEW",
+      "IMPLEMENTING",
+      "CODE_REVIEW",
+      "READY_FOR_MERGE",
+      "FAILED",
+      "CANCELLED",
+    ].includes(value)
+  );
+}
+
+export function isPlanningStatus(value: unknown): value is PlanningStatus {
+  return (
+    typeof value === "string" &&
+    ["NOT_STARTED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"].includes(
+      value,
+    )
+  );
+}
+
+export function isImplementationStatus(
+  value: unknown,
+): value is ImplementationStatus {
+  return (
+    typeof value === "string" &&
+    ["NOT_STARTED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"].includes(
+      value,
+    )
+  );
+}
+
+export function isActivePhase(
+  phase: unknown,
+): phase is "PLANNING" | "PLAN_REVIEW" | "IMPLEMENTING" | "CODE_REVIEW" {
+  return (
+    phase === "PLANNING" ||
+    phase === "PLAN_REVIEW" ||
+    phase === "IMPLEMENTING" ||
+    phase === "CODE_REVIEW"
+  );
+}
+
+export function lifecycleStateForPhase(
+  phase: unknown,
+): WorkflowLifecycleState | undefined {
+  if (!isWorkflowPhase(phase)) {
+    return undefined;
+  }
+  if (phase === "IDLE") {
+    return "IDLE";
+  }
+  return isActivePhase(phase) ? "ACTIVE" : "TERMINAL";
+}
+
+export function workflowTypeForCommandOrFail(command: string): WorkflowType {
+  const workflowType = workflowTypeForCommand(command);
+  if (workflowType === undefined) {
+    throw new RangeError(`Unknown workflow command: ${command}`);
+  }
+  return workflowType;
+}
+
+export const CONCURRENCY_POLICY = Object.freeze({
+  sameRootSession: "one-active" as const,
+  crossSessionSupported: false,
+  globalLock: false,
+});
+
+export function canStartWorkflow(
+  existing:
+    | Pick<RootWorkflowState, "phase">
+    | { phase: unknown }
+    | null
+    | undefined,
+): boolean {
+  if (existing === null || existing === undefined) {
+    return true;
+  }
+  if (!isWorkflowPhase(existing.phase)) {
+    return false;
+  }
+  return !isActivePhase(existing.phase);
+}
+
+export const MAX_PLAN_RESUBMISSIONS = 1;
+export const MAX_CODE_REVIEW_CHANGE_CYCLES = 1;
+export const MAX_AUTOMATIC_FIX_WAVES = 1;
+
+export function canResubmitPlan(resubmissionCount: number): boolean {
+  return (
+    Number.isInteger(resubmissionCount) &&
+    resubmissionCount >= 0 &&
+    resubmissionCount < MAX_PLAN_RESUBMISSIONS
+  );
+}
+
+export function canStartCodeReviewChangeCycle(
+  changeCycleCount: number,
+): boolean {
+  return (
+    Number.isInteger(changeCycleCount) &&
+    changeCycleCount >= 0 &&
+    changeCycleCount < MAX_CODE_REVIEW_CHANGE_CYCLES
+  );
+}
+
+export const TIMEOUTS = Object.freeze({
+  rpcReadyTimeoutMs: 5_000,
+  rpcReplyTimeoutMs: 30_000,
+  coordinatorTimeoutMs: 43_200_000,
+  humanDecisionTimeoutMs: 14_400_000,
+  planReviewTimeoutMs: 14_400_000,
+  codeReviewTimeoutMs: 14_400_000,
+  gateTimeoutMs: 1_200_000,
+});
+
+export const TIMEOUT_POLICY = Object.freeze({
+  coordinator: "wall-clock" as const,
+  pauseWhileWaiting: false,
+  failure: "FAILED" as const,
+});
+
+export const AUTOMATIC_RETRY_ENABLED = false;
+
+export function isValidArtifactRef(value: unknown): value is ArtifactRef {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["kind", "path", "mediaType"])) {
+    return false;
+  }
+  return (
+    value.kind === "managed" &&
+    isSafeRelativePath(value.path) &&
+    ["text/markdown", "application/json", "text/plain", "text/x-diff"].includes(
+      value.mediaType as string,
+    )
+  );
+}
+
+export function createInitialWorkflowState(
+  workflowId: WorkflowId,
+  workflowType: WorkflowType,
+): RootWorkflowState {
+  if (!isValidWorkflowId(workflowId) || !isWorkflowType(workflowType)) {
+    throw new TypeError("Invalid workflow identity");
+  }
+  return {
+    schemaVersion: 1,
+    workflowId,
+    workflowType,
+    phase: "IDLE",
+    planningStatus: "NOT_STARTED",
+    approval: null,
+    implementationStatus: "NOT_STARTED",
+    finalStatus: "NONE",
+  };
+}
+
+const ROOT_STATE_KEYS = [
+  "schemaVersion",
+  "workflowId",
+  "workflowType",
+  "phase",
+  "planningRunId",
+  "planningStatus",
+  "planningHandoffRef",
+  "reviewId",
+  "approvedPlanHash",
+  "approval",
+  "approvalFeedback",
+  "implementationRunId",
+  "implementationStatus",
+  "pendingInteraction",
+  "codeReviewResult",
+  "finalStatus",
+] as const;
+
+function hasValidStateReferences(state: Record<string, unknown>): boolean {
+  if ("planningRunId" in state && !isValidRunId(state.planningRunId)) {
+    return false;
+  }
+  if (
+    "planningHandoffRef" in state &&
+    (!isValidArtifactRef(state.planningHandoffRef) ||
+      (state.planningHandoffRef as ArtifactRef).mediaType !==
+        "application/json")
+  ) {
+    return false;
+  }
+  if ("reviewId" in state && !isValidReviewId(state.reviewId)) {
+    return false;
+  }
+  if (
+    "approvedPlanHash" in state &&
+    !isValidPlanHashValue(state.approvedPlanHash)
+  ) {
+    return false;
+  }
+  if (
+    "approvalFeedback" in state &&
+    !isBoundedString(state.approvalFeedback, 16 * 1024)
+  ) {
+    return false;
+  }
+  if (
+    "implementationRunId" in state &&
+    !isValidRunId(state.implementationRunId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function hasValidPendingInteraction(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["kind", "requestId", "coordinatorRunId", "reviewId"])
+  ) {
+    return false;
+  }
+  if (
+    !["human", "plan-review", "code-review"].includes(value.kind as string) ||
+    !isValidRequestId(value.requestId) ||
+    !isValidRunId(value.coordinatorRunId)
+  ) {
+    return false;
+  }
+  return !("reviewId" in value) || isValidReviewId(value.reviewId);
+}
+
+function hasValidCodeReviewResult(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "requestId",
+      "status",
+      "approved",
+      "feedbackRef",
+      "annotationsRef",
+    ])
+  ) {
+    return false;
+  }
+  return (
+    isValidRequestId(value.requestId) &&
+    ["approved", "rejected", "unavailable", "timeout", "failed"].includes(
+      value.status as string,
+    ) &&
+    typeof value.approved === "boolean" &&
+    (!("feedbackRef" in value) || isValidArtifactRef(value.feedbackRef)) &&
+    (!("annotationsRef" in value) || isValidArtifactRef(value.annotationsRef))
+  );
+}
+
+function hasValidPhaseStatuses(state: RootWorkflowState): boolean {
+  switch (state.phase) {
+    case "IDLE":
+      return (
+        state.planningStatus === "NOT_STARTED" &&
+        state.implementationStatus === "NOT_STARTED" &&
+        state.finalStatus === "NONE"
+      );
+    case "PLANNING":
+      return (
+        state.planningStatus === "RUNNING" &&
+        state.implementationStatus === "NOT_STARTED" &&
+        state.finalStatus === "NONE"
+      );
+    case "PLAN_REVIEW":
+      return (
+        (state.planningStatus === "RUNNING" ||
+          state.planningStatus === "COMPLETED") &&
+        state.implementationStatus === "NOT_STARTED" &&
+        state.finalStatus === "NONE"
+      );
+    case "IMPLEMENTING":
+      return (
+        state.planningStatus === "COMPLETED" &&
+        state.implementationStatus === "RUNNING" &&
+        state.finalStatus === "NONE"
+      );
+    case "CODE_REVIEW":
+      return (
+        state.planningStatus === "COMPLETED" &&
+        state.implementationStatus === "COMPLETED" &&
+        state.finalStatus === "NONE"
+      );
+    case "READY_FOR_MERGE":
+      return (
+        state.planningStatus === "COMPLETED" &&
+        state.implementationStatus === "COMPLETED" &&
+        state.finalStatus === "READY_FOR_MERGE"
+      );
+    case "FAILED":
+      return state.finalStatus === "FAILED";
+    case "CANCELLED":
+      return state.finalStatus === "CANCELLED";
+    default:
+      return false;
+  }
+}
+
+export function validateRootWorkflowState(
+  value: unknown,
+): ValidationResult<RootWorkflowState> {
+  if (!isRecord(value) || !hasOnlyKeys(value, ROOT_STATE_KEYS)) {
+    return invalidResult("Root workflow state has unknown or missing fields");
+  }
+  const pendingInteractionValid =
+    !("pendingInteraction" in value) ||
+    hasValidPendingInteraction(value.pendingInteraction);
+  const codeReviewResultValid =
+    !("codeReviewResult" in value) ||
+    hasValidCodeReviewResult(value.codeReviewResult);
+  if (
+    value.schemaVersion !== 1 ||
+    !isValidWorkflowId(value.workflowId) ||
+    !isWorkflowType(value.workflowType) ||
+    !isWorkflowPhase(value.phase) ||
+    !isPlanningStatus(value.planningStatus) ||
+    !isImplementationStatus(value.implementationStatus) ||
+    ![null, true, false].includes(value.approval as null | boolean) ||
+    !["NONE", "READY_FOR_MERGE", "FAILED", "CANCELLED"].includes(
+      value.finalStatus as string,
+    ) ||
+    !hasValidStateReferences(value) ||
+    !pendingInteractionValid ||
+    !codeReviewResultValid
+  ) {
+    return invalidResult("Root workflow state contains an invalid value");
+  }
+  if (
+    value.approval === true &&
+    (!isValidReviewId(value.reviewId) ||
+      !isValidPlanHashValue(value.approvedPlanHash))
+  ) {
+    return invalidResult("Approved state is missing its approval identity");
+  }
+  const state = value as unknown as RootWorkflowState;
+  return hasValidPhaseStatuses(state)
+    ? validResult(state)
+    : invalidResult("Phase and status are inconsistent");
+}
+
+export interface PhaseTransitionOptions {
+  kind?: "standard" | "plan-resubmission" | "code-review-change-cycle";
+  resubmissionCount?: number;
+  changeCycleCount?: number;
+  sameCoordinator?: boolean;
+  approvedScope?: boolean;
+  newDecisionRequired?: boolean;
+}
+
+export type PhaseTransitionResult =
+  | { valid: true; phase: WorkflowPhase }
+  | { valid: false; reason: string };
+
+const NORMAL_TRANSITIONS: Readonly<
+  Record<WorkflowPhase, WorkflowPhase | undefined>
+> = {
+  IDLE: "PLANNING",
+  PLANNING: "PLAN_REVIEW",
+  PLAN_REVIEW: "IMPLEMENTING",
+  IMPLEMENTING: "CODE_REVIEW",
+  CODE_REVIEW: "READY_FOR_MERGE",
+  READY_FOR_MERGE: undefined,
+  FAILED: undefined,
+  CANCELLED: undefined,
+};
+
+export function canTransitionPhase(
+  from: WorkflowPhase,
+  to: WorkflowPhase,
+  options: PhaseTransitionOptions = {},
+): boolean {
+  if (from === to && from === "PLAN_REVIEW") {
+    return (
+      options.kind === "plan-resubmission" &&
+      options.resubmissionCount !== undefined &&
+      canResubmitPlan(options.resubmissionCount)
+    );
+  }
+  if (from === "CODE_REVIEW" && to === "IMPLEMENTING") {
+    return (
+      options.kind === "code-review-change-cycle" &&
+      options.changeCycleCount !== undefined &&
+      canStartCodeReviewChangeCycle(options.changeCycleCount) &&
+      options.sameCoordinator === true &&
+      options.approvedScope === true &&
+      options.newDecisionRequired === false
+    );
+  }
+  if (isActivePhase(from) && (to === "FAILED" || to === "CANCELLED")) {
+    return true;
+  }
+  return options.kind !== undefined && options.kind !== "standard"
+    ? false
+    : NORMAL_TRANSITIONS[from] === to;
+}
+
+export function transitionPhase(
+  from: WorkflowPhase,
+  to: WorkflowPhase,
+  options: PhaseTransitionOptions = {},
+): PhaseTransitionResult {
+  if (!isWorkflowPhase(from) || !isWorkflowPhase(to)) {
+    return { valid: false, reason: "Unknown workflow phase" };
+  }
+  return canTransitionPhase(from, to, options)
+    ? { valid: true, phase: to }
+    : { valid: false, reason: `Invalid transition: ${from} -> ${to}` };
+}
+
+export function transitionWorkflowState(
+  current: RootWorkflowState,
+  to: WorkflowPhase,
+  options: PhaseTransitionOptions = {},
+): ValidationResult<RootWorkflowState> {
+  const currentValidation = validateRootWorkflowState(current);
+  if (!currentValidation.valid) {
+    return currentValidation;
+  }
+  const transition = transitionPhase(current.phase, to, options);
+  if (!transition.valid) {
+    return invalidResult(transition.reason);
+  }
+
+  const next: RootWorkflowState = { ...current, phase: to };
+  if (current.phase === "PLAN_REVIEW" && to === "PLAN_REVIEW") {
+    next.planningStatus = "RUNNING";
+    next.approval = null;
+    delete next.reviewId;
+    delete next.approvedPlanHash;
+    delete next.approvalFeedback;
+    delete next.pendingInteraction;
+  } else if (to === "PLANNING") {
+    next.planningStatus = "RUNNING";
+  } else if (to === "PLAN_REVIEW") {
+    next.planningStatus = "COMPLETED";
+  } else if (to === "IMPLEMENTING") {
+    next.implementationStatus = "RUNNING";
+    delete next.pendingInteraction;
+  } else if (to === "CODE_REVIEW") {
+    next.implementationStatus = "COMPLETED";
+  } else if (to === "READY_FOR_MERGE") {
+    next.implementationStatus = "COMPLETED";
+    next.finalStatus = "READY_FOR_MERGE";
+  } else if (to === "FAILED") {
+    next.finalStatus = "FAILED";
+    if (isActivePhase(current.phase)) {
+      if (current.phase === "PLANNING" || current.phase === "PLAN_REVIEW") {
+        next.planningStatus = "FAILED";
+      } else {
+        next.implementationStatus = "FAILED";
+      }
+    }
+  } else if (to === "CANCELLED") {
+    next.finalStatus = "CANCELLED";
+    if (current.phase === "PLANNING" || current.phase === "PLAN_REVIEW") {
+      next.planningStatus = "CANCELLED";
+    } else if (
+      current.phase === "IMPLEMENTING" ||
+      current.phase === "CODE_REVIEW"
+    ) {
+      next.implementationStatus = "CANCELLED";
+    }
+  }
+
+  return validResult(next);
+}
