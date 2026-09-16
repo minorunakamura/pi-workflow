@@ -50,6 +50,18 @@ export interface CodeReviewReadiness {
   approved: boolean;
 }
 
+function isCodeReviewStatus(
+  value: unknown,
+): value is CodeReviewReadiness["status"] {
+  return (
+    value === "approved" ||
+    value === "rejected" ||
+    value === "unavailable" ||
+    value === "timeout" ||
+    value === "failed"
+  );
+}
+
 export type DiffInspectionStatus = "PASS" | "FAIL" | "MISSING" | "UNKNOWN";
 
 export interface ReadyForMergeInput {
@@ -151,14 +163,12 @@ function evaluateCodeReview(
   if (
     !isRecord(codeReview) ||
     !hasOnlyKeys(codeReview, ["status", "approved"]) ||
-    !["approved", "rejected", "unavailable", "timeout", "failed"].includes(
-      codeReview.status as string,
-    ) ||
+    !isCodeReviewStatus(codeReview.status) ||
     typeof codeReview.approved !== "boolean"
   ) {
     return check("code-review", "UNKNOWN", "Code review result is invalid");
   }
-  return codeReview.status === "approved" && codeReview.approved === true
+  return codeReview.status === "approved" && codeReview.approved
     ? check("code-review", "PASS", "approved")
     : check("code-review", "FAIL", "Code review was not approved");
 }
@@ -211,7 +221,7 @@ export function evaluateReadyForMerge(
   );
 
   record(
-    input.implementationComplete === true
+    input.implementationComplete
       ? check("implementation-complete", "PASS", "implementation is complete")
       : check(
           "implementation-complete",

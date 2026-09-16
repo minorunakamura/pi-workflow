@@ -55,31 +55,66 @@ const GATE_SOURCES: readonly TrustedGateSource[] = [
   "repository-doc",
 ];
 
+function isGateRequirement(value: unknown): value is GateRequirement {
+  return value === "required" || value === "optional";
+}
+
+function isTrustedGateStatus(value: unknown): value is TrustedGateStatus {
+  return (
+    value === "PASS" ||
+    value === "FAIL" ||
+    value === "SKIPPED" ||
+    value === "UNKNOWN"
+  );
+}
+
+function isTrustedGateSource(value: unknown): value is TrustedGateSource {
+  return GATE_SOURCES.some((source) => source === value);
+}
+
 export function validateTrustedGate(
   value: unknown,
 ): ValidationResult<TrustedGate> {
   if (!isRecord(value) || !hasOnlyKeys(value, GATE_KEYS)) {
     return invalidResult("Trusted Gate has unknown or missing fields");
   }
+  const name = value.name;
+  const command = value.command;
+  const requirement = value.requirement;
+  const status = value.status;
+  const source = value.source;
   if (
-    !isBoundedString(value.name, 4096, true) ||
-    !isBoundedString(value.command, 4096, true) ||
-    !["required", "optional"].includes(value.requirement as string) ||
-    !["PASS", "FAIL", "SKIPPED", "UNKNOWN"].includes(value.status as string) ||
-    !GATE_SOURCES.includes(value.source as TrustedGateSource) ||
-    ("evidence" in value && !isValidArtifactRef(value.evidence)) ||
-    ("reason" in value && !isBoundedString(value.reason, 4096))
+    !isBoundedString(name, 4096, true) ||
+    !isBoundedString(command, 4096, true) ||
+    !isGateRequirement(requirement) ||
+    !isTrustedGateStatus(status) ||
+    !isTrustedGateSource(source)
   ) {
     return invalidResult("Trusted Gate contains an invalid value");
   }
-  if (
-    (value.status === "SKIPPED" || value.status === "UNKNOWN") &&
-    (!isBoundedString(value.reason, 4096, true) ||
-      value.reason.trim().length === 0)
-  ) {
+
+  const gate: TrustedGate = { name, command, requirement, status, source };
+  if ("evidence" in value) {
+    if (!isValidArtifactRef(value.evidence)) {
+      return invalidResult("Trusted Gate contains an invalid value");
+    }
+    gate.evidence = value.evidence;
+  }
+  if ("reason" in value) {
+    if (!isBoundedString(value.reason, 4096)) {
+      return invalidResult("Trusted Gate contains an invalid value");
+    }
+    if (
+      (status === "SKIPPED" || status === "UNKNOWN") &&
+      value.reason.trim().length === 0
+    ) {
+      return invalidResult("Skipped or unknown Gate requires a reason");
+    }
+    gate.reason = value.reason;
+  } else if (status === "SKIPPED" || status === "UNKNOWN") {
     return invalidResult("Skipped or unknown Gate requires a reason");
   }
-  return validResult(value as unknown as TrustedGate);
+  return validResult(gate);
 }
 
 function gateIdentity(gate: Pick<TrustedGate, "name" | "command">): string {
