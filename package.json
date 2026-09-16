@@ -31,7 +31,7 @@
     }
   },
   "scripts": {
-    "lint": "oxlint --type-aware .",
+    "lint": "oxlint --type-aware --deny-warnings .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "vitest",

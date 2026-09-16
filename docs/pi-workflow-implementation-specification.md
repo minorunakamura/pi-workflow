@@ -247,7 +247,7 @@ coordinator timeout = wall-clock outer safety cap; no pause while waiting
 ```json
 {
   "scripts": {
-    "lint": "oxlint --type-aware .",
+    "lint": "oxlint --type-aware --deny-warnings .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "vitest",
@@ -264,6 +264,13 @@ coordinator timeout = wall-clock outer safety cap; no pause while waiting
 - Biomeのformat-only no-write checkは`biome format .`。`biome check` / `biome ci`はlintも実行し得るため、`format:check`には使わない。[S: `https://biomejs.dev/reference/cli/`]
 - Oxlintのtype-aware CLIは`oxlint --type-aware`であり、`oxlint-tsgolint`が必要。[S: `https://oxc.rs/docs/guide/usage/linter/type-aware`]
 - `pnpm install --frozen-lockfile`はlockfileを更新せず、CIでmanifest/lock mismatchを失敗させる。[S: `https://pnpm.io/cli/install`]
+
+Lint quality invariant:
+
+- production implementationの各Step完了時、`pnpm lint`は0 warnings / 0 errorsでなければならない。
+- lint warningを解消するためにtype-aware lint、TypeScript strictness、runtime validation、fail-closed semanticsを弱めてはならない。
+- runtime validation境界では、unsafe type assertionよりtype guardまたはtyped constructionを優先する。
+- lint ruleのglobal disableまたはblanket suppressionは、Specificationで明示された例外がない限り使用しない。
 
 ### 4.3 `tsconfig.json`
 
@@ -565,7 +572,7 @@ Pi packageの別package installationはNode dependency resolutionを自動で提
     }
   },
   "scripts": {
-    "lint": "oxlint --type-aware .",
+    "lint": "oxlint --type-aware --deny-warnings .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "vitest",
@@ -3451,6 +3458,8 @@ Legacy `change-workflow-legacy`はreference-onlyであり、cutover、rollback�
 各stepは新規実装であり、legacy fileを改修しない。
 
 このsectionの`Primary responsibilities / likely area`欄はresponsibilityの想定配置を示すreferenceであり、exact mandatory internal layoutではない。Production implementationは`/Users/minoru/Documents/mywork/pi-extension-skill-directory-structure.md`に従い、責務境界を守りながら必要最小限のfile/module splitを選択する。StepのGoal、Dependencies、semantic contract、Tests、Exit criteriaがfile/module名より優先される。
+
+各Step完了時に`pnpm check`がPASSし、lint resultが0 warnings / 0 errorsであること。
 
 ### Step 1 — Repository/package skeleton + toolchain
 
