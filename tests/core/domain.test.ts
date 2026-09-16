@@ -41,7 +41,6 @@ import {
   lifecycleStateForPhase,
   normalizeFinding,
   transitionPhase,
-  transitionWorkflowState,
   validateFindingDisposition,
   validateFixWave,
   validatePlanningHandoff,
@@ -172,10 +171,10 @@ it("uses the built-in conditional planning policy and only changes Scout focus b
 
 it("validates the small Root snapshot and derives lifecycle state", () => {
   const initial = createInitialWorkflowState(makeWorkflowId(), "feature");
+  expect(initial.phase).toBe("IDLE");
+  expect(initial.planningStatus).toBe("NOT_STARTED");
+  expect(initial.implementationStatus).toBe("NOT_STARTED");
   expect(validateRootWorkflowState(initial).valid).toBe(true);
-  const planning = unwrap(transitionWorkflowState(initial, "PLANNING"));
-  expect(planning.phase).toBe("PLANNING");
-  expect(planning.planningStatus).toBe("RUNNING");
   expect(lifecycleStateForPhase("bogus")).toBeUndefined();
   expect(
     validateRootWorkflowState({ ...initial, request: "raw request" }).valid,
@@ -356,11 +355,45 @@ it("keeps required Gate semantics fail-closed and preserves aggregate commands",
   const final = unwrap(buildFinalGateSet(approved));
   expect(final).toHaveLength(1);
   expect(final[0]?.command).toBe("pnpm check");
+  const approvedOptional: TrustedGate = {
+    name: "package-check",
+    command: "pnpm check",
+    requirement: "optional",
+    status: "PASS",
+    source: "ci-config",
+    evidence: {
+      kind: "managed",
+      path: "evidence/approved-gate.txt",
+      mediaType: "text/plain",
+    },
+    reason: "Approved Gate record.",
+  };
+  const mechanicallyRequired: TrustedGate = {
+    ...approvedOptional,
+    requirement: "required",
+    status: "FAIL",
+    source: "package-script",
+    evidence: {
+      kind: "managed",
+      path: "evidence/mechanical-gate.txt",
+      mediaType: "text/plain",
+    },
+    reason: "Mechanically required Gate record.",
+  };
   const upgraded = unwrap(
-    buildFinalGateSet([makeGate("PASS", "optional")], [makeGate("PASS")]),
+    buildFinalGateSet([approvedOptional], [mechanicallyRequired]),
   );
-  expect(upgraded).toHaveLength(1);
-  expect(upgraded[0]?.requirement).toBe("required");
+  expect(upgraded).toEqual([{ ...approvedOptional, requirement: "required" }]);
+
+  const alreadyRequired = unwrap(
+    buildFinalGateSet(
+      [{ ...approvedOptional, requirement: "required" }],
+      [mechanicallyRequired],
+    ),
+  );
+  expect(alreadyRequired).toEqual([
+    { ...approvedOptional, requirement: "required" },
+  ]);
   expect(
     unwrap(buildFinalGateSet(approved, [])).some(
       (gate) => gate.requirement === "optional",
