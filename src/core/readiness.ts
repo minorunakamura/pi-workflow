@@ -58,7 +58,7 @@ export interface ReadyForMergeInput {
   approval: unknown;
   implementationComplete: boolean;
   gates: readonly TrustedGate[];
-  approvedGates?: readonly TrustedGate[];
+  approvedGates: readonly TrustedGate[];
   repositoryGates?: readonly TrustedGate[];
   requiredGateKeys?: readonly string[];
   findings: readonly FindingReadiness[];
@@ -220,14 +220,30 @@ export function evaluateReadyForMerge(
         ),
   );
 
-  const approvedRequiredGateKeys = input.approvedGates
-    ?.filter((gate) => gate.requirement === "required")
-    .map((gate) => gate.name);
-  const requiredGateKeys =
-    input.requiredGateKeys ?? approvedRequiredGateKeys ?? [];
+  const approvedGateBaseline =
+    input.approvedGates === undefined
+      ? undefined
+      : evaluateTrustedGates(input.approvedGates);
+  const approvedRequiredGateKeys =
+    approvedGateBaseline?.valid && Array.isArray(input.approvedGates)
+      ? input.approvedGates
+          .filter((gate) => gate.requirement === "required")
+          .map((gate) => gate.name)
+      : [];
+  const requiredGateKeys = input.requiredGateKeys ?? approvedRequiredGateKeys;
   const gateEvaluation = evaluateTrustedGates(input.gates, requiredGateKeys);
   const gateBlockers = [...gateEvaluation.blockers];
-  if (input.approvedGates !== undefined) {
+  if (input.approvedGates === undefined) {
+    gateBlockers.push({
+      code: "APPROVED_GATE_BASELINE_MISSING",
+      reason: "Approved Gate baseline is missing",
+    });
+  } else if (approvedGateBaseline?.valid !== true) {
+    gateBlockers.push({
+      code: "INVALID_APPROVED_GATE_BASELINE",
+      reason: "Approved Gate baseline is invalid",
+    });
+  } else {
     const preserved = validateRequiredGatesPreserved(
       input.approvedGates,
       input.gates,
@@ -252,16 +268,20 @@ export function evaluateReadyForMerge(
     }
   }
   const gatesPassed = gateEvaluation.passed && gateBlockers.length === 0;
-  record(
-    check(
-      "required-gates",
-      gatesPassed
-        ? "PASS"
+  const requiredGatesStatus =
+    input.approvedGates === undefined
+      ? "MISSING"
+      : approvedGateBaseline?.valid !== true
+        ? "UNKNOWN"
         : gateCheckStatus({
             ...gateEvaluation,
             passed: false,
             blockers: gateBlockers,
-          }),
+          });
+  record(
+    check(
+      "required-gates",
+      gatesPassed ? "PASS" : requiredGatesStatus,
       gatesPassed
         ? "all required Gates passed"
         : gateBlockers.map(({ reason }) => reason).join("; "),
