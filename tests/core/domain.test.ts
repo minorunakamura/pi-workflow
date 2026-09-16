@@ -43,6 +43,7 @@ import {
   transitionPhase,
   transitionWorkflowState,
   validateFindingDisposition,
+  validateFixWave,
   validatePlanningHandoff,
   validateRootWorkflowState,
   validateRequiredGateResolution,
@@ -101,6 +102,32 @@ function makeGate(
     };
   }
   return gate;
+}
+
+function makeAcceptedFinding(index: number) {
+  const findingId = createFindingId(
+    `00000000-0000-4000-8000-${(index + 10).toString(16).padStart(12, "0")}`,
+  );
+  const finding = unwrap(
+    normalizeFinding(
+      {
+        source: "reviewer",
+        evidence: `bounded evidence ${index}`,
+        reason: `bounded reason ${index}`,
+      },
+      findingId,
+    ),
+  );
+  return {
+    finding,
+    disposition: unwrap(
+      validateFindingDisposition({
+        findingId,
+        disposition: "FIX_NOW",
+        reason: "Fix it in this bounded wave.",
+      }),
+    ),
+  };
 }
 
 it("defines the four Workflow Types and explicit command mapping", () => {
@@ -259,6 +286,25 @@ it("accepts only a true Approval Identity bound to the current Handoff and hash"
   );
   expect(
     isApprovalIdentityValid(
+      approval,
+      hashPlan(PLAN).value,
+      handoff.planHash.value,
+    ),
+  ).toBe(false);
+  expect(
+    isApprovalIdentityValid(approval, hashPlan(PLAN).value, {
+      ...handoff,
+      unexpected: true,
+    }),
+  ).toBe(false);
+  expect(
+    isApprovalIdentityValid(approval, hashPlan(PLAN).value, {
+      ...handoff,
+      planHash: hashPlan("changed"),
+    }),
+  ).toBe(false);
+  expect(
+    isApprovalIdentityValid(
       { ...approval, approval: false },
       hashPlan(PLAN).value,
       handoff,
@@ -310,6 +356,11 @@ it("keeps required Gate semantics fail-closed and preserves aggregate commands",
   const final = unwrap(buildFinalGateSet(approved));
   expect(final).toHaveLength(1);
   expect(final[0]?.command).toBe("pnpm check");
+  const upgraded = unwrap(
+    buildFinalGateSet([makeGate("PASS", "optional")], [makeGate("PASS")]),
+  );
+  expect(upgraded).toHaveLength(1);
+  expect(upgraded[0]?.requirement).toBe("required");
   expect(
     unwrap(buildFinalGateSet(approved, [])).some(
       (gate) => gate.requirement === "optional",
@@ -408,6 +459,22 @@ it("normalizes bounded Findings, requires disposition reasons, and bounds one Fi
   });
 });
 
+it("keeps Fix Wave builder output within the validator bound", () => {
+  const maximumFindings = Array.from({ length: 32 }, (_, index) =>
+    makeAcceptedFinding(index),
+  );
+  const maximumWave = buildFixWave(maximumFindings);
+  expect(maximumWave.created).toBe(true);
+  if (maximumWave.created) {
+    expect(validateFixWave(maximumWave.wave).valid).toBe(true);
+  }
+  expect(
+    buildFixWave([...maximumFindings, makeAcceptedFinding(32)]).created,
+  ).toBe(false);
+  expect(canCreateFixWave(0, 32)).toBe(true);
+  expect(canCreateFixWave(0, 33)).toBe(false);
+});
+
 it("enforces bounded resubmission/change-cycle counts and fixed timeout policy", () => {
   expect(MAX_PLAN_RESUBMISSIONS).toBe(1);
   expect(canResubmitPlan(0)).toBe(true);
@@ -447,6 +514,7 @@ function readyInput(
     },
     implementationComplete: true,
     gates: [makeGate("PASS")],
+    approvedGates: [makeGate("PASS")],
     requiredGateKeys: ["package-check"],
     findings: [
       {
@@ -465,6 +533,44 @@ function readyInput(
 }
 
 it("returns Ready-for-Merge only when every blocking condition passes", () => {
+  const { approvedGates: _approvedGates, ...missingBaseline } = readyInput();
+  const missingBaselineResult = evaluateReadyForMerge(
+    missingBaseline as Parameters<typeof evaluateReadyForMerge>[0],
+  );
+  expect(missingBaselineResult.ready).toBe(false);
+  expect(
+    missingBaselineResult.checks.find(({ id }) => id === "required-gates")
+      ?.status,
+  ).toBe("MISSING");
+
+  expect(
+    evaluateReadyForMerge(
+      readyInput({
+        approvedGates: [],
+        gates: [makeGate("SKIPPED", "optional")],
+        requiredGateKeys: [],
+      }),
+    ).ready,
+  ).toBe(true);
+  expect(
+    evaluateReadyForMerge(
+      readyInput({
+        approvedGates: [makeGate("PASS")],
+        gates: [makeGate("PASS", "required", "pnpm test")],
+        requiredGateKeys: [],
+      }),
+    ).ready,
+  ).toBe(false);
+  expect(
+    evaluateReadyForMerge(
+      readyInput({
+        approvedGates: [makeGate("PASS")],
+        gates: [makeGate("PASS", "optional")],
+        requiredGateKeys: [],
+      }),
+    ).ready,
+  ).toBe(false);
+
   expect(evaluateReadyForMerge(readyInput()).ready).toBe(true);
   expect(
     evaluateReadyForMerge(readyInput({ approval: { approval: false } })).ready,
@@ -481,6 +587,7 @@ it("returns Ready-for-Merge only when every blocking condition passes", () => {
   expect(
     evaluateReadyForMerge(
       readyInput({
+        approvedGates: [],
         gates: [makeGate("SKIPPED", "optional")],
         requiredGateKeys: [],
       }),

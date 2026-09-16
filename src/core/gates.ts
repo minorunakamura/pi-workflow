@@ -228,12 +228,13 @@ export function buildFinalGateSet(
 
   const finalGates = [...approvedGates];
   for (const gate of mechanicallyRequiredGates) {
-    if (
-      !finalGates.some(
-        (candidate) => gateIdentity(candidate) === gateIdentity(gate),
-      )
-    ) {
+    const existingIndex = finalGates.findIndex(
+      (candidate) => gateIdentity(candidate) === gateIdentity(gate),
+    );
+    if (existingIndex === -1) {
       finalGates.push(gate);
+    } else {
+      finalGates[existingIndex] = { ...gate, requirement: "required" };
     }
   }
   const preserved = validateRequiredGatesPreserved(approvedGates, finalGates);

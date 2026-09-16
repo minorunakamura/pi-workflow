@@ -289,16 +289,6 @@ export function validatePlanHashBinding(
     : invalidResult("Plan hash does not match the Planning Handoff");
 }
 
-function handoffHash(value: unknown): unknown {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (!isRecord(value) || !isRecord(value.planHash)) {
-    return undefined;
-  }
-  return value.planHash.value;
-}
-
 export function validateApprovalIdentity(
   value: unknown,
   currentPlanHash: unknown,
@@ -315,19 +305,19 @@ export function validateApprovalIdentity(
   ) {
     return invalidResult("Approval Identity has unknown or missing fields");
   }
-  const handoffIsValid =
-    typeof handoff === "string"
-      ? isValidPlanHashValue(handoff)
-      : validatePlanningHandoff(handoff).valid;
-  const expectedHandoffHash = handoffIsValid ? handoffHash(handoff) : undefined;
+  const handoffValidation = validatePlanningHandoff(handoff);
+  const handoffPlanHash = handoffValidation.valid
+    ? handoffValidation.value.planHash.value
+    : undefined;
   if (
+    !handoffValidation.valid ||
     value.approval !== true ||
+    !isValidReviewId(value.reviewId) ||
     !isValidPlanHashValue(value.approvedPlanHash) ||
     !isValidPlanHashValue(currentPlanHash) ||
-    !isValidPlanHashValue(expectedHandoffHash) ||
+    !isValidPlanHashValue(handoffPlanHash) ||
     value.approvedPlanHash !== currentPlanHash ||
-    value.approvedPlanHash !== expectedHandoffHash ||
-    !isValidReviewId(value.reviewId) ||
+    handoffPlanHash !== currentPlanHash ||
     ("approvalFeedback" in value &&
       !isBoundedString(value.approvalFeedback, MAX_FEEDBACK_BYTES))
   ) {

@@ -82,6 +82,7 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const FINDING_ID_PATTERN =
   /^F-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const MAX_FIX_WAVE_FINDINGS = 32;
 const FINDING_KEYS = [
   "source",
   "location",
@@ -207,7 +208,7 @@ export function validateFixWave(value: unknown): ValidationResult<FixWave> {
     value.waveNumber !== 1 ||
     !Array.isArray(value.acceptedFindingIds) ||
     value.acceptedFindingIds.length === 0 ||
-    value.acceptedFindingIds.length > 32
+    value.acceptedFindingIds.length > MAX_FIX_WAVE_FINDINGS
   ) {
     return invalidResult("Fix Wave is invalid");
   }
@@ -248,7 +249,8 @@ export function canCreateFixWave(
     completedWaveCount >= 0 &&
     completedWaveCount < MAX_AUTOMATIC_FIX_WAVES &&
     Number.isInteger(acceptedFindingCount) &&
-    acceptedFindingCount > 0
+    acceptedFindingCount > 0 &&
+    acceptedFindingCount <= MAX_FIX_WAVE_FINDINGS
   );
 }
 
