@@ -1,0 +1,241 @@
+import {
+  hasOnlyKeys,
+  invalidResult,
+  isBoundedString,
+  isRecord,
+  validResult,
+  type ValidationResult,
+} from "./validation.ts";
+import { isValidArtifactRef, type ArtifactRef } from "./workflow.ts";
+
+export type TrustedGateStatus = "PASS" | "FAIL" | "SKIPPED" | "UNKNOWN";
+export type GateRequirement = "required" | "optional";
+export type TrustedGateSource =
+  | "package-script"
+  | "build-target"
+  | "ci-config"
+  | "repository-doc";
+
+export interface TrustedGate {
+  name: string;
+  command: string;
+  requirement: GateRequirement;
+  status: TrustedGateStatus;
+  evidence?: ArtifactRef;
+  reason?: string;
+  source: TrustedGateSource;
+}
+
+export interface GateBlocker {
+  code: string;
+  reason: string;
+  gateName?: string;
+}
+
+export interface TrustedGateEvaluation {
+  valid: boolean;
+  passed: boolean;
+  blockers: readonly GateBlocker[];
+}
+
+const GATE_KEYS = [
+  "name",
+  "command",
+  "requirement",
+  "status",
+  "evidence",
+  "reason",
+  "source",
+] as const;
+
+const GATE_SOURCES: readonly TrustedGateSource[] = [
+  "package-script",
+  "build-target",
+  "ci-config",
+  "repository-doc",
+];
+
+export function validateTrustedGate(
+  value: unknown,
+): ValidationResult<TrustedGate> {
+  if (!isRecord(value) || !hasOnlyKeys(value, GATE_KEYS)) {
+    return invalidResult("Trusted Gate has unknown or missing fields");
+  }
+  if (
+    !isBoundedString(value.name, 4096, true) ||
+    !isBoundedString(value.command, 4096, true) ||
+    !["required", "optional"].includes(value.requirement as string) ||
+    !["PASS", "FAIL", "SKIPPED", "UNKNOWN"].includes(value.status as string) ||
+    !GATE_SOURCES.includes(value.source as TrustedGateSource) ||
+    ("evidence" in value && !isValidArtifactRef(value.evidence)) ||
+    ("reason" in value && !isBoundedString(value.reason, 4096))
+  ) {
+    return invalidResult("Trusted Gate contains an invalid value");
+  }
+  if (
+    (value.status === "SKIPPED" || value.status === "UNKNOWN") &&
+    (!isBoundedString(value.reason, 4096, true) ||
+      value.reason.trim().length === 0)
+  ) {
+    return invalidResult("Skipped or unknown Gate requires a reason");
+  }
+  return validResult(value as unknown as TrustedGate);
+}
+
+function gateIdentity(gate: Pick<TrustedGate, "name" | "command">): string {
+  return `${gate.name}\u0000${gate.command}`;
+}
+
+function findGate(
+  gates: readonly TrustedGate[],
+  key: string,
+): TrustedGate | undefined {
+  return gates.find((gate) => gate.name === key || gateIdentity(gate) === key);
+}
+
+export function evaluateTrustedGates(
+  gates: readonly TrustedGate[],
+  requiredGateKeys: readonly string[] = [],
+): TrustedGateEvaluation {
+  if (!Array.isArray(gates) || !Array.isArray(requiredGateKeys)) {
+    return {
+      valid: false,
+      passed: false,
+      blockers: [
+        { code: "INVALID_GATE_INPUT", reason: "Gate input must be arrays" },
+      ],
+    };
+  }
+
+  const blockers: GateBlocker[] = [];
+  const validGates: TrustedGate[] = [];
+  const identities = new Set<string>();
+  let valid = true;
+  for (const value of gates) {
+    const gate = validateTrustedGate(value);
+    if (!gate.valid) {
+      valid = false;
+      blockers.push({ code: "INVALID_GATE", reason: gate.errors.join(", ") });
+      continue;
+    }
+    const identity = gateIdentity(gate.value);
+    if (identities.has(identity)) {
+      valid = false;
+      blockers.push({
+        code: "DUPLICATE_GATE",
+        reason: `Duplicate Gate: ${gate.value.name}`,
+        gateName: gate.value.name,
+      });
+      continue;
+    }
+    identities.add(identity);
+    validGates.push(gate.value);
+    if (gate.value.requirement === "required" && gate.value.status !== "PASS") {
+      blockers.push({
+        code: `REQUIRED_GATE_${gate.value.status}`,
+        reason: `Required Gate ${gate.value.name} is ${gate.value.status}`,
+        gateName: gate.value.name,
+      });
+    }
+  }
+
+  for (const key of requiredGateKeys) {
+    const matching = findGate(validGates, key);
+    if (
+      !isBoundedString(key, 4096, true) ||
+      matching === undefined ||
+      matching.requirement !== "required"
+    ) {
+      valid = false;
+      blockers.push({
+        code: "MISSING_REQUIRED_GATE",
+        reason: `Required Gate is missing or optional: ${key}`,
+      });
+    }
+  }
+
+  return { valid, passed: valid && blockers.length === 0, blockers };
+}
+
+export function validateRequiredGatesPreserved(
+  approvedGates: readonly TrustedGate[],
+  finalGates: readonly TrustedGate[],
+): ValidationResult<true> {
+  const approved = evaluateTrustedGates(approvedGates);
+  const final = evaluateTrustedGates(finalGates);
+  if (!approved.valid || !final.valid) {
+    return invalidResult("Cannot compare invalid Gate sets");
+  }
+  for (const approvedGate of approvedGates) {
+    if (approvedGate.requirement !== "required") {
+      continue;
+    }
+    const matching = finalGates.find(
+      (gate) => gateIdentity(gate) === gateIdentity(approvedGate),
+    );
+    if (matching === undefined || matching.requirement !== "required") {
+      return invalidResult(
+        `Approved required Gate was removed or downgraded: ${approvedGate.name}`,
+      );
+    }
+  }
+  return validResult(true);
+}
+
+export function validateRequiredGateResolution(
+  approvedGates: readonly TrustedGate[],
+  repositoryGates: readonly TrustedGate[],
+): ValidationResult<true> {
+  const approved = evaluateTrustedGates(approvedGates);
+  const repository = evaluateTrustedGates(repositoryGates);
+  if (!approved.valid || !repository.valid) {
+    return invalidResult("Cannot resolve invalid Gate sets");
+  }
+  for (const approvedGate of approvedGates) {
+    if (approvedGate.requirement !== "required") {
+      continue;
+    }
+    const matching = repositoryGates.find(
+      (gate) => gateIdentity(gate) === gateIdentity(approvedGate),
+    );
+    if (
+      matching === undefined ||
+      matching.requirement !== "required" ||
+      matching.source !== approvedGate.source
+    ) {
+      return invalidResult(
+        `Required Gate drift detected: ${approvedGate.name}`,
+      );
+    }
+  }
+  return validResult(true);
+}
+
+export function buildFinalGateSet(
+  approvedGates: readonly TrustedGate[],
+  mechanicallyRequiredGates: readonly TrustedGate[] = [],
+): ValidationResult<TrustedGate[]> {
+  const approved = evaluateTrustedGates(approvedGates);
+  const additions = evaluateTrustedGates(mechanicallyRequiredGates);
+  if (!approved.valid || !additions.valid) {
+    return invalidResult("Cannot build a Gate set from invalid input");
+  }
+  if (
+    mechanicallyRequiredGates.some((gate) => gate.requirement !== "required")
+  ) {
+    return invalidResult("Only mechanically required Gates may be added");
+  }
+
+  const finalGates = [...approvedGates];
+  for (const gate of mechanicallyRequiredGates) {
+    if (
+      !finalGates.some(
+        (candidate) => gateIdentity(candidate) === gateIdentity(gate),
+      )
+    ) {
+      finalGates.push(gate);
+    }
+  }
+  const preserved = validateRequiredGatesPreserved(approvedGates, finalGates);
+  return preserved.valid ? validResult(finalGates) : preserved;
+}
