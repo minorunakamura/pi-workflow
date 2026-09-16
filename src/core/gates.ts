@@ -233,8 +233,14 @@ export function buildFinalGateSet(
     );
     if (existingIndex === -1) {
       finalGates.push(gate);
-    } else {
-      finalGates[existingIndex] = { ...gate, requirement: "required" };
+      continue;
+    }
+    const existingGate = finalGates[existingIndex];
+    if (existingGate?.requirement === "optional") {
+      finalGates[existingIndex] = {
+        ...existingGate,
+        requirement: "required",
+      };
     }
   }
   const preserved = validateRequiredGatesPreserved(approvedGates, finalGates);
