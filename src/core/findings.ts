@@ -78,8 +78,6 @@ export interface FocusedReviewEvaluation {
   reason: string;
 }
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const FINDING_ID_PATTERN =
   /^F-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MAX_FIX_WAVE_FINDINGS = 32;
@@ -92,12 +90,26 @@ const FINDING_KEYS = [
   "recommendedAction",
 ] as const;
 
+function isDisposition(value: unknown): value is Disposition {
+  return (
+    value === "BLOCKER" ||
+    value === "FIX_NOW" ||
+    value === "DEFERRED" ||
+    value === "REJECTED"
+  );
+}
+
+function isFocusedReviewStatus(value: unknown): value is FocusedReviewStatus {
+  return value === "RESOLVED" || value === "STILL_PRESENT";
+}
+
 export function createFindingId(uuid = randomUUID()): FindingId {
   const normalized = uuid.trim();
-  if (!UUID_PATTERN.test(normalized)) {
+  const value = `F-${normalized}`;
+  if (!isValidFindingId(value)) {
     throw new TypeError("Finding ID requires a UUID");
   }
-  return `F-${normalized}` as FindingId;
+  return value;
 }
 
 export function isValidFindingId(value: unknown): value is FindingId {
@@ -108,18 +120,36 @@ function validateFindingInput(value: unknown): ValidationResult<FindingInput> {
   if (!isRecord(value) || !hasOnlyKeys(value, FINDING_KEYS)) {
     return invalidResult("Finding input has unknown or missing fields");
   }
+  const source = value.source;
+  const evidence = value.evidence;
+  const reason = value.reason;
   if (
-    !isBoundedString(value.source, 4096, true) ||
-    !isBoundedString(value.evidence, 4096, true) ||
-    !isBoundedString(value.reason, 4096, true) ||
-    ("location" in value && !isBoundedString(value.location, 4096, true)) ||
-    ("severity" in value && !isBoundedString(value.severity, 256, true)) ||
-    ("recommendedAction" in value &&
-      !isBoundedString(value.recommendedAction, 4096, true))
+    !isBoundedString(source, 4096, true) ||
+    !isBoundedString(evidence, 4096, true) ||
+    !isBoundedString(reason, 4096, true)
   ) {
     return invalidResult("Finding input contains an invalid value");
   }
-  return validResult(value as unknown as FindingInput);
+  const finding: FindingInput = { source, evidence, reason };
+  if ("location" in value) {
+    if (!isBoundedString(value.location, 4096, true)) {
+      return invalidResult("Finding input contains an invalid value");
+    }
+    finding.location = value.location;
+  }
+  if ("severity" in value) {
+    if (!isBoundedString(value.severity, 256, true)) {
+      return invalidResult("Finding input contains an invalid value");
+    }
+    finding.severity = value.severity;
+  }
+  if ("recommendedAction" in value) {
+    if (!isBoundedString(value.recommendedAction, 4096, true)) {
+      return invalidResult("Finding input contains an invalid value");
+    }
+    finding.recommendedAction = value.recommendedAction;
+  }
+  return validResult(finding);
 }
 
 export function normalizeFinding(
@@ -161,16 +191,17 @@ export function validateFindingDisposition(
   ) {
     return invalidResult("Finding disposition has unknown or missing fields");
   }
+  const findingId = value.findingId;
+  const disposition = value.disposition;
+  const reason = value.reason;
   if (
-    !isValidFindingId(value.findingId) ||
-    !["BLOCKER", "FIX_NOW", "DEFERRED", "REJECTED"].includes(
-      value.disposition as string,
-    ) ||
-    !isBoundedString(value.reason, 4096, true)
+    !isValidFindingId(findingId) ||
+    !isDisposition(disposition) ||
+    !isBoundedString(reason, 4096, true)
   ) {
     return invalidResult("Finding disposition requires a valid reason");
   }
-  return validResult(value as unknown as FindingDisposition);
+  return validResult({ findingId, disposition, reason });
 }
 
 export function validateDispositionedFinding(
@@ -184,8 +215,13 @@ export function validateDispositionedFinding(
   ) {
     return invalidResult("Dispositioned Finding has unknown or missing fields");
   }
-  const { id, ...findingInput } = value.finding;
-  const finding = normalizeFinding(findingInput, id);
+  const findingValue = value.finding;
+  const findingId = findingValue.id;
+  if (!isValidFindingId(findingId)) {
+    return invalidResult("Dispositioned Finding is invalid");
+  }
+  const { id: _id, ...findingInput } = findingValue;
+  const finding = normalizeFinding(findingInput, findingId);
   const disposition = validateFindingDisposition(value.disposition);
   if (
     !finding.valid ||
@@ -194,7 +230,10 @@ export function validateDispositionedFinding(
   ) {
     return invalidResult("Dispositioned Finding is invalid");
   }
-  return validResult(value as unknown as DispositionedFinding);
+  return validResult({
+    finding: finding.value,
+    disposition: disposition.value,
+  });
 }
 
 export function isAcceptedDisposition(disposition: Disposition): boolean {
@@ -212,17 +251,18 @@ export function validateFixWave(value: unknown): ValidationResult<FixWave> {
   ) {
     return invalidResult("Fix Wave is invalid");
   }
-  const ids = value.acceptedFindingIds;
-  const seen = new Set<string>();
-  for (const id of ids) {
+  const ids: FindingId[] = [];
+  const seen = new Set<FindingId>();
+  for (const id of value.acceptedFindingIds) {
     if (!isValidFindingId(id) || seen.has(id)) {
       return invalidResult(
         "Fix Wave contains an invalid or duplicate Finding ID",
       );
     }
     seen.add(id);
+    ids.push(id);
   }
-  return validResult(value as unknown as FixWave);
+  return validResult({ waveNumber: 1, acceptedFindingIds: ids });
 }
 
 export function validateFocusedReviewResult(
@@ -230,14 +270,21 @@ export function validateFocusedReviewResult(
 ): ValidationResult<FocusedReviewResult> {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["status", "fresh", "readOnly"]) ||
-    !["RESOLVED", "STILL_PRESENT"].includes(value.status as string) ||
-    typeof value.fresh !== "boolean" ||
-    typeof value.readOnly !== "boolean"
+    !hasOnlyKeys(value, ["status", "fresh", "readOnly"])
   ) {
     return invalidResult("Focused Re-review result is invalid");
   }
-  return validResult(value as unknown as FocusedReviewResult);
+  const status = value.status;
+  const fresh = value.fresh;
+  const readOnly = value.readOnly;
+  if (
+    !isFocusedReviewStatus(status) ||
+    typeof fresh !== "boolean" ||
+    typeof readOnly !== "boolean"
+  ) {
+    return invalidResult("Focused Re-review result is invalid");
+  }
+  return validResult({ status, fresh, readOnly });
 }
 
 export function canCreateFixWave(

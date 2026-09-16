@@ -68,6 +68,21 @@ const MAX_ARRAY_ITEMS = 32;
 const MAX_ARRAY_STRING_BYTES = 4096;
 const MAX_FEEDBACK_BYTES = 16 * 1024;
 
+function isTestStrategyKind(value: unknown): value is TestStrategy["kind"] {
+  return (
+    value === "unit" ||
+    value === "integration" ||
+    value === "mixed" ||
+    value === "none"
+  );
+}
+
+function isTddMode(value: unknown): value is TddMode {
+  return (
+    value === "required" || value === "optional" || value === "not-applicable"
+  );
+}
+
 export function canonicalizePlan(content: string | Uint8Array): string {
   const text =
     typeof content === "string"
@@ -82,7 +97,10 @@ export function hashPlan(content: string | Uint8Array): PlanHash {
   const canonical = canonicalizePlan(content);
   const value = createHash("sha256")
     .update(new TextEncoder().encode(canonical))
-    .digest("hex") as PlanHashValue;
+    .digest("hex");
+  if (!isValidPlanHashValue(value)) {
+    throw new TypeError("Plan hash is invalid");
+  }
   return { algorithm: "SHA-256", encoding: "hex", value };
 }
 
@@ -100,19 +118,32 @@ export function validatePlanHash(value: unknown): ValidationResult<PlanHash> {
   ) {
     return invalidResult("Plan hash is invalid");
   }
-  return validResult(value as unknown as PlanHash);
+  return validResult({
+    algorithm: "SHA-256",
+    encoding: "hex",
+    value: value.value,
+  });
 }
 
-function validateStringArray(value: unknown, fieldName: string): string[] {
+function validateStringArray(
+  value: unknown,
+  fieldName: string,
+): ValidationResult<string[]> {
   if (!Array.isArray(value) || value.length > MAX_ARRAY_ITEMS) {
-    return [`${fieldName} must contain at most ${MAX_ARRAY_ITEMS} items`];
+    return invalidResult(
+      `${fieldName} must contain at most ${MAX_ARRAY_ITEMS} items`,
+    );
   }
-  const errors = value.flatMap((item, index) =>
-    isBoundedString(item, MAX_ARRAY_STRING_BYTES)
-      ? []
-      : [`${fieldName}[${index}] is too long or not a string`],
-  );
-  return errors;
+  const values: string[] = [];
+  const errors: string[] = [];
+  for (const [index, item] of value.entries()) {
+    if (isBoundedString(item, MAX_ARRAY_STRING_BYTES)) {
+      values.push(item);
+    } else {
+      errors.push(`${fieldName}[${index}] is too long or not a string`);
+    }
+  }
+  return errors.length > 0 ? invalidResult(...errors) : validResult(values);
 }
 
 function validateTestStrategy(value: unknown): ValidationResult<TestStrategy> {
@@ -122,14 +153,17 @@ function validateTestStrategy(value: unknown): ValidationResult<TestStrategy> {
   ) {
     return invalidResult("Test strategy has unknown or missing fields");
   }
+  const kind = value.kind;
+  const required = value.required;
+  const summary = value.summary;
   if (
-    !["unit", "integration", "mixed", "none"].includes(value.kind as string) ||
-    typeof value.required !== "boolean" ||
-    !isBoundedString(value.summary, 8192)
+    !isTestStrategyKind(kind) ||
+    typeof required !== "boolean" ||
+    !isBoundedString(summary, 8192)
   ) {
     return invalidResult("Test strategy is invalid");
   }
-  return validResult(value as unknown as TestStrategy);
+  return validResult({ kind, required, summary });
 }
 
 export function validatePlanningHandoff(
@@ -157,36 +191,56 @@ export function validatePlanningHandoff(
   const planArtifact = value.planArtifact;
   const hash = validatePlanHash(value.planHash);
   const strategy = validateTestStrategy(value.testStrategy);
-  const arrayErrors = [
-    ...validateStringArray(value.testSeams, "testSeams"),
-    ...validateStringArray(value.constraints, "constraints"),
-    ...validateStringArray(value.nonGoals, "nonGoals"),
-  ];
+  const testSeams = validateStringArray(value.testSeams, "testSeams");
+  const constraints = validateStringArray(value.constraints, "constraints");
+  const nonGoals = validateStringArray(value.nonGoals, "nonGoals");
   if (
     value.schemaVersion !== 1 ||
     value.kind !== PLANNING_HANDOFF_KIND ||
     !isValidWorkflowId(value.workflowId) ||
-    !["required", "optional", "not-applicable"].includes(
-      value.tddMode as string,
-    ) ||
+    !isTddMode(value.tddMode) ||
     !isRecord(planArtifact) ||
     !hasOnlyKeys(planArtifact, ["path", "mediaType"]) ||
     planArtifact.path !== PLAN_ARTIFACT_FILE_NAME ||
     planArtifact.mediaType !== "text/markdown" ||
     !hash.valid ||
     !strategy.valid ||
-    arrayErrors.length > 0 ||
-    ("planningRunId" in value && !isValidRunId(value.planningRunId))
+    !testSeams.valid ||
+    !constraints.valid ||
+    !nonGoals.valid
   ) {
     return invalidResult(
       "Planning Handoff is invalid",
       ...(!hash.valid ? hash.errors : []),
       ...(!strategy.valid ? strategy.errors : []),
-      ...arrayErrors,
+      ...(!testSeams.valid ? testSeams.errors : []),
+      ...(!constraints.valid ? constraints.errors : []),
+      ...(!nonGoals.valid ? nonGoals.errors : []),
     );
   }
 
-  return validResult(value as unknown as PlanningHandoff);
+  const base = {
+    schemaVersion: 1 as const,
+    kind: PLANNING_HANDOFF_KIND,
+    workflowId: value.workflowId,
+    planArtifact: {
+      path: PLAN_ARTIFACT_FILE_NAME,
+      mediaType: "text/markdown" as const,
+    },
+    planHash: hash.value,
+    tddMode: value.tddMode,
+    testStrategy: strategy.value,
+    testSeams: testSeams.value,
+    constraints: constraints.value,
+    nonGoals: nonGoals.value,
+  };
+  if ("planningRunId" in value) {
+    if (!isValidRunId(value.planningRunId)) {
+      return invalidResult("Planning Handoff is invalid");
+    }
+    return validResult({ ...base, planningRunId: value.planningRunId });
+  }
+  return validResult(base);
 }
 
 function clonePlanningHandoff(value: PlanningHandoff): PlanningHandoff {
@@ -306,24 +360,39 @@ export function validateApprovalIdentity(
     return invalidResult("Approval Identity has unknown or missing fields");
   }
   const handoffValidation = validatePlanningHandoff(handoff);
-  const handoffPlanHash = handoffValidation.valid
-    ? handoffValidation.value.planHash.value
-    : undefined;
   if (
     !handoffValidation.valid ||
     value.approval !== true ||
     !isValidReviewId(value.reviewId) ||
     !isValidPlanHashValue(value.approvedPlanHash) ||
-    !isValidPlanHashValue(currentPlanHash) ||
-    !isValidPlanHashValue(handoffPlanHash) ||
-    value.approvedPlanHash !== currentPlanHash ||
-    handoffPlanHash !== currentPlanHash ||
-    ("approvalFeedback" in value &&
-      !isBoundedString(value.approvalFeedback, MAX_FEEDBACK_BYTES))
+    !isValidPlanHashValue(currentPlanHash)
   ) {
     return invalidResult("Approval Identity is not valid for the current plan");
   }
-  return validResult(value as unknown as ApprovalIdentity);
+  const handoffPlanHash = handoffValidation.value.planHash.value;
+  if (
+    value.approvedPlanHash !== currentPlanHash ||
+    handoffPlanHash !== currentPlanHash
+  ) {
+    return invalidResult("Approval Identity is not valid for the current plan");
+  }
+  const identity: ApprovalIdentity = {
+    approvedPlanHash: value.approvedPlanHash,
+    reviewId: value.reviewId,
+    approval: true,
+  };
+  if ("approvalFeedback" in value) {
+    if (!isBoundedString(value.approvalFeedback, MAX_FEEDBACK_BYTES)) {
+      return invalidResult(
+        "Approval Identity is not valid for the current plan",
+      );
+    }
+    return validResult({
+      ...identity,
+      approvalFeedback: value.approvalFeedback,
+    });
+  }
+  return validResult(identity);
 }
 
 export function isApprovalIdentityValid(

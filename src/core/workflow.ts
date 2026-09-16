@@ -130,6 +130,47 @@ const UUID_PATTERN = new RegExp(`^${UUID_BODY}$`, "u");
 const WORKFLOW_ID_PATTERN = new RegExp(`^wf-${UUID_BODY}$`, "u");
 const PLAN_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 
+function isWorkflowCommand(
+  value: string,
+): value is keyof typeof WORKFLOW_COMMANDS {
+  return Object.hasOwn(WORKFLOW_COMMANDS, value);
+}
+
+function isPendingInteractionKind(
+  value: unknown,
+): value is PendingInteraction["kind"] {
+  return (
+    value === "human" || value === "plan-review" || value === "code-review"
+  );
+}
+
+function isCodeReviewStatus(
+  value: unknown,
+): value is CodeReviewResultSummary["status"] {
+  return (
+    value === "approved" ||
+    value === "rejected" ||
+    value === "unavailable" ||
+    value === "timeout" ||
+    value === "failed"
+  );
+}
+
+function isApprovalValue(value: unknown): value is ApprovalValue {
+  return value === null || typeof value === "boolean";
+}
+
+function isFinalStatus(
+  value: unknown,
+): value is RootWorkflowState["finalStatus"] {
+  return (
+    value === "NONE" ||
+    value === "READY_FOR_MERGE" ||
+    value === "FAILED" ||
+    value === "CANCELLED"
+  );
+}
+
 export function isWorkflowType(value: unknown): value is WorkflowType {
   return (
     typeof value === "string" &&
@@ -140,42 +181,43 @@ export function isWorkflowType(value: unknown): value is WorkflowType {
 export function workflowTypeForCommand(
   command: string,
 ): WorkflowType | undefined {
-  if (!Object.hasOwn(WORKFLOW_COMMANDS, command)) {
+  if (!isWorkflowCommand(command)) {
     return undefined;
   }
-  return WORKFLOW_COMMANDS[command as keyof typeof WORKFLOW_COMMANDS];
+  return WORKFLOW_COMMANDS[command];
 }
 
 export function createWorkflowId(uuid = randomUUID()): WorkflowId {
   const normalized = uuid.trim();
-  if (!UUID_PATTERN.test(normalized)) {
+  const value = `wf-${normalized}`;
+  if (!isValidWorkflowId(value)) {
     throw new TypeError("Workflow ID requires a UUID");
   }
-  return `wf-${normalized}` as WorkflowId;
+  return value;
 }
 
 export function createRequestId(uuid = randomUUID()): RequestId {
   const normalized = uuid.trim();
-  if (!UUID_PATTERN.test(normalized)) {
+  if (!isValidRequestId(normalized)) {
     throw new TypeError("Request ID requires a UUID");
   }
-  return normalized as RequestId;
+  return normalized;
 }
 
 export function createRunId(value: string): RunId {
   const normalized = value.trim();
-  if (!isNormalizedOpaqueId(normalized)) {
+  if (!isValidRunId(normalized)) {
     throw new TypeError("Run ID must be a non-empty opaque ID");
   }
-  return normalized as RunId;
+  return normalized;
 }
 
 export function createReviewId(value: string): ReviewId {
   const normalized = value.trim();
-  if (!isNormalizedOpaqueId(normalized)) {
+  if (!isValidReviewId(normalized)) {
     throw new TypeError("Review ID must be a non-empty opaque ID");
   }
-  return normalized as ReviewId;
+  return normalized;
 }
 
 export function isValidWorkflowId(value: unknown): value is WorkflowId {
@@ -334,9 +376,10 @@ export function isValidArtifactRef(value: unknown): value is ArtifactRef {
   return (
     value.kind === "managed" &&
     isSafeRelativePath(value.path) &&
-    ["text/markdown", "application/json", "text/plain", "text/x-diff"].includes(
-      value.mediaType as string,
-    )
+    (value.mediaType === "text/markdown" ||
+      value.mediaType === "application/json" ||
+      value.mediaType === "text/plain" ||
+      value.mediaType === "text/x-diff")
   );
 }
 
@@ -385,8 +428,7 @@ function hasValidStateReferences(state: Record<string, unknown>): boolean {
   if (
     "planningHandoffRef" in state &&
     (!isValidArtifactRef(state.planningHandoffRef) ||
-      (state.planningHandoffRef as ArtifactRef).mediaType !==
-        "application/json")
+      state.planningHandoffRef.mediaType !== "application/json")
   ) {
     return false;
   }
@@ -422,7 +464,7 @@ function hasValidPendingInteraction(value: unknown): boolean {
     return false;
   }
   if (
-    !["human", "plan-review", "code-review"].includes(value.kind as string) ||
+    !isPendingInteractionKind(value.kind) ||
     !isValidRequestId(value.requestId) ||
     !isValidRunId(value.coordinatorRunId)
   ) {
@@ -446,12 +488,37 @@ function hasValidCodeReviewResult(value: unknown): boolean {
   }
   return (
     isValidRequestId(value.requestId) &&
-    ["approved", "rejected", "unavailable", "timeout", "failed"].includes(
-      value.status as string,
-    ) &&
+    isCodeReviewStatus(value.status) &&
     typeof value.approved === "boolean" &&
     (!("feedbackRef" in value) || isValidArtifactRef(value.feedbackRef)) &&
     (!("annotationsRef" in value) || isValidArtifactRef(value.annotationsRef))
+  );
+}
+
+function hasValidRootWorkflowValues(
+  state: unknown,
+): state is RootWorkflowState {
+  if (!isRecord(state)) {
+    return false;
+  }
+  const pendingInteractionValid =
+    !("pendingInteraction" in state) ||
+    hasValidPendingInteraction(state.pendingInteraction);
+  const codeReviewResultValid =
+    !("codeReviewResult" in state) ||
+    hasValidCodeReviewResult(state.codeReviewResult);
+  return (
+    state.schemaVersion === 1 &&
+    isValidWorkflowId(state.workflowId) &&
+    isWorkflowType(state.workflowType) &&
+    isWorkflowPhase(state.phase) &&
+    isPlanningStatus(state.planningStatus) &&
+    isImplementationStatus(state.implementationStatus) &&
+    isApprovalValue(state.approval) &&
+    isFinalStatus(state.finalStatus) &&
+    hasValidStateReferences(state) &&
+    pendingInteractionValid &&
+    codeReviewResultValid
   );
 }
 
@@ -509,27 +576,7 @@ export function validateRootWorkflowState(
   if (!isRecord(value) || !hasOnlyKeys(value, ROOT_STATE_KEYS)) {
     return invalidResult("Root workflow state has unknown or missing fields");
   }
-  const pendingInteractionValid =
-    !("pendingInteraction" in value) ||
-    hasValidPendingInteraction(value.pendingInteraction);
-  const codeReviewResultValid =
-    !("codeReviewResult" in value) ||
-    hasValidCodeReviewResult(value.codeReviewResult);
-  if (
-    value.schemaVersion !== 1 ||
-    !isValidWorkflowId(value.workflowId) ||
-    !isWorkflowType(value.workflowType) ||
-    !isWorkflowPhase(value.phase) ||
-    !isPlanningStatus(value.planningStatus) ||
-    !isImplementationStatus(value.implementationStatus) ||
-    ![null, true, false].includes(value.approval as null | boolean) ||
-    !["NONE", "READY_FOR_MERGE", "FAILED", "CANCELLED"].includes(
-      value.finalStatus as string,
-    ) ||
-    !hasValidStateReferences(value) ||
-    !pendingInteractionValid ||
-    !codeReviewResultValid
-  ) {
+  if (!hasValidRootWorkflowValues(value)) {
     return invalidResult("Root workflow state contains an invalid value");
   }
   if (
@@ -539,9 +586,8 @@ export function validateRootWorkflowState(
   ) {
     return invalidResult("Approved state is missing its approval identity");
   }
-  const state = value as unknown as RootWorkflowState;
-  return hasValidPhaseStatuses(state)
-    ? validResult(state)
+  return hasValidPhaseStatuses(value)
+    ? validResult(value)
     : invalidResult("Phase and status are inconsistent");
 }
 

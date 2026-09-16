@@ -578,10 +578,9 @@ function readyInput(
 }
 
 it("returns Ready-for-Merge only when every blocking condition passes", () => {
-  const { approvedGates: _approvedGates, ...missingBaseline } = readyInput();
-  const missingBaselineResult = evaluateReadyForMerge(
-    missingBaseline as Parameters<typeof evaluateReadyForMerge>[0],
-  );
+  const missingBaseline = readyInput();
+  Reflect.deleteProperty(missingBaseline, "approvedGates");
+  const missingBaselineResult = evaluateReadyForMerge(missingBaseline);
   expect(missingBaselineResult.ready).toBe(false);
   expect(
     missingBaselineResult.checks.find(({ id }) => id === "required-gates")
