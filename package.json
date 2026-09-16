@@ -1,0 +1,56 @@
+{
+  "name": "pi-workflow",
+  "version": "0.1.0",
+  "description": "Root-owned conditional planning and bounded implementation workflows for Pi",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src",
+    "agents",
+    "docs",
+    "README.md",
+    "package.json",
+    "tsconfig.json",
+    "biome.json",
+    ".oxlintrc.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "subagents": {
+      "agents": [
+        "./agents"
+      ]
+    }
+  },
+  "scripts": {
+    "lint": "oxlint --type-aware .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.13",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@types/node": "26.5.1",
+    "oxlint": "1.83.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typebox": "1.3.31",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}
