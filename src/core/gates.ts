@@ -86,6 +86,19 @@ function gateIdentity(gate: Pick<TrustedGate, "name" | "command">): string {
   return `${gate.name}\u0000${gate.command}`;
 }
 
+function sameGateSemantics(left: TrustedGate, right: TrustedGate): boolean {
+  return (
+    left.name === right.name &&
+    left.command === right.command &&
+    left.status === right.status &&
+    left.source === right.source &&
+    left.reason === right.reason &&
+    left.evidence?.kind === right.evidence?.kind &&
+    left.evidence?.path === right.evidence?.path &&
+    left.evidence?.mediaType === right.evidence?.mediaType
+  );
+}
+
 function findGate(
   gates: readonly TrustedGate[],
   key: string,
@@ -236,7 +249,10 @@ export function buildFinalGateSet(
       continue;
     }
     const existingGate = finalGates[existingIndex];
-    if (existingGate?.requirement === "optional") {
+    if (existingGate === undefined || !sameGateSemantics(existingGate, gate)) {
+      return invalidResult(`Conflicting Gate record: ${gate.name}`);
+    }
+    if (existingGate.requirement === "optional") {
       finalGates[existingIndex] = {
         ...existingGate,
         requirement: "required",

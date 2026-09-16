@@ -371,14 +371,6 @@ it("keeps required Gate semantics fail-closed and preserves aggregate commands",
   const mechanicallyRequired: TrustedGate = {
     ...approvedOptional,
     requirement: "required",
-    status: "FAIL",
-    source: "package-script",
-    evidence: {
-      kind: "managed",
-      path: "evidence/mechanical-gate.txt",
-      mediaType: "text/plain",
-    },
-    reason: "Mechanically required Gate record.",
   };
   const upgraded = unwrap(
     buildFinalGateSet([approvedOptional], [mechanicallyRequired]),
@@ -394,6 +386,26 @@ it("keeps required Gate semantics fail-closed and preserves aggregate commands",
   expect(alreadyRequired).toEqual([
     { ...approvedOptional, requirement: "required" },
   ]);
+
+  for (const conflictingGate of [
+    { ...mechanicallyRequired, status: "FAIL" as const },
+    { ...mechanicallyRequired, source: "package-script" as const },
+    {
+      ...mechanicallyRequired,
+      evidence: {
+        kind: "managed" as const,
+        path: "evidence/different-gate.txt",
+        mediaType: "text/plain" as const,
+      },
+    },
+    { ...mechanicallyRequired, reason: "Different Gate record." },
+  ]) {
+    expect(buildFinalGateSet([approvedOptional], [conflictingGate])).toEqual({
+      valid: false,
+      errors: ["Conflicting Gate record: package-check"],
+    });
+  }
+
   expect(
     unwrap(buildFinalGateSet(approved, [])).some(
       (gate) => gate.requirement === "optional",
