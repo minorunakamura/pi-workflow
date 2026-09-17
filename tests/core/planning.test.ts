@@ -93,12 +93,14 @@ it("validates the bounded Planning Coordinator input contract", () => {
 it("requires both managed planning artifact references for a completed result", () => {
   const result = completedResult();
   expect(validatePlanningCoordinatorResult(result).valid).toBe(true);
-  expect(
-    validatePlanningCoordinatorResult({
-      ...result,
-      planningHandoffRef: undefined,
-    }).valid,
-  ).toBe(false);
+  const missingHandoffRef = { ...result };
+  Reflect.deleteProperty(missingHandoffRef, "planningHandoffRef");
+  expect(validatePlanningCoordinatorResult(missingHandoffRef).valid).toBe(
+    false,
+  );
+  const missingPlanRef = { ...result };
+  Reflect.deleteProperty(missingPlanRef, "planArtifactRef");
+  expect(validatePlanningCoordinatorResult(missingPlanRef).valid).toBe(false);
   expect(
     validatePlanningCoordinatorResult({
       ...result,

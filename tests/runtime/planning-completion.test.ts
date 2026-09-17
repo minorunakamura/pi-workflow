@@ -251,7 +251,7 @@ it("fails closed when a completed planning result is missing an artifact ref", (
     sessionId: "session-1",
     state: "complete",
     success: true,
-    structuredOutput: result,
+    results: [{ structuredOutput: result }],
   });
 
   expect(registry.getState()).toMatchObject({
