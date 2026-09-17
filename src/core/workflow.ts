@@ -110,6 +110,8 @@ export interface RootWorkflowState {
   workflowId: WorkflowId;
   workflowType: WorkflowType;
   phase: WorkflowPhase;
+  planResubmissionCount: number;
+  codeReviewChangeCycleCount: number;
   planningRunId?: RunId;
   planningStatus: PlanningStatus;
   planningHandoffRef?: ArtifactRef;
@@ -129,6 +131,16 @@ const UUID_BODY =
 const UUID_PATTERN = new RegExp(`^${UUID_BODY}$`, "u");
 const WORKFLOW_ID_PATTERN = new RegExp(`^wf-${UUID_BODY}$`, "u");
 const PLAN_HASH_PATTERN = /^[0-9a-f]{64}$/u;
+const MAX_BOUNDED_TRANSITION_COUNT = 1;
+
+function isBoundedTransitionCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= MAX_BOUNDED_TRANSITION_COUNT
+  );
+}
 
 function isWorkflowCommand(
   value: string,
@@ -395,6 +407,8 @@ export function createInitialWorkflowState(
     workflowId,
     workflowType,
     phase: "IDLE",
+    planResubmissionCount: 0,
+    codeReviewChangeCycleCount: 0,
     planningStatus: "NOT_STARTED",
     approval: null,
     implementationStatus: "NOT_STARTED",
@@ -407,6 +421,8 @@ const ROOT_STATE_KEYS = [
   "workflowId",
   "workflowType",
   "phase",
+  "planResubmissionCount",
+  "codeReviewChangeCycleCount",
   "planningRunId",
   "planningStatus",
   "planningHandoffRef",
@@ -512,6 +528,8 @@ function hasValidRootWorkflowValues(
     isValidWorkflowId(state.workflowId) &&
     isWorkflowType(state.workflowType) &&
     isWorkflowPhase(state.phase) &&
+    isBoundedTransitionCount(state.planResubmissionCount) &&
+    isBoundedTransitionCount(state.codeReviewChangeCycleCount) &&
     isPlanningStatus(state.planningStatus) &&
     isImplementationStatus(state.implementationStatus) &&
     isApprovalValue(state.approval) &&
@@ -664,72 +682,52 @@ export type RootStateTransitionResult =
   | { valid: true; state: RootWorkflowState }
   | { valid: false; reason: string };
 
-function updateStateForPhase(
+function isStep3Transition(
+  from: WorkflowPhase,
+  to: WorkflowPhase,
+): to is "PLANNING" | "FAILED" | "CANCELLED" {
+  return (
+    (from === "IDLE" && to === "PLANNING") ||
+    (isActivePhase(from) && (to === "FAILED" || to === "CANCELLED"))
+  );
+}
+
+function updateStateForStep3Transition(
   state: RootWorkflowState,
-  phase: WorkflowPhase,
-  options: PhaseTransitionOptions,
+  phase: "PLANNING" | "FAILED" | "CANCELLED",
 ): RootWorkflowState {
   const next: RootWorkflowState = { ...state, phase };
-
-  switch (phase) {
-    case "PLANNING":
-      next.planningStatus = "RUNNING";
-      next.implementationStatus = "NOT_STARTED";
-      next.finalStatus = "NONE";
-      break;
-    case "PLAN_REVIEW":
-      next.planningStatus =
-        options.kind === "plan-resubmission" ? "RUNNING" : "COMPLETED";
-      next.implementationStatus = "NOT_STARTED";
-      next.finalStatus = "NONE";
-      break;
-    case "IMPLEMENTING":
-      next.planningStatus = "COMPLETED";
-      next.implementationStatus = "RUNNING";
-      next.finalStatus = "NONE";
-      break;
-    case "CODE_REVIEW":
-      next.planningStatus = "COMPLETED";
-      next.implementationStatus = "COMPLETED";
-      next.finalStatus = "NONE";
-      break;
-    case "READY_FOR_MERGE":
-      next.planningStatus = "COMPLETED";
-      next.implementationStatus = "COMPLETED";
-      next.finalStatus = "READY_FOR_MERGE";
-      break;
-    case "FAILED":
-      if (next.planningStatus === "RUNNING") {
-        next.planningStatus = "FAILED";
-      }
-      if (next.implementationStatus === "RUNNING") {
-        next.implementationStatus = "FAILED";
-      }
-      next.finalStatus = "FAILED";
-      break;
-    case "CANCELLED":
-      if (next.planningStatus === "RUNNING") {
-        next.planningStatus = "CANCELLED";
-      }
-      if (next.implementationStatus === "RUNNING") {
-        next.implementationStatus = "CANCELLED";
-      }
-      next.finalStatus = "CANCELLED";
-      break;
-    case "IDLE":
-      next.planningStatus = "NOT_STARTED";
-      next.implementationStatus = "NOT_STARTED";
-      next.finalStatus = "NONE";
-      break;
+  if (phase === "PLANNING") {
+    next.planningStatus = "RUNNING";
+    next.implementationStatus = "NOT_STARTED";
+    next.finalStatus = "NONE";
+    return next;
   }
 
+  if (phase === "FAILED") {
+    if (next.planningStatus === "RUNNING") {
+      next.planningStatus = "FAILED";
+    }
+    if (next.implementationStatus === "RUNNING") {
+      next.implementationStatus = "FAILED";
+    }
+    next.finalStatus = "FAILED";
+    return next;
+  }
+
+  if (next.planningStatus === "RUNNING") {
+    next.planningStatus = "CANCELLED";
+  }
+  if (next.implementationStatus === "RUNNING") {
+    next.implementationStatus = "CANCELLED";
+  }
+  next.finalStatus = "CANCELLED";
   return next;
 }
 
 export function transitionRootWorkflowState(
   value: unknown,
   to: unknown,
-  options: PhaseTransitionOptions = {},
 ): RootStateTransitionResult {
   const current = validateRootWorkflowState(value);
   if (!current.valid) {
@@ -739,12 +737,18 @@ export function transitionRootWorkflowState(
     return { valid: false, reason: "Unknown workflow phase" };
   }
 
-  const transition = transitionPhase(current.value.phase, to, options);
+  const transition = transitionPhase(current.value.phase, to);
   if (!transition.valid) {
     return transition;
   }
+  if (!isStep3Transition(current.value.phase, to)) {
+    return {
+      valid: false,
+      reason: "Phase advance requires a later Step precondition",
+    };
+  }
 
-  const next = updateStateForPhase(current.value, to, options);
+  const next = updateStateForStep3Transition(current.value, to);
   const validation = validateRootWorkflowState(next);
   return validation.valid
     ? { valid: true, state: validation.value }

@@ -3,11 +3,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   canStartWorkflow,
   createInitialWorkflowState,
+  isActivePhase,
   isValidWorkflowId,
   isWorkflowType,
   transitionRootWorkflowState,
   validateRootWorkflowState,
-  type PhaseTransitionOptions,
   type RootWorkflowState,
   type WorkflowPhase,
 } from "../core/index.ts";
@@ -48,7 +48,7 @@ function isLifecycleEntry(value: unknown): value is {
   );
 }
 
-export function restoreRootWorkflowState(
+function readLatestRootWorkflowState(
   entries: readonly unknown[],
 ): RootWorkflowState | undefined {
   let latest: RootWorkflowState | undefined;
@@ -62,6 +62,17 @@ export function restoreRootWorkflowState(
     }
   }
   return latest;
+}
+
+export function restoreRootWorkflowState(
+  entries: readonly unknown[],
+): RootWorkflowState | undefined {
+  const latest = readLatestRootWorkflowState(entries);
+  if (latest === undefined || !isActivePhase(latest.phase)) {
+    return latest;
+  }
+  const stale = transitionRootWorkflowState(latest, "FAILED");
+  return stale.valid ? stale.state : undefined;
 }
 
 export function persistRootWorkflowState(
@@ -85,8 +96,36 @@ export class RootWorkflowRegistry {
   }
 
   public restore(entries: readonly unknown[]): RootWorkflowState | undefined {
-    this.state = restoreRootWorkflowState(entries);
+    const restored = readLatestRootWorkflowState(entries);
+    if (restored === undefined || !isActivePhase(restored.phase)) {
+      this.state = restored;
+      return this.getState();
+    }
+
+    const stale = transitionRootWorkflowState(restored, "FAILED");
+    if (!stale.valid) {
+      this.state = undefined;
+      return undefined;
+    }
+    this.state = stale.state;
+    persistRootWorkflowState(this.appendEntry, stale.state);
     return this.getState();
+  }
+
+  public shutdown(): void {
+    const current = this.state;
+    try {
+      if (current !== undefined && isActivePhase(current.phase)) {
+        const stale = transitionRootWorkflowState(current, "FAILED");
+        if (!stale.valid) {
+          throw new Error(stale.reason);
+        }
+        this.state = stale.state;
+        persistRootWorkflowState(this.appendEntry, stale.state);
+      }
+    } finally {
+      this.clear();
+    }
   }
 
   public clear(): void {
@@ -116,14 +155,11 @@ export class RootWorkflowRegistry {
     }
   }
 
-  public transition(
-    to: WorkflowPhase,
-    options: PhaseTransitionOptions = {},
-  ): RegistryTransitionResult {
+  public transition(to: WorkflowPhase): RegistryTransitionResult {
     if (this.state === undefined) {
       return { transitioned: false, reason: "No Root workflow exists" };
     }
-    const transition = transitionRootWorkflowState(this.state, to, options);
+    const transition = transitionRootWorkflowState(this.state, to);
     if (!transition.valid) {
       return { transitioned: false, reason: transition.reason };
     }

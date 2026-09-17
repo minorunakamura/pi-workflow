@@ -3,8 +3,11 @@ import { expect, it } from "vitest";
 import {
   createInitialWorkflowState,
   createWorkflowId,
+  transitionPhase,
   transitionRootWorkflowState,
+  validateRootWorkflowState,
   type RootWorkflowState,
+  type WorkflowPhase,
 } from "../../src/core/index.ts";
 import {
   ROOT_LIFECYCLE_ENTRY_TYPE,
@@ -14,107 +17,278 @@ import {
 } from "../../src/runtime/root-lifecycle.ts";
 
 const UUID = "00000000-0000-4000-8000-000000000001";
+const SECOND_UUID = "00000000-0000-4000-8000-000000000002";
 
-function activeState(): RootWorkflowState {
-  const initial = createInitialWorkflowState(createWorkflowId(UUID), "feature");
-  const result = transitionRootWorkflowState(initial, "PLANNING");
-  if (!result.valid) {
-    throw new Error(result.reason);
-  }
-  return result.state;
+type LifecycleEntry = {
+  type: "custom";
+  customType: typeof ROOT_LIFECYCLE_ENTRY_TYPE;
+  data: unknown;
+};
+
+function initialState(): RootWorkflowState {
+  return createInitialWorkflowState(createWorkflowId(UUID), "feature");
 }
 
-it("persists only the compact Root state and restores the latest valid branch snapshot", () => {
-  const entries: Array<{ type: string; customType: string; data: unknown }> =
-    [];
-  const registry = new RootWorkflowRegistry((customType, data) => {
-    entries.push({ type: "custom", customType, data });
-  });
+function stateAt(phase: WorkflowPhase): RootWorkflowState {
+  const state = initialState();
+  switch (phase) {
+    case "IDLE":
+      return state;
+    case "PLANNING":
+      return { ...state, phase, planningStatus: "RUNNING" };
+    case "PLAN_REVIEW":
+      return { ...state, phase, planningStatus: "COMPLETED" };
+    case "IMPLEMENTING":
+      return {
+        ...state,
+        phase,
+        planningStatus: "COMPLETED",
+        implementationStatus: "RUNNING",
+      };
+    case "CODE_REVIEW":
+      return {
+        ...state,
+        phase,
+        planningStatus: "COMPLETED",
+        implementationStatus: "COMPLETED",
+      };
+    case "READY_FOR_MERGE":
+      return {
+        ...state,
+        phase,
+        planningStatus: "COMPLETED",
+        implementationStatus: "COMPLETED",
+        finalStatus: "READY_FOR_MERGE",
+      };
+    case "FAILED":
+      return { ...state, phase, finalStatus: "FAILED" };
+    case "CANCELLED":
+      return { ...state, phase, finalStatus: "CANCELLED" };
+    default:
+      throw new Error("Unsupported phase");
+  }
+}
+
+function entry(data: RootWorkflowState): LifecycleEntry {
+  return {
+    type: "custom",
+    customType: ROOT_LIFECYCLE_ENTRY_TYPE,
+    data,
+  };
+}
+
+function persistedEntries() {
+  const entries: LifecycleEntry[] = [];
+  return {
+    entries,
+    append: (customType: string, data?: unknown): void => {
+      if (customType === ROOT_LIFECYCLE_ENTRY_TYPE) {
+        entries.push({
+          type: "custom",
+          customType: ROOT_LIFECYCLE_ENTRY_TYPE,
+          data,
+        });
+      }
+    },
+  };
+}
+
+it("persists only compact Root state and restores the latest valid branch snapshot", () => {
+  const store = persistedEntries();
+  const registry = new RootWorkflowRegistry(store.append);
 
   const started = registry.start(createWorkflowId(UUID), "feature");
   expect(started.started).toBe(true);
   if (!started.started) {
     return;
   }
-  expect(entries).toHaveLength(1);
-  expect(entries[0]).toEqual({
-    type: "custom",
-    customType: ROOT_LIFECYCLE_ENTRY_TYPE,
-    data: started.state,
-  });
+  expect(store.entries).toHaveLength(1);
+  expect(store.entries[0]?.data).toEqual(started.state);
   expect(Object.hasOwn(started.state, "request")).toBe(false);
   expect(Object.hasOwn(started.state, "cwd")).toBe(false);
 
   const restored = restoreRootWorkflowState([
-    entries[0],
-    {
-      type: "custom",
-      customType: ROOT_LIFECYCLE_ENTRY_TYPE,
-      data: { ...started.state, request: "raw request" },
-    },
+    store.entries[0],
+    entry(Object.assign({}, started.state, { request: "raw request" })),
     { type: "custom", customType: "other-extension", data: "ignored" },
   ]);
-  expect(restored).toEqual(started.state);
-});
-
-it("advances the Root lifecycle and blocks transitions after a terminal state", () => {
-  const registry = new RootWorkflowRegistry(() => undefined);
-  const started = registry.start(createWorkflowId(UUID), "bug");
-  expect(started.started).toBe(true);
-
-  expect(registry.transition("PLAN_REVIEW")).toMatchObject({
-    transitioned: true,
-    state: { phase: "PLAN_REVIEW", planningStatus: "COMPLETED" },
-  });
-  expect(registry.transition("IMPLEMENTING")).toMatchObject({
-    transitioned: true,
-    state: { phase: "IMPLEMENTING", implementationStatus: "RUNNING" },
-  });
-  expect(registry.transition("CODE_REVIEW")).toMatchObject({
-    transitioned: true,
-    state: { phase: "CODE_REVIEW", implementationStatus: "COMPLETED" },
-  });
-  expect(registry.transition("READY_FOR_MERGE")).toMatchObject({
-    transitioned: true,
-    state: { phase: "READY_FOR_MERGE", finalStatus: "READY_FOR_MERGE" },
-  });
-  expect(registry.transition("FAILED")).toEqual({
-    transitioned: false,
-    reason: "Invalid transition: READY_FOR_MERGE -> FAILED",
+  expect(restored).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
   });
 });
 
-it("allows one active workflow per registry but does not create a cross-session lock", () => {
+it("allows IDLE to PLANNING and active states to fail or cancel", () => {
+  const failed = new RootWorkflowRegistry(() => undefined);
+  expect(failed.start(createWorkflowId(UUID), "feature").started).toBe(true);
+  expect(failed.transition("FAILED")).toMatchObject({
+    transitioned: true,
+    state: { phase: "FAILED", finalStatus: "FAILED" },
+  });
+
+  const cancelled = new RootWorkflowRegistry(() => undefined);
+  expect(cancelled.start(createWorkflowId(SECOND_UUID), "bug").started).toBe(
+    true,
+  );
+  expect(cancelled.transition("CANCELLED")).toMatchObject({
+    transitioned: true,
+    state: { phase: "CANCELLED", finalStatus: "CANCELLED" },
+  });
+});
+
+it("rejects condition-blind phase advances in Root state mutation", () => {
+  expect(
+    transitionRootWorkflowState(stateAt("PLAN_REVIEW"), "IMPLEMENTING"),
+  ).toEqual({
+    valid: false,
+    reason: "Phase advance requires a later Step precondition",
+  });
+  expect(
+    transitionRootWorkflowState(stateAt("IMPLEMENTING"), "CODE_REVIEW"),
+  ).toEqual({
+    valid: false,
+    reason: "Phase advance requires a later Step precondition",
+  });
+  expect(
+    transitionRootWorkflowState(stateAt("CODE_REVIEW"), "READY_FOR_MERGE"),
+  ).toEqual({
+    valid: false,
+    reason: "Phase advance requires a later Step precondition",
+  });
+  expect(
+    transitionRootWorkflowState(stateAt("PLAN_REVIEW"), "PLAN_REVIEW"),
+  ).toEqual({
+    valid: false,
+    reason: "Invalid transition: PLAN_REVIEW -> PLAN_REVIEW",
+  });
+  expect(
+    transitionRootWorkflowState(stateAt("READY_FOR_MERGE"), "FAILED").valid,
+  ).toBe(false);
+
+  expect(transitionPhase("PLAN_REVIEW", "IMPLEMENTING").valid).toBe(true);
+});
+
+it("blocks terminal mutation and does not create a cross-session lock", () => {
   const first = new RootWorkflowRegistry(() => undefined);
   const second = new RootWorkflowRegistry(() => undefined);
 
   expect(first.start(createWorkflowId(UUID), "feature").started).toBe(true);
-  expect(
-    first.start(
-      createWorkflowId("00000000-0000-4000-8000-000000000002"),
-      "bug",
-    ),
-  ).toEqual({
-    started: false,
-    reason: "ACTIVE_WORKFLOW_EXISTS",
+  expect(first.transition("PLANNING")).toEqual({
+    transitioned: false,
+    reason: "Invalid transition: PLANNING -> PLANNING",
   });
-  expect(
-    second.start(
-      createWorkflowId("00000000-0000-4000-8000-000000000002"),
-      "bug",
-    ).started,
-  ).toBe(true);
+  expect(first.transition("FAILED").transitioned).toBe(true);
+  expect(first.transition("PLANNING").transitioned).toBe(false);
+  expect(second.start(createWorkflowId(SECOND_UUID), "bug").started).toBe(true);
 });
 
-it("refuses invalid snapshots and invalid persistence input", () => {
-  const state = activeState();
+it("restores terminal snapshots and converts active snapshots to persisted stale failure", () => {
+  const activeStore = persistedEntries();
+  const active = new RootWorkflowRegistry(activeStore.append);
+  expect(active.start(createWorkflowId(UUID), "feature").started).toBe(true);
+
+  const restarted = new RootWorkflowRegistry(activeStore.append);
+  const restored = restarted.restore(activeStore.entries);
+  expect(restored).toMatchObject({ phase: "FAILED", finalStatus: "FAILED" });
+  expect(activeStore.entries).toHaveLength(2);
+  expect(activeStore.entries.at(-1)?.data).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  expect(restarted.start(createWorkflowId(SECOND_UUID), "chore").started).toBe(
+    true,
+  );
+
+  const terminalStore = persistedEntries();
+  const terminal = new RootWorkflowRegistry(terminalStore.append);
+  terminalStore.entries.push(entry(stateAt("FAILED")));
+  expect(terminal.restore(terminalStore.entries)).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  expect(terminalStore.entries).toHaveLength(1);
+});
+
+it("persists stale failure before clearing the registry on shutdown", () => {
+  const store = persistedEntries();
+  const registry = new RootWorkflowRegistry(store.append);
+  expect(registry.start(createWorkflowId(UUID), "feature").started).toBe(true);
+
+  registry.shutdown();
+
+  expect(registry.getState()).toBeUndefined();
+  expect(store.entries.at(-1)?.data).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+});
+
+it("fails closed when stale failure persistence fails", () => {
+  let appendCount = 0;
+  const registry = new RootWorkflowRegistry((customType, data) => {
+    appendCount += 1;
+    if (appendCount > 1) {
+      throw new Error("persistence failed");
+    }
+    void customType;
+    void data;
+  });
+  expect(registry.start(createWorkflowId(UUID), "feature").started).toBe(true);
+
+  expect(() => registry.shutdown()).toThrow("persistence failed");
+  expect(registry.getState()).toBeUndefined();
+});
+
+it("keeps bounded transition counters at zero or one across validation and persistence", () => {
+  const initial = initialState();
+  expect(initial.planResubmissionCount).toBe(0);
+  expect(initial.codeReviewChangeCycleCount).toBe(0);
+  expect(
+    validateRootWorkflowState({
+      ...initial,
+      planResubmissionCount: 1,
+      codeReviewChangeCycleCount: 1,
+    }).valid,
+  ).toBe(true);
+
+  for (const invalidCount of [-1, 2, 1.5, Number.NaN, "1"]) {
+    expect(
+      validateRootWorkflowState({
+        ...initial,
+        planResubmissionCount: invalidCount,
+      }).valid,
+    ).toBe(false);
+    expect(
+      validateRootWorkflowState({
+        ...initial,
+        codeReviewChangeCycleCount: invalidCount,
+      }).valid,
+    ).toBe(false);
+  }
+
+  const store = persistedEntries();
+  const counted = {
+    ...initial,
+    planResubmissionCount: 1,
+    codeReviewChangeCycleCount: 1,
+  };
+  persistRootWorkflowState(store.append, counted);
+  const registry = new RootWorkflowRegistry(store.append);
+  expect(registry.restore(store.entries)).toMatchObject(counted);
+  expect(
+    transitionRootWorkflowState(stateAt("PLAN_REVIEW"), "IMPLEMENTING"),
+  ).toEqual({
+    valid: false,
+    reason: "Phase advance requires a later Step precondition",
+  });
+});
+
+it("refuses invalid snapshots and raw content", () => {
+  const state = initialState();
   expect(
     restoreRootWorkflowState([
-      {
-        type: "custom",
-        customType: ROOT_LIFECYCLE_ENTRY_TYPE,
-        data: { ...state, approval: "yes" },
-      },
+      entry({ ...state, planResubmissionCount: 2 }),
+      entry(Object.assign({}, state, { request: "raw request" })),
     ]),
   ).toBeUndefined();
   expect(() =>
