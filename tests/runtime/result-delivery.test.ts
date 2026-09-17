@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 
 import { registerCommands } from "../../src/commands/index.ts";
+import { registerSubagentLifecycle } from "../../src/events/index.ts";
 import {
   SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT,
   SUBAGENT_RESULT_INTERCOM_EVENT,
@@ -11,8 +12,13 @@ import {
   preflightResultDelivery,
   registerResultDeliveryObservation,
 } from "../../src/runtime/result-delivery.ts";
+import { createRunId, createWorkflowId } from "../../src/core/index.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
-import type { SubagentRpcEventBus } from "../../src/runtime/subagents-rpc.ts";
+import { startWorkflow } from "../../src/runtime/start-workflow.ts";
+import {
+  SubagentRpcAdapter,
+  type SubagentRpcEventBus,
+} from "../../src/runtime/subagents-rpc.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 class FakeEventBus implements SubagentRpcEventBus {
@@ -163,7 +169,7 @@ it("refuses workflow start before state creation when the host prerequisite is u
   ]);
 });
 
-it("accepts only a matching acknowledged result delivery", () => {
+it("accepts an early matching acknowledgement and ignores an unknown duplicate", () => {
   const events = new FakeEventBus();
   const failures: Array<{ runId: string; status: ResultDeliveryStatus }> = [];
   const observation = registerResultDeliveryObservation(events, {
@@ -172,13 +178,17 @@ it("accepts only a matching acknowledged result delivery", () => {
     onUntrustedCompletion: (runId, status) => failures.push({ runId, status }),
   });
 
-  events.emit(SUBAGENT_RESULT_INTERCOM_EVENT, resultEvent());
   events.emit(SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT, {
     requestId: "foreign-request",
     delivered: true,
   });
+  events.emit(SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT, {
+    requestId: "delivery-request",
+    delivered: true,
+  });
   expect(observation.statusFor("coordinator-run")).toBe("missing");
 
+  events.emit(SUBAGENT_RESULT_INTERCOM_EVENT, resultEvent());
   events.emit(SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT, {
     requestId: "delivery-request",
     delivered: true,
@@ -223,6 +233,36 @@ it("fails closed once for a negative or conflicting acknowledgement", () => {
   observation.dispose();
 });
 
+it("fails closed when completion evidence contradicts a matching acknowledgement", () => {
+  const events = new FakeEventBus();
+  const failures: Array<{ runId: string; status: ResultDeliveryStatus }> = [];
+  const observation = registerResultDeliveryObservation(events, {
+    sessionId: "session-1",
+    isRelevantRun: () => true,
+    onUntrustedCompletion: (runId, status) => failures.push({ runId, status }),
+  });
+
+  events.emit(SUBAGENT_RESULT_INTERCOM_EVENT, resultEvent());
+  events.emit(SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT, {
+    requestId: "delivery-request",
+    delivered: true,
+  });
+  events.emit("subagent:async-complete", {
+    ...completionEvent(),
+    intercomDelivered: false,
+  });
+  events.emit("subagent:async-complete", {
+    ...completionEvent(),
+    intercomDelivered: false,
+    success: false,
+  });
+
+  expect(observation.statusFor("coordinator-run")).toBe("conflict");
+  expect(observation.isCompletionTrusted("coordinator-run")).toBe(false);
+  expect(failures).toEqual([{ runId: "coordinator-run", status: "conflict" }]);
+  observation.dispose();
+});
+
 it("fails a completion with missing acknowledgement and disposes on reload", () => {
   const events = new FakeEventBus();
   const failures: Array<{ runId: string; status: ResultDeliveryStatus }> = [];
@@ -247,4 +287,153 @@ it("fails a completion with missing acknowledgement and disposes on reload", () 
     delivered: true,
   });
   expect(observation.statusFor("coordinator-run")).toBe("missing");
+});
+
+it("rejects when the mandatory preflight dependency is omitted", () => {
+  const registry = new RootWorkflowRegistry(() => undefined);
+  const notifications: Array<{ message: string; type: string }> = [];
+  const result = Reflect.apply(startWorkflow, undefined, [
+    registry,
+    "feature",
+    "must not start",
+    commandContext(notifications),
+  ]);
+
+  expect(result).toMatchObject({
+    started: false,
+    reason: "RESULT_DELIVERY_PREREQUISITE",
+  });
+  expect(registry.getState()).toBeUndefined();
+  expect(notifications).toEqual([
+    {
+      message:
+        "pi-subagents resultDelivery host prerequisite is not configured.",
+      type: "error",
+    },
+  ]);
+});
+
+it("rejects a throwing mandatory preflight before creating state", () => {
+  const registry = new RootWorkflowRegistry(() => undefined);
+  const notifications: Array<{ message: string; type: string }> = [];
+
+  const result = startWorkflow(
+    registry,
+    "feature",
+    "must not start",
+    commandContext(notifications),
+    () => {
+      throw new Error("preflight unavailable");
+    },
+  );
+
+  expect(result).toEqual({
+    started: false,
+    reason: "RESULT_DELIVERY_PREREQUISITE",
+  });
+  expect(registry.getState()).toBeUndefined();
+  expect(notifications).toEqual([
+    {
+      message:
+        "pi-subagents resultDelivery host prerequisite is not configured.",
+      type: "error",
+    },
+  ]);
+});
+
+it("uses the resultDelivery snapshot from runtime initialization until reload", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-result-delivery-"));
+  const configPath = join(root, "config.json");
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      intercomBridge: { mode: "always", resultDelivery: false },
+    }),
+    "utf8",
+  );
+  const events = new FakeEventBus();
+  let reads = 0;
+  const readAtInitialization = () => {
+    reads += 1;
+    return preflightResultDelivery({ configPath });
+  };
+  const staleRuntime = new SubagentRpcAdapter(events, readAtInitialization);
+  let reloadedRuntime: SubagentRpcAdapter | undefined;
+
+  try {
+    const beforeReload = new RootWorkflowRegistry(() => undefined);
+    expect(
+      startWorkflow(
+        beforeReload,
+        "feature",
+        "start before config change",
+        commandContext([]),
+        () => staleRuntime.preflightResultDelivery(),
+      ).started,
+    ).toBe(false);
+
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        intercomBridge: { mode: "always", resultDelivery: true },
+      }),
+      "utf8",
+    );
+
+    const sameRuntime = new RootWorkflowRegistry(() => undefined);
+    expect(reads).toBe(1);
+    expect(
+      startWorkflow(
+        sameRuntime,
+        "feature",
+        "start without reload",
+        commandContext([]),
+        () => staleRuntime.preflightResultDelivery(),
+      ).started,
+    ).toBe(false);
+
+    const freshRuntime = new SubagentRpcAdapter(events, readAtInitialization);
+    reloadedRuntime = freshRuntime;
+    expect(reads).toBe(2);
+    const afterReload = new RootWorkflowRegistry(() => undefined);
+    expect(
+      startWorkflow(
+        afterReload,
+        "feature",
+        "start after reload",
+        commandContext([]),
+        () => freshRuntime.preflightResultDelivery(),
+      ).started,
+    ).toBe(true);
+  } finally {
+    reloadedRuntime?.dispose();
+    staleRuntime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("fails the Root phase closed on contradictory completion evidence", () => {
+  const events = new FakeEventBus();
+  const registry = new RootWorkflowRegistry(() => undefined);
+  expect(registry.start(createWorkflowId(), "feature").started).toBe(true);
+  expect(
+    registry.setPlanningRunId(createRunId("coordinator-run")).transitioned,
+  ).toBe(true);
+  const dispose = registerSubagentLifecycle({ events }, registry, "session-1");
+
+  events.emit(SUBAGENT_RESULT_INTERCOM_EVENT, resultEvent());
+  events.emit(SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT, {
+    requestId: "delivery-request",
+    delivered: true,
+  });
+  events.emit("subagent:async-complete", {
+    ...completionEvent(),
+    intercomDelivered: false,
+  });
+
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  dispose();
 });

@@ -345,13 +345,26 @@ export interface SubagentRpcRequestOptions {
 }
 
 export class SubagentRpcAdapter {
+  private readonly resultDeliverySnapshot: ResultDeliveryPreflightResult;
   private ready: SubagentRpcReadyPayload | undefined;
   private disposed = false;
   private readonly readyWaiters = new Set<ReadyWaiter>();
   private readonly pendingRequests = new Map<string, PendingRequest>();
   private readonly removeReadyListener: () => void;
 
-  public constructor(private readonly events: SubagentRpcEventBus) {
+  public constructor(
+    private readonly events: SubagentRpcEventBus,
+    resultDeliveryPreflight: () => ResultDeliveryPreflightResult = preflightHostResultDelivery,
+  ) {
+    try {
+      this.resultDeliverySnapshot = resultDeliveryPreflight();
+    } catch {
+      this.resultDeliverySnapshot = {
+        ready: false,
+        configPath: "",
+        reason: "UNREADABLE_CONFIG",
+      };
+    }
     this.removeReadyListener = events.on(SUBAGENT_RPC_READY_EVENT, (value) => {
       const normalized = normalizeReady(value);
       if (normalized === undefined) return;
@@ -367,7 +380,14 @@ export class SubagentRpcAdapter {
   }
 
   public preflightResultDelivery(): ResultDeliveryPreflightResult {
-    return preflightHostResultDelivery();
+    if (this.disposed) {
+      return {
+        ready: false,
+        configPath: "",
+        reason: "UNREADABLE_CONFIG",
+      };
+    }
+    return structuredClone(this.resultDeliverySnapshot);
   }
 
   public async request(

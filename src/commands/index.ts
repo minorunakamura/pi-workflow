@@ -15,33 +15,23 @@ export type PlanningCoordinatorLauncher = {
     request: WorkflowRequest,
   ) => Promise<PlanningCoordinatorLaunchResult>;
   stop: (runId: string) => Promise<unknown>;
-  preflightResultDelivery?: () => ResultDeliveryPreflightResult;
+  preflightResultDelivery: () => ResultDeliveryPreflightResult;
 };
 
 export function registerCommands(
   pi: WorkflowCommandRegistration,
   registry: RootWorkflowRegistry,
-  planningCoordinator?: PlanningCoordinatorLauncher,
+  planningCoordinator: PlanningCoordinatorLauncher,
 ): void {
   const start: StartWorkflowCommand = async (
     workflowType,
     request,
     context,
   ) => {
-    const preflightResultDelivery =
-      planningCoordinator?.preflightResultDelivery;
-    const result = startWorkflow(
-      registry,
-      workflowType,
-      request,
-      context,
-      preflightResultDelivery === undefined
-        ? undefined
-        : {
-            preflightResultDelivery: () => preflightResultDelivery(),
-          },
+    const result = startWorkflow(registry, workflowType, request, context, () =>
+      planningCoordinator.preflightResultDelivery(),
     );
-    if (!result.started || planningCoordinator === undefined) return;
+    if (!result.started) return;
 
     try {
       const launch = await planningCoordinator.spawnPlanningCoordinator(

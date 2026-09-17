@@ -44,16 +44,12 @@ function failureMessage(reason: WorkflowStartFailureReason): string {
   return FAILURE_MESSAGES[reason];
 }
 
-export interface WorkflowStartOptions {
-  preflightResultDelivery?: () => ResultDeliveryPreflightResult;
-}
-
 export function startWorkflow(
   registry: RootWorkflowRegistry,
   workflowType: WorkflowType,
   request: string,
   context: WorkflowStartContext,
-  options: WorkflowStartOptions = {},
+  preflightResultDelivery: () => ResultDeliveryPreflightResult,
 ): WorkflowStartResult {
   const normalizedRequest = request.trim();
   if (normalizedRequest.length === 0) {
@@ -62,22 +58,21 @@ export function startWorkflow(
     return { started: false, reason };
   }
 
-  if (options.preflightResultDelivery !== undefined) {
-    let preflight: ResultDeliveryPreflightResult;
-    try {
-      preflight = options.preflightResultDelivery();
-    } catch {
-      preflight = {
-        ready: false,
-        configPath: "",
-        reason: "UNREADABLE_CONFIG",
-      };
-    }
-    if (!preflight.ready) {
-      const reason = "RESULT_DELIVERY_PREREQUISITE" as const;
-      context.ui.notify(failureMessage(reason), "error");
-      return { started: false, reason };
-    }
+  let prerequisiteReady = false;
+  try {
+    const preflight = preflightResultDelivery();
+    prerequisiteReady =
+      typeof preflight.ready === "boolean" &&
+      preflight.ready &&
+      typeof preflight.configPath === "string" &&
+      preflight.configPath.trim().length > 0;
+  } catch {
+    // An unavailable preflight is not permission to start.
+  }
+  if (!prerequisiteReady) {
+    const reason = "RESULT_DELIVERY_PREREQUISITE" as const;
+    context.ui.notify(failureMessage(reason), "error");
+    return { started: false, reason };
   }
 
   const workflowRequest: WorkflowRequest = {

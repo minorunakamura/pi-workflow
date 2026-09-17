@@ -11,6 +11,7 @@ import { registerWfFeatureCommand } from "../../src/commands/wf-feature.ts";
 import { registerWfHotfixCommand } from "../../src/commands/wf-hotfix.ts";
 import { createRunId, type WorkflowType } from "../../src/core/index.ts";
 import type { PlanningCoordinatorLaunchResult } from "../../src/runtime/subagents-rpc.ts";
+import type { ResultDeliveryPreflightResult } from "../../src/runtime/result-delivery.ts";
 import { startWorkflow } from "../../src/runtime/start-workflow.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
 
@@ -38,6 +39,10 @@ function commandRegistration(): {
       },
     },
   };
+}
+
+function readyResultDeliveryPreflight(): ResultDeliveryPreflightResult {
+  return { ready: true, configPath: "/config.json" };
 }
 
 function context(
@@ -113,6 +118,7 @@ it("starts the Root workflow with the trimmed request and command cwd", () => {
     "bug",
     "reproduce the regression",
     context("/repo/project", notifications),
+    readyResultDeliveryPreflight,
   );
 
   expect(result.started).toBe(true);
@@ -147,6 +153,7 @@ it("starts the public planning Coordinator and records its opaque run ID", async
       return launch;
     },
     async stop() {},
+    preflightResultDelivery: readyResultDeliveryPreflight,
   });
 
   await commands
@@ -181,6 +188,7 @@ it("stops a spawned planning run once when run ID attachment fails", async () =>
       stopped.push(runId);
       throw new Error("stop timeout");
     },
+    preflightResultDelivery: readyResultDeliveryPreflight,
   });
 
   await commands
@@ -209,6 +217,7 @@ it("does not stop a planning run after a successful attachment", async () => {
     async stop(runId) {
       stopped.push(runId);
     },
+    preflightResultDelivery: readyResultDeliveryPreflight,
   });
 
   await commands
@@ -228,7 +237,7 @@ it("rejects a second active command in the same Root session", async () => {
   const notifications: Notification[] = [];
   const commandContext = context("/repo", notifications);
   registerWfFeatureCommand(pi, (type, request, ctx) => {
-    startWorkflow(registry, type, request, ctx);
+    startWorkflow(registry, type, request, ctx, readyResultDeliveryPreflight);
   });
 
   await commands.get("wf-feature")?.handler("first request", commandContext);
