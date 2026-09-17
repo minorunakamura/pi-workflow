@@ -1,8 +1,7 @@
 import {
-  CONDITIONAL_PLANNING_CAPABILITIES,
+  COMMON_PLANNING_REQUIREMENTS,
   getWorkflowPolicy,
   PLANNING_CAPABILITIES,
-  REQUIRED_PLANNING_CAPABILITIES,
   type PlanningCapability,
   type PlanningSelectionRecord,
   type WorkflowPolicy,
@@ -547,11 +546,7 @@ export function validatePlanningCoordinatorResult(
         `Planning capability is both selected and skipped: ${record.capability}`,
       );
     }
-    if (
-      REQUIRED_PLANNING_CAPABILITIES.some(
-        (capability) => capability === record.capability,
-      )
-    ) {
+    if (COMMON_PLANNING_REQUIREMENTS[record.capability] === "required") {
       return invalidResult(
         `Required Planning capability cannot be skipped: ${record.capability}`,
       );
@@ -598,31 +593,14 @@ export function validatePlanningCoordinatorResult(
       );
     }
     if (
-      !REQUIRED_PLANNING_CAPABILITIES.every((capability) =>
-        selectedCapabilities.has(capability),
-      )
-    ) {
-      return invalidResult(
-        "Completed Planning requires Scout and Plan Composition selections",
-      );
-    }
-    if (
-      selectedCapabilities.size + skippedCapabilities.size !==
-      PLANNING_CAPABILITIES.length
-    ) {
-      return invalidResult(
-        "Completed Planning must select or explicitly skip every Planning capability",
-      );
-    }
-    if (
-      !CONDITIONAL_PLANNING_CAPABILITIES.every(
+      !PLANNING_CAPABILITIES.every(
         (capability) =>
           selectedCapabilities.has(capability) ||
           skippedCapabilities.has(capability),
       )
     ) {
       return invalidResult(
-        "Completed Planning must record every conditional capability decision",
+        "Completed Planning must select or explicitly skip every Planning capability",
       );
     }
   }

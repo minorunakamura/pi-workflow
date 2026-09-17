@@ -148,6 +148,29 @@ it("requires both managed planning artifact references and all capability decisi
   expect(
     validatePlanningCoordinatorResult(missingConditionalDecision).valid,
   ).toBe(false);
+  const requiredCapabilitySkipped = {
+    ...result,
+    skippedCapabilities: [
+      { capability: "scout" as const, reason: "Not actually selected." },
+      ...result.skippedCapabilities,
+    ],
+  };
+  expect(
+    validatePlanningCoordinatorResult(requiredCapabilitySkipped).valid,
+  ).toBe(false);
+  const selectedAndSkipped = {
+    ...result,
+    selectedCapabilities: [
+      ...result.selectedCapabilities,
+      {
+        capability: "researcher" as const,
+        reason: "External evidence is required.",
+      },
+    ],
+  };
+  expect(validatePlanningCoordinatorResult(selectedAndSkipped).valid).toBe(
+    false,
+  );
   expect(
     validatePlanningCoordinatorResult({
       ...result,
