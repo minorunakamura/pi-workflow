@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { RootWorkflowRegistry } from "../runtime/root-lifecycle.ts";
+import { registerPlanningCompletionObservation } from "../runtime/planning-completion.ts";
 import { registerResultDeliveryObservation } from "../runtime/result-delivery.ts";
 import { registerSubagentLifecycleObservation } from "../runtime/subagents-rpc.ts";
 
@@ -67,7 +68,14 @@ export function registerSubagentLifecycle(
       }
     },
   });
+  const planningCompletion = registerPlanningCompletionObservation(
+    pi.events,
+    registry,
+    sessionId,
+    resultDelivery,
+  );
   return () => {
+    planningCompletion.dispose();
     lifecycle();
     resultDelivery.dispose();
   };

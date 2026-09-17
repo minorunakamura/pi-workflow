@@ -1,11 +1,15 @@
 import {
+  PLANNING_COORDINATOR_CONTRACT_VERSION,
+  PLANNING_COORDINATOR_RESULT_SCHEMA,
   TIMEOUTS,
   createRequestId,
   createRunId,
   getWorkflowPolicy,
   isNormalizedOpaqueId,
+  validatePlanningCoordinatorInput,
   isValidWorkflowId,
   isWorkflowType,
+  type PlanningCoordinatorInput,
   type RunId,
   type WorkflowRequest,
 } from "../core/index.ts";
@@ -305,19 +309,41 @@ function serializePlanningCoordinatorTask(request: WorkflowRequest): string {
     );
   }
   try {
-    const policy = getWorkflowPolicy();
+    const input: PlanningCoordinatorInput = {
+      contractVersion: PLANNING_COORDINATOR_CONTRACT_VERSION,
+      workflow: {
+        workflowId: request.workflowId,
+        workflowType: request.workflowType,
+        request: request.request,
+        cwd: request.cwd,
+      },
+      policy: getWorkflowPolicy(),
+      artifact: {
+        planFileName: "implementation-plan.md",
+        handoffFileName: "planning-handoff.json",
+        outputMode: "file-only",
+      },
+      runtime: {
+        maxChildCount: 32,
+        timeoutMs: TIMEOUTS.coordinatorTimeoutMs,
+      },
+    };
+    if (!validatePlanningCoordinatorInput(input).valid) {
+      throw new SubagentRpcError(
+        "RPC_INVALID_COORDINATOR_TASK",
+        "Planning Coordinator task is invalid or too large",
+      );
+    }
     const task = JSON.stringify({
+      ...input,
       version: 1,
       role: "planning-coordinator",
+      // Keep the request envelope fields for the current RPC observer while
+      // the Coordinator consumes the bounded contract above.
       workflowId: request.workflowId,
       workflowType: request.workflowType,
       request: request.request,
       cwd: request.cwd,
-      policy: {
-        source: policy.source,
-        commonPlanning: policy.commonPlanning,
-        scoutFocus: policy.typePolicies[request.workflowType].scoutFocus,
-      },
     });
     if (!isBoundedString(task, MAX_COORDINATOR_TASK_BYTES, true)) {
       throw new SubagentRpcError(
@@ -450,6 +476,7 @@ export class SubagentRpcAdapter {
         async: true,
         output: "coordinator-summary.md",
         outputMode: "file-only",
+        outputSchema: PLANNING_COORDINATOR_RESULT_SCHEMA,
         artifacts: true,
         timeoutMs: TIMEOUTS.coordinatorTimeoutMs,
       },

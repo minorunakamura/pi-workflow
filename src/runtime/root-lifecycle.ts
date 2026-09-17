@@ -4,6 +4,7 @@ import {
   canStartWorkflow,
   createInitialWorkflowState,
   isActivePhase,
+  validatePlanningCoordinatorResult,
   isValidRunId,
   isValidWorkflowId,
   isWorkflowType,
@@ -195,6 +196,65 @@ export class RootWorkflowRegistry {
         transitioned: true,
         state: this.commit({ ...this.state, planningRunId: runId }),
       };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public completePlanning(
+    runId: unknown,
+    result: unknown,
+  ): RegistryTransitionResult {
+    if (this.state === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (
+      this.state.phase !== "PLANNING" ||
+      this.state.planningStatus !== "RUNNING" ||
+      !isValidRunId(runId) ||
+      this.state.planningRunId !== runId
+    ) {
+      return {
+        transitioned: false,
+        reason: "Planning completion does not match the active run",
+      };
+    }
+
+    const validation = validatePlanningCoordinatorResult(result);
+    if (!validation.valid) {
+      return {
+        transitioned: false,
+        reason: validation.errors.join("; "),
+      };
+    }
+    if (
+      validation.value.workflowId !== this.state.workflowId ||
+      validation.value.status !== "COMPLETED" ||
+      validation.value.planningHandoffRef === undefined
+    ) {
+      return {
+        transitioned: false,
+        reason: "Planning completion is not valid for this workflow",
+      };
+    }
+
+    const {
+      planningHandoffRef: _planningHandoffRef,
+      reviewId: _reviewId,
+      approvedPlanHash: _approvedPlanHash,
+      approvalFeedback: _approvalFeedback,
+      pendingInteraction: _pendingInteraction,
+      ...withoutPlanningReview
+    } = this.state;
+    const next: RootWorkflowState = {
+      ...withoutPlanningReview,
+      phase: "PLAN_REVIEW",
+      planningStatus: "COMPLETED",
+      planningHandoffRef: validation.value.planningHandoffRef,
+      approval: null,
+    };
+    try {
+      return { transitioned: true, state: this.commit(next) };
     } catch {
       return { transitioned: false, reason: "Persistence failed" };
     }
