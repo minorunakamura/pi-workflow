@@ -2,7 +2,7 @@
 
 Pi packageとして配布する、Root-owned workflowの実装です。
 
-現在はImplementation Specification Section 42のStep 6（resultDelivery handling）までを実装しています。CoordinatorとSkillは後続Stepの対象です。
+現在はImplementation Specification Section 42のStep 7（Planning Coordinator）までを実装しています。後続のPlanning capabilities、Human/Plannotator bridge、Implementationは未実装です。
 
 ## 開発
 
