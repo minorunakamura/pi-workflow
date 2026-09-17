@@ -25,26 +25,40 @@ it("declares the Planning Coordinator as a bounded fresh package agent", () => {
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);
 });
 
-it("declares bounded capability contracts and explicit external Skill rules", () => {
+it("declares the Step 8 capability launch contracts and Human blocker", () => {
   const source = readFileSync(AGENT_PATH, "utf8");
 
-  expect(source).toContain("agent: scout");
-  expect(source).toContain("context: fresh");
-  expect(source).toContain("skill: codegraph");
-  expect(source).toContain("output: scout-context.md");
-  expect(source).toContain("output: targeted-rescout-context.md");
-  expect(source).toContain("outputMode: file-only");
+  expect(source).toContain("existing `agent: scout`");
+  expect(source).toContain(
+    "`context: fresh`, `skill: codegraph`, `output: scout-context.md`, and `outputMode: file-only`",
+  );
+  expect(source).toContain(
+    "Targeted Re-scout uses the same `agent: scout`, `context: fresh`, `skill: codegraph`, `output: targeted-rescout-context.md`, and `outputMode: file-only`",
+  );
   expect(source).toContain("agent: pi-ketch.researcher");
-  expect(source).toContain("output: researcher-report.md");
+  expect(source).toContain(
+    "`context: fresh`, `output: researcher-report.md`, and `outputMode: file-only`",
+  );
   expect(source).toContain("Never add a search-provider fallback");
   expect(source).toContain("agent: pi-workflow.grilling-coordinator");
   expect(source).toContain("skill: grilling");
   expect(source).toContain("domain-modeling");
   expect(source).toContain("`grill-with-doc`");
-  expect(source).toContain("agent: oracle");
-  expect(source).toContain("output: oracle-report.md");
-  expect(source).toContain("maxSubagentDepth: 2");
+  expect(source).toContain("existing `agent: oracle`");
+  expect(source).toContain(
+    "`context: fresh`, `output: oracle-report.md`, and `outputMode: file-only`",
+  );
+  expect(source).toContain(
+    "If any Planning path selects Human Decision, record a bounded remaining blocker and fail",
+  );
+  expect(source).toContain("Do not ask the Root Parent");
+  expect(source).toContain("direct TUI");
+  expect(source).toContain("invent a default answer");
+  expect(source).toContain("call a Human bridge tool");
+  expect(source).toContain("source writes");
+  expect(source).toContain("CodeGraph `init`, `index`, `sync`, or `upgrade`");
   expect(source).toContain("Do not copy a fixed universal capability sequence");
+  expect(source).not.toContain("package-owned `agent: scout`");
   expect(source).not.toContain("grill-with-docs");
   expect(source).not.toContain("pi_workflow_human_decision");
 
