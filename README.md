@@ -26,7 +26,7 @@ pi install npm:@plannotator/pi-extension@0.27.14
 pi install npm:pi-ketch@1.0.0
 ```
 
-`pi-subagents`のhost config（`~/.pi/agent/extensions/subagent/config.json`）には、次を設定します。pi-workflowはworkflow開始前にこの設定をpreflightしますが、configを変更しません。`resultDelivery`はglobal host settingであり、Coordinatorごとのper-run設定ではありません。
+`pi-subagents`のhost config（`~/.pi/agent/extensions/subagent/config.json`）には、次を設定します。pi-workflowはruntime初期化時にこの設定をpreflightし、configを変更しません。`resultDelivery`はglobal host settingであり、Coordinatorごとのper-run設定ではありません。config変更後は`/reload`またはPi restartが必要です。
 
 ```json
 {

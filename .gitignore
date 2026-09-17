@@ -2,3 +2,4 @@ node_modules/
 coverage/
 .pi/subagents/
 *.tsbuildinfo
+.DS_Store
