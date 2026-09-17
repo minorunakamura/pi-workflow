@@ -4,11 +4,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
 
+import { registerCommands } from "../../src/commands/index.ts";
 import { registerWfBugCommand } from "../../src/commands/wf-bug.ts";
 import { registerWfChoreCommand } from "../../src/commands/wf-chore.ts";
 import { registerWfFeatureCommand } from "../../src/commands/wf-feature.ts";
 import { registerWfHotfixCommand } from "../../src/commands/wf-hotfix.ts";
-import type { WorkflowType } from "../../src/core/index.ts";
+import { createRunId, type WorkflowType } from "../../src/core/index.ts";
+import type { PlanningCoordinatorLaunchResult } from "../../src/runtime/subagents-rpc.ts";
 import { startWorkflow } from "../../src/runtime/start-workflow.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
 
@@ -127,6 +129,37 @@ it("starts the Root workflow with the trimmed request and command cwd", () => {
   });
   expect(notifications).toEqual([
     { message: "Started /wf-bug workflow.", type: "info" },
+  ]);
+});
+
+it("starts the public planning Coordinator and records its opaque run ID", async () => {
+  const registry = new RootWorkflowRegistry(() => undefined);
+  const { pi, commands } = commandRegistration();
+  const notifications: Notification[] = [];
+  let receivedRequest: string | undefined;
+  const launch: PlanningCoordinatorLaunchResult = {
+    requestId: "rpc-request-1",
+    runId: createRunId("planning-run-1"),
+  };
+  registerCommands(pi, registry, {
+    async spawnPlanningCoordinator(request) {
+      receivedRequest = request.request;
+      return launch;
+    },
+  });
+
+  await commands
+    .get("wf-feature")
+    ?.handler("  add the feature  ", context("/repo", notifications));
+
+  expect(receivedRequest).toBe("add the feature");
+  expect(registry.getState()).toMatchObject({
+    phase: "PLANNING",
+    planningStatus: "RUNNING",
+    planningRunId: "planning-run-1",
+  });
+  expect(notifications).toEqual([
+    { message: "Started /wf-feature workflow.", type: "info" },
   ]);
 });
 
