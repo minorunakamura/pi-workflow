@@ -95,6 +95,145 @@ it("advances only from a trusted compact planning result and stores the Handoff 
   observation.dispose();
 });
 
+it("fails closed when canonical structured output is missing", () => {
+  const events = new FakeEventBus();
+  const registry = startedRegistry();
+  const observation = registerPlanningCompletionObservation(
+    events,
+    registry,
+    "session-1",
+    { isCompletionTrusted: () => true },
+  );
+
+  events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: "planning-run",
+    sessionId: "session-1",
+    state: "complete",
+    success: true,
+    results: [{}],
+  });
+
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  observation.dispose();
+});
+
+it("does not accept a top-level structured result without canonical results", () => {
+  const events = new FakeEventBus();
+  const registry = startedRegistry();
+  const observation = registerPlanningCompletionObservation(
+    events,
+    registry,
+    "session-1",
+    { isCompletionTrusted: () => true },
+  );
+
+  events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: "planning-run",
+    sessionId: "session-1",
+    state: "complete",
+    success: true,
+    structuredOutput: planningResult(),
+  });
+
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  observation.dispose();
+});
+
+it("does not fall back to a non-canonical valid result", () => {
+  const events = new FakeEventBus();
+  const registry = startedRegistry();
+  const observation = registerPlanningCompletionObservation(
+    events,
+    registry,
+    "session-1",
+    { isCompletionTrusted: () => true },
+  );
+  const invalidCanonicalResult = {
+    ...planningResult(),
+    remainingBlockers: [{ code: "BLOCKED", reason: "Evidence is missing." }],
+  };
+
+  events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: "planning-run",
+    sessionId: "session-1",
+    state: "complete",
+    success: true,
+    structuredOutput: planningResult(),
+    results: [{ structuredOutput: invalidCanonicalResult }],
+  });
+
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  observation.dispose();
+});
+
+it("requires one canonical result and a trusted matching run", () => {
+  const multipleResults = new FakeEventBus();
+  const multipleRegistry = startedRegistry();
+  const multipleObservation = registerPlanningCompletionObservation(
+    multipleResults,
+    multipleRegistry,
+    "session-1",
+    { isCompletionTrusted: () => true },
+  );
+  multipleResults.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: "planning-run",
+    sessionId: "session-1",
+    state: "complete",
+    success: true,
+    results: [
+      { structuredOutput: planningResult() },
+      { structuredOutput: planningResult() },
+    ],
+  });
+  expect(multipleRegistry.getState()).toMatchObject({ phase: "FAILED" });
+  multipleObservation.dispose();
+
+  const untrustedEvents = new FakeEventBus();
+  const untrustedRegistry = startedRegistry();
+  const untrustedObservation = registerPlanningCompletionObservation(
+    untrustedEvents,
+    untrustedRegistry,
+    "session-1",
+    { isCompletionTrusted: () => false },
+  );
+  untrustedEvents.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: "planning-run",
+    sessionId: "session-1",
+    state: "complete",
+    success: true,
+    results: [{ structuredOutput: planningResult() }],
+  });
+  expect(untrustedRegistry.getState()).toMatchObject({ phase: "FAILED" });
+  untrustedObservation.dispose();
+
+  const foreignEvents = new FakeEventBus();
+  const foreignRegistry = startedRegistry();
+  const foreignObservation = registerPlanningCompletionObservation(
+    foreignEvents,
+    foreignRegistry,
+    "session-1",
+    { isCompletionTrusted: () => true },
+  );
+  foreignEvents.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: "planning-run",
+    sessionId: "foreign-session",
+    state: "complete",
+    success: true,
+    results: [{ structuredOutput: planningResult() }],
+  });
+  expect(foreignRegistry.getState()).toMatchObject({ phase: "PLANNING" });
+  foreignObservation.dispose();
+});
+
 it("fails closed when a completed planning result is missing an artifact ref", () => {
   const events = new FakeEventBus();
   const registry = startedRegistry();

@@ -1,7 +1,11 @@
 import { expect, it, vi } from "vitest";
 
 import { isRecord } from "../../src/core/validation.ts";
-import { TIMEOUTS, createWorkflowId } from "../../src/core/index.ts";
+import {
+  TIMEOUTS,
+  createWorkflowId,
+  validatePlanningCoordinatorInput,
+} from "../../src/core/index.ts";
 import {
   SUBAGENT_ASYNC_COMPLETE_EVENT,
   SUBAGENT_ASYNC_STARTED_EVENT,
@@ -235,19 +239,39 @@ it("sends the bounded fresh planning Coordinator payload and captures the struct
   if (!isRecord(taskValue))
     throw new Error("Expected a serialized task object");
   const task = taskValue;
-  expect(task).toMatchObject({
-    version: 1,
-    workflowId: `wf-${UUID}`,
-    workflowType: "bug",
-    request: "  reproduce the regression  ",
-    cwd: "/repo",
-    policy: {
+  expect(task).toEqual({
+    contractVersion: 1,
+    workflow: {
+      workflowId: `wf-${UUID}`,
+      workflowType: "bug",
+      request: "  reproduce the regression  ",
+      cwd: "/repo",
+    },
+    policy: expect.objectContaining({
       source: "package-built-in",
-      commonPlanning: { scout: "required" },
+      commonPlanning: expect.objectContaining({ scout: "required" }),
+    }),
+    artifact: {
+      planFileName: "implementation-plan.md",
+      handoffFileName: "planning-handoff.json",
+      outputMode: "file-only",
+    },
+    runtime: {
+      maxChildCount: 32,
+      timeoutMs: TIMEOUTS.coordinatorTimeoutMs,
     },
   });
+  expect(validatePlanningCoordinatorInput(task).valid).toBe(true);
+  expect(task).not.toHaveProperty("version");
+  expect(task).not.toHaveProperty("role");
+  expect(task).not.toHaveProperty("workflowId");
+  expect(task).not.toHaveProperty("workflowType");
+  expect(task).not.toHaveProperty("request");
+  expect(task).not.toHaveProperty("cwd");
   expect(task).not.toHaveProperty("transcript");
   expect(task).not.toHaveProperty("systemPrompt");
+  expect(task).not.toHaveProperty("hiddenContext");
+  expect(task).not.toHaveProperty("rawContext");
 
   adapter.dispose();
 });

@@ -328,23 +328,14 @@ function serializePlanningCoordinatorTask(request: WorkflowRequest): string {
         timeoutMs: TIMEOUTS.coordinatorTimeoutMs,
       },
     };
-    if (!validatePlanningCoordinatorInput(input).valid) {
+    const validatedInput = validatePlanningCoordinatorInput(input);
+    if (!validatedInput.valid) {
       throw new SubagentRpcError(
         "RPC_INVALID_COORDINATOR_TASK",
         "Planning Coordinator task is invalid or too large",
       );
     }
-    const task = JSON.stringify({
-      ...input,
-      version: 1,
-      role: "planning-coordinator",
-      // Keep the request envelope fields for the current RPC observer while
-      // the Coordinator consumes the bounded contract above.
-      workflowId: request.workflowId,
-      workflowType: request.workflowType,
-      request: request.request,
-      cwd: request.cwd,
-    });
+    const task = JSON.stringify(validatedInput.value);
     if (!isBoundedString(task, MAX_COORDINATOR_TASK_BYTES, true)) {
       throw new SubagentRpcError(
         "RPC_INVALID_COORDINATOR_TASK",
