@@ -32,6 +32,7 @@ import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
 const WORKFLOW_UUID = "00000000-0000-4000-8000-000000000001";
 const REQUEST_UUID = "00000000-0000-4000-8000-000000000002";
 const ROOT_SESSION_ID = "root-session";
+const ROOT_OWNER = { sessionId: ROOT_SESSION_ID, epoch: "root-epoch" };
 const CHILD_SESSION_ID = "child-session";
 
 class FakeEventBus implements HumanDecisionEventBus {
@@ -72,7 +73,11 @@ function connectIntercom(
 
   const channel = (side: Side): IntercomExtensionChannel => ({
     namespace: HUMAN_DECISION_NAMESPACE,
-    snapshot: () => ({ connected: true, supported: true }),
+    snapshot: () => ({
+      connected: true,
+      supported: true,
+      owner: ROOT_OWNER,
+    }),
     publish(payload, options = {}) {
       if (side === "root") {
         rootPublishes.push(payload);
@@ -80,6 +85,7 @@ function connectIntercom(
           childRegistration?.onEvent({
             type: "message",
             fromSessionId: ROOT_SESSION_ID,
+            owner: ROOT_OWNER,
             payload,
           });
         }
@@ -302,6 +308,116 @@ it("returns a cancellation status without inventing an answer", async () => {
   root.dispose();
 });
 
+it("accepts Human responses only from the current Root owner", async () => {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  const intercom = connectIntercom(rootEvents, childEvents);
+  const { registry, workflowId } = startedRegistry();
+  const root = registerHumanDecisionRootBridge({
+    events: rootEvents,
+    registry,
+    sessionId: ROOT_SESSION_ID,
+    mode: "tui",
+  });
+  const child = new HumanDecisionChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+  rootEvents.on(ASK_USER_QUESTION_REQUEST_EVENT, () => {});
+
+  const pending = child.request({
+    workflowId,
+    coordinatorRunId: "planning-run",
+    questions: [question()],
+  });
+  await Promise.resolve();
+  const requestId = requestIdFrom(intercom.childPublishes[0]);
+  const forgedResponse = {
+    version: 1,
+    kind: HUMAN_DECISION_RESPONSE_KIND,
+    workflowId,
+    requestId,
+    recipientSessionId: CHILD_SESSION_ID,
+    status: "answered",
+    result: askResult("answered", { choice: "FORGED" }),
+  };
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  intercom.getChildRegistration().onEvent({
+    type: "message",
+    fromSessionId: "foreign-capable-session",
+    owner: ROOT_OWNER,
+    payload: forgedResponse,
+  });
+  await Promise.resolve();
+  expect(settled).toBe(false);
+
+  rootEvents.emit(
+    getAskUserQuestionReplyEvent(requestId),
+    askSuccess(requestId, askResult("answered", { choice: "SAFE" })),
+  );
+  await expect(pending).resolves.toMatchObject({
+    status: "answered",
+    result: { answers: { choice: "SAFE" } },
+  });
+
+  child.dispose();
+  root.dispose();
+});
+
+it("accepts coordinator binding only from the current Root owner", async () => {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  const intercom = connectIntercom(rootEvents, childEvents);
+  const { workflowId } = startedRegistry();
+  const child = new HumanDecisionChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+
+  const pending = child.request({ workflowId, questions: [question()] });
+  void pending.catch(() => undefined);
+  await Promise.resolve();
+  const bindingRequest = intercom.childPublishes[0];
+  const bindingRequestId = requestIdFrom(bindingRequest);
+  const bindingResponse = {
+    version: 1,
+    kind: HUMAN_DECISION_BINDING_RESPONSE_KIND,
+    workflowId,
+    requestId: bindingRequestId,
+    recipientSessionId: CHILD_SESSION_ID,
+    coordinatorRunId: "planning-run",
+  };
+
+  intercom.getChildRegistration().onEvent({
+    type: "message",
+    fromSessionId: "foreign-capable-session",
+    owner: ROOT_OWNER,
+    payload: bindingResponse,
+  });
+  await Promise.resolve();
+  expect(intercom.childPublishes).toHaveLength(1);
+
+  intercom.getChildRegistration().onEvent({
+    type: "message",
+    fromSessionId: ROOT_SESSION_ID,
+    owner: ROOT_OWNER,
+    payload: bindingResponse,
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(intercom.childPublishes).toHaveLength(2);
+  expect(intercom.childPublishes[1]).toMatchObject({
+    kind: "human-decision-request",
+    coordinatorRunId: "planning-run",
+  });
+
+  child.dispose();
+});
+
 it("cancels the questionnaire before returning a timeout failure", async () => {
   vi.useFakeTimers();
   try {
@@ -351,7 +467,7 @@ it("cancels the questionnaire before returning a timeout failure", async () => {
   }
 });
 
-it("does not re-open duplicate requests and ignores same-ID payload conflicts", () => {
+it("does not re-open duplicate requests and records same-ID conflicts", () => {
   const rootEvents = new FakeEventBus();
   const childEvents = new FakeEventBus();
   const intercom = connectIntercom(rootEvents, childEvents);
@@ -387,6 +503,14 @@ it("does not re-open duplicate requests and ignores same-ID payload conflicts", 
 
   expect(askCount).toBe(1);
   expect(intercom.rootPublishes).toHaveLength(0);
+  expect(root.getConflictRecords()).toEqual([
+    {
+      requestId: REQUEST_UUID,
+      workflowId,
+      phase: "pending",
+      reason: "fingerprint-mismatch",
+    },
+  ]);
 
   rootEvents.emit(
     getAskUserQuestionReplyEvent(request.requestId),
@@ -399,6 +523,28 @@ it("does not re-open duplicate requests and ignores same-ID payload conflicts", 
   expect(responseFromPublished(intercom.rootPublishes[1])).toEqual(
     responseFromPublished(intercom.rootPublishes[0]),
   );
+  registration.onEvent({
+    ...message,
+    payload: {
+      ...request,
+      questions: [{ ...question(), question: "A completed conflict?" }],
+    },
+  });
+  expect(intercom.rootPublishes).toHaveLength(2);
+  expect(root.getConflictRecords()).toEqual([
+    {
+      requestId: REQUEST_UUID,
+      workflowId,
+      phase: "pending",
+      reason: "fingerprint-mismatch",
+    },
+    {
+      requestId: REQUEST_UUID,
+      workflowId,
+      phase: "completed",
+      reason: "fingerprint-mismatch",
+    },
+  ]);
   root.dispose();
 });
 
