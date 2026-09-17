@@ -1,10 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { registerCommands } from "./commands/index.ts";
-import {
-  registerSessionLifecycle,
-  registerSubagentLifecycle,
-} from "./events/index.ts";
+import { registerSessionLifecycle } from "./events/index.ts";
 import { createRootWorkflowRegistry } from "./runtime/root-lifecycle.ts";
 import { SubagentRpcAdapter } from "./runtime/subagents-rpc.ts";
 
@@ -26,10 +23,13 @@ export default function extension(pi: RootExtensionAPI): void {
 
   const registry = createRootWorkflowRegistry(pi);
   const rpc = new SubagentRpcAdapter(pi.events);
-  const removeLifecycleObservation = registerSubagentLifecycle(pi, registry);
   registerCommands(pi, registry, rpc);
-  registerSessionLifecycle(pi, registry, () => {
-    removeLifecycleObservation();
-    rpc.dispose();
-  });
+  registerSessionLifecycle(
+    pi,
+    registry,
+    () => {
+      rpc.dispose();
+    },
+    (runId) => rpc.stop(runId),
+  );
 }

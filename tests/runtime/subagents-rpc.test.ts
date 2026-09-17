@@ -355,9 +355,15 @@ it("observes compact lifecycle identities and ignores duplicate or foreign compl
     task: "raw task must not cross the boundary",
   });
   events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
-    runId: "foreign-run",
+    runId: "planning-run",
     sessionId: "other-session",
     state: "complete",
+    success: true,
+  });
+  events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: "planning-run",
+    sessionId: "session-1",
+    state: "bogus",
     success: true,
   });
   events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
