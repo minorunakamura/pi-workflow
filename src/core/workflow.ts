@@ -659,3 +659,94 @@ export function transitionPhase(
     ? { valid: true, phase: to }
     : { valid: false, reason: `Invalid transition: ${from} -> ${to}` };
 }
+
+export type RootStateTransitionResult =
+  | { valid: true; state: RootWorkflowState }
+  | { valid: false; reason: string };
+
+function updateStateForPhase(
+  state: RootWorkflowState,
+  phase: WorkflowPhase,
+  options: PhaseTransitionOptions,
+): RootWorkflowState {
+  const next: RootWorkflowState = { ...state, phase };
+
+  switch (phase) {
+    case "PLANNING":
+      next.planningStatus = "RUNNING";
+      next.implementationStatus = "NOT_STARTED";
+      next.finalStatus = "NONE";
+      break;
+    case "PLAN_REVIEW":
+      next.planningStatus =
+        options.kind === "plan-resubmission" ? "RUNNING" : "COMPLETED";
+      next.implementationStatus = "NOT_STARTED";
+      next.finalStatus = "NONE";
+      break;
+    case "IMPLEMENTING":
+      next.planningStatus = "COMPLETED";
+      next.implementationStatus = "RUNNING";
+      next.finalStatus = "NONE";
+      break;
+    case "CODE_REVIEW":
+      next.planningStatus = "COMPLETED";
+      next.implementationStatus = "COMPLETED";
+      next.finalStatus = "NONE";
+      break;
+    case "READY_FOR_MERGE":
+      next.planningStatus = "COMPLETED";
+      next.implementationStatus = "COMPLETED";
+      next.finalStatus = "READY_FOR_MERGE";
+      break;
+    case "FAILED":
+      if (next.planningStatus === "RUNNING") {
+        next.planningStatus = "FAILED";
+      }
+      if (next.implementationStatus === "RUNNING") {
+        next.implementationStatus = "FAILED";
+      }
+      next.finalStatus = "FAILED";
+      break;
+    case "CANCELLED":
+      if (next.planningStatus === "RUNNING") {
+        next.planningStatus = "CANCELLED";
+      }
+      if (next.implementationStatus === "RUNNING") {
+        next.implementationStatus = "CANCELLED";
+      }
+      next.finalStatus = "CANCELLED";
+      break;
+    case "IDLE":
+      next.planningStatus = "NOT_STARTED";
+      next.implementationStatus = "NOT_STARTED";
+      next.finalStatus = "NONE";
+      break;
+  }
+
+  return next;
+}
+
+export function transitionRootWorkflowState(
+  value: unknown,
+  to: unknown,
+  options: PhaseTransitionOptions = {},
+): RootStateTransitionResult {
+  const current = validateRootWorkflowState(value);
+  if (!current.valid) {
+    return { valid: false, reason: "Current Root workflow state is invalid" };
+  }
+  if (!isWorkflowPhase(to)) {
+    return { valid: false, reason: "Unknown workflow phase" };
+  }
+
+  const transition = transitionPhase(current.value.phase, to, options);
+  if (!transition.valid) {
+    return transition;
+  }
+
+  const next = updateStateForPhase(current.value, to, options);
+  const validation = validateRootWorkflowState(next);
+  return validation.valid
+    ? { valid: true, state: validation.value }
+    : { valid: false, reason: "Phase and status are inconsistent" };
+}
