@@ -1,5 +1,8 @@
 import {
+  CONDITIONAL_PLANNING_CAPABILITIES,
   getWorkflowPolicy,
+  PLANNING_CAPABILITIES,
+  REQUIRED_PLANNING_CAPABILITIES,
   type PlanningCapability,
   type PlanningSelectionRecord,
   type WorkflowPolicy,
@@ -41,7 +44,7 @@ export const PLANNING_COORDINATOR_RESULT_SCHEMA = Object.freeze({
         type: "object",
         additionalProperties: false,
         properties: {
-          capability: { type: "string" },
+          capability: { type: "string", enum: [...PLANNING_CAPABILITIES] },
           reason: { type: "string", minLength: 1, maxLength: 4096 },
         },
         required: ["capability", "reason"],
@@ -102,7 +105,7 @@ export const PLANNING_COORDINATOR_RESULT_SCHEMA = Object.freeze({
       type: "object",
       additionalProperties: false,
       properties: {
-        capability: { type: "string" },
+        capability: { type: "string", enum: [...PLANNING_CAPABILITIES] },
         reason: { type: "string", minLength: 1, maxLength: 4096 },
         evidenceRefs: {
           type: "array",
@@ -154,15 +157,6 @@ export interface PlanningCoordinatorResult {
   }>;
 }
 
-const PLANNING_CAPABILITIES: readonly PlanningCapability[] = [
-  "scout",
-  "plan-composition",
-  "researcher",
-  "grilling",
-  "human-decision",
-  "targeted-rescout",
-  "oracle",
-];
 const MAX_SELECTIONS = PLANNING_CAPABILITIES.length;
 const MAX_BLOCKERS = 32;
 const MAX_REASON_BYTES = 4096;
@@ -544,10 +538,22 @@ export function validatePlanningCoordinatorResult(
   const selectedCapabilities = new Set(
     selected.value.map(({ capability }) => capability),
   );
+  const skippedCapabilities = new Set(
+    skipped.value.map(({ capability }) => capability),
+  );
   for (const record of skipped.value) {
     if (selectedCapabilities.has(record.capability)) {
       return invalidResult(
         `Planning capability is both selected and skipped: ${record.capability}`,
+      );
+    }
+    if (
+      REQUIRED_PLANNING_CAPABILITIES.some(
+        (capability) => capability === record.capability,
+      )
+    ) {
+      return invalidResult(
+        `Required Planning capability cannot be skipped: ${record.capability}`,
       );
     }
   }
@@ -592,11 +598,31 @@ export function validatePlanningCoordinatorResult(
       );
     }
     if (
-      !selectedCapabilities.has("scout") ||
-      !selectedCapabilities.has("plan-composition")
+      !REQUIRED_PLANNING_CAPABILITIES.every((capability) =>
+        selectedCapabilities.has(capability),
+      )
     ) {
       return invalidResult(
         "Completed Planning requires Scout and Plan Composition selections",
+      );
+    }
+    if (
+      selectedCapabilities.size + skippedCapabilities.size !==
+      PLANNING_CAPABILITIES.length
+    ) {
+      return invalidResult(
+        "Completed Planning must select or explicitly skip every Planning capability",
+      );
+    }
+    if (
+      !CONDITIONAL_PLANNING_CAPABILITIES.every(
+        (capability) =>
+          selectedCapabilities.has(capability) ||
+          skippedCapabilities.has(capability),
+      )
+    ) {
+      return invalidResult(
+        "Completed Planning must record every conditional capability decision",
       );
     }
   }

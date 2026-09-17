@@ -24,3 +24,23 @@ it("declares the Planning Coordinator as a bounded fresh package agent", () => {
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);
 });
+
+it("declares bounded capability contracts and explicit external Skill rules", () => {
+  const source = readFileSync(AGENT_PATH, "utf8");
+
+  expect(source).toContain("agent: scout");
+  expect(source).toContain("context: fresh");
+  expect(source).toContain("codegraph");
+  expect(source).toContain("outputMode: file-only");
+  expect(source).toContain("pi-ketch.researcher");
+  expect(source).toContain("never add a search-provider fallback");
+  expect(source).toContain("`grilling` explicitly");
+  expect(source).toContain("`domain-modeling`");
+  expect(source).toContain("`grill-with-doc`");
+  expect(source).toContain("maxSubagentDepth: 2");
+  expect(source).toContain("Do not copy a fixed universal capability sequence");
+  expect(source).not.toContain("grill-with-docs");
+
+  const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
+  expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);
+});

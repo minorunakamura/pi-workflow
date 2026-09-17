@@ -1,13 +1,30 @@
 import type { ArtifactRef, WorkflowType } from "./workflow.ts";
 
-export type PlanningCapability =
-  | "scout"
-  | "plan-composition"
-  | "researcher"
-  | "grilling"
-  | "human-decision"
-  | "targeted-rescout"
-  | "oracle";
+export const PLANNING_CAPABILITIES = [
+  "scout",
+  "plan-composition",
+  "researcher",
+  "grilling",
+  "human-decision",
+  "targeted-rescout",
+  "oracle",
+] as const;
+export type PlanningCapability = (typeof PLANNING_CAPABILITIES)[number];
+
+export const REQUIRED_PLANNING_CAPABILITIES = [
+  "scout",
+  "plan-composition",
+] as const satisfies readonly PlanningCapability[];
+
+export const CONDITIONAL_PLANNING_CAPABILITIES = [
+  "researcher",
+  "grilling",
+  "human-decision",
+  "targeted-rescout",
+  "oracle",
+] as const satisfies readonly PlanningCapability[];
+export type ConditionalPlanningCapability =
+  (typeof CONDITIONAL_PLANNING_CAPABILITIES)[number];
 
 export type PlanningRequirement = "required" | "evidence-driven-conditional";
 
