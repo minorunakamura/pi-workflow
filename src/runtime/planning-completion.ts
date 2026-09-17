@@ -11,55 +11,30 @@ import {
 import type { ResultDeliveryObservation } from "./result-delivery.ts";
 import type { RootWorkflowRegistry } from "./root-lifecycle.ts";
 
-function resultCandidates(value: Record<string, unknown>): unknown[] {
-  const candidates: unknown[] = [];
-  const add = (candidate: unknown): void => {
-    if (candidate !== undefined) candidates.push(candidate);
-  };
-
-  add(value.planningResult);
-  add(value.structuredOutput);
-  if (isRecord(value.result)) {
-    add(value.result.planningResult);
-    add(value.result.structuredOutput);
-    add(value.result);
-  }
-  if (isRecord(value.details)) {
-    add(value.details.planningResult);
-    add(value.details.structuredOutput);
-  }
-  if (Array.isArray(value.results)) {
-    for (const result of value.results) {
-      if (!isRecord(result)) continue;
-      add(result.planningResult);
-      add(result.structuredOutput);
-      add(result.structured);
-    }
-  }
-  return candidates;
-}
-
 export function planningCoordinatorResultFromCompletion(
   value: unknown,
 ): ValidationResult<PlanningCoordinatorResult> {
-  if (!isRecord(value)) {
-    return { valid: false, errors: ["Planning completion payload is invalid"] };
-  }
-  const candidates = resultCandidates(value);
-  if (candidates.length === 0) {
+  if (!isRecord(value) || !Array.isArray(value.results)) {
     return {
       valid: false,
-      errors: ["Planning completion has no structured Coordinator result"],
+      errors: ["Planning completion results are missing"],
     };
   }
-  for (const candidate of candidates) {
-    const validation = validatePlanningCoordinatorResult(candidate);
-    if (validation.valid) return validation;
+  if (value.results.length !== 1) {
+    return {
+      valid: false,
+      errors: ["Planning completion must contain exactly one result"],
+    };
   }
-  return {
-    valid: false,
-    errors: ["Planning completion Coordinator result is invalid"],
-  };
+
+  const result = value.results[0];
+  if (!isRecord(result) || !Object.hasOwn(result, "structuredOutput")) {
+    return {
+      valid: false,
+      errors: ["Planning completion structured output is missing"],
+    };
+  }
+  return validatePlanningCoordinatorResult(result.structuredOutput);
 }
 
 export interface PlanningCompletionObservation {
