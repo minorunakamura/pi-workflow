@@ -2,6 +2,7 @@ import { startWorkflow } from "../runtime/start-workflow.ts";
 import type { PlanningCoordinatorLaunchResult } from "../runtime/subagents-rpc.ts";
 import type { WorkflowRequest } from "../core/index.ts";
 import type { RootWorkflowRegistry } from "../runtime/root-lifecycle.ts";
+import type { ResultDeliveryPreflightResult } from "../runtime/result-delivery.ts";
 import { registerWfBugCommand } from "./wf-bug.ts";
 import { registerWfChoreCommand } from "./wf-chore.ts";
 import { registerWfFeatureCommand } from "./wf-feature.ts";
@@ -14,6 +15,7 @@ export type PlanningCoordinatorLauncher = {
     request: WorkflowRequest,
   ) => Promise<PlanningCoordinatorLaunchResult>;
   stop: (runId: string) => Promise<unknown>;
+  preflightResultDelivery?: () => ResultDeliveryPreflightResult;
 };
 
 export function registerCommands(
@@ -26,7 +28,19 @@ export function registerCommands(
     request,
     context,
   ) => {
-    const result = startWorkflow(registry, workflowType, request, context);
+    const preflightResultDelivery =
+      planningCoordinator?.preflightResultDelivery;
+    const result = startWorkflow(
+      registry,
+      workflowType,
+      request,
+      context,
+      preflightResultDelivery === undefined
+        ? undefined
+        : {
+            preflightResultDelivery: () => preflightResultDelivery(),
+          },
+    );
     if (!result.started || planningCoordinator === undefined) return;
 
     try {

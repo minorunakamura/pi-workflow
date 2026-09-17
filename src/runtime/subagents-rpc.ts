@@ -10,6 +10,10 @@ import {
   type WorkflowRequest,
 } from "../core/index.ts";
 import { isBoundedString, isRecord } from "../core/validation.ts";
+import {
+  preflightResultDelivery as preflightHostResultDelivery,
+  type ResultDeliveryPreflightResult,
+} from "./result-delivery.ts";
 
 export const SUBAGENT_RPC_PROTOCOL_VERSION = 1 as const;
 export const SUBAGENT_RPC_READY_EVENT = "subagents:rpc:v1:ready" as const;
@@ -360,6 +364,10 @@ export class SubagentRpcAdapter {
 
   public isReady(): boolean {
     return this.ready !== undefined && !this.disposed;
+  }
+
+  public preflightResultDelivery(): ResultDeliveryPreflightResult {
+    return preflightHostResultDelivery();
   }
 
   public async request(
