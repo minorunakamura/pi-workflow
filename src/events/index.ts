@@ -14,8 +14,11 @@ const PLANNING_FAILURE_STATES = new Set([
 export function registerSubagentLifecycle(
   pi: Pick<ExtensionAPI, "events">,
   registry: RootWorkflowRegistry,
+  sessionId?: string,
 ): () => void {
   return registerSubagentLifecycleObservation(pi.events, {
+    ...(sessionId === undefined ? {} : { sessionId }),
+    isRelevantRun: (runId) => registry.getState()?.planningRunId === runId,
     onComplete: (record) => {
       const state = registry.getState();
       if (state?.planningRunId !== record.runId) return;
@@ -41,12 +44,24 @@ export function beforeTreeNavigation(
 }
 
 export function registerSessionLifecycle(
-  pi: Pick<ExtensionAPI, "on">,
+  pi: Pick<ExtensionAPI, "on"> & Partial<Pick<ExtensionAPI, "events">>,
   registry: RootWorkflowRegistry,
   cleanup?: () => void,
+  stopPlanningCoordinator?: (runId: string) => Promise<unknown>,
 ): void {
+  let removeLifecycleObservation: (() => void) | undefined;
+
   pi.on("session_start", (_event, ctx) => {
+    removeLifecycleObservation?.();
     registry.restore(ctx.sessionManager.getBranch());
+    const events = pi.events;
+    if (events !== undefined) {
+      removeLifecycleObservation = registerSubagentLifecycle(
+        { events },
+        registry,
+        ctx.sessionManager.getSessionId(),
+      );
+    }
   });
 
   pi.on("session_before_tree", () => beforeTreeNavigation(registry));
@@ -55,11 +70,28 @@ export function registerSessionLifecycle(
     registry.restore(ctx.sessionManager.getBranch());
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
+    const current = registry.getState();
+    const planningRunId = registry.hasActiveWorkflow()
+      ? current?.planningRunId
+      : undefined;
+    if (planningRunId !== undefined && stopPlanningCoordinator !== undefined) {
+      try {
+        await stopPlanningCoordinator(planningRunId);
+      } catch {
+        // Shutdown remains fail-closed when the public stop request fails.
+      }
+    }
+
     try {
       registry.shutdown();
     } finally {
-      cleanup?.();
+      try {
+        removeLifecycleObservation?.();
+      } finally {
+        removeLifecycleObservation = undefined;
+        cleanup?.();
+      }
     }
   });
 }

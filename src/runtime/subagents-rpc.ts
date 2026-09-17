@@ -22,6 +22,17 @@ export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete" as const;
 export const SUBAGENT_PROCESS_TERMINAL_EVENT =
   "subagent:process-terminal" as const;
 
+export const SUBAGENT_ASYNC_TERMINAL_STATES = [
+  "complete",
+  "failed",
+  "partial",
+  "paused",
+  "stopped",
+  "rejected",
+] as const;
+export type SubagentAsyncTerminalState =
+  (typeof SUBAGENT_ASYNC_TERMINAL_STATES)[number];
+
 export const SUBAGENT_RPC_METHODS = [
   "ping",
   "status",
@@ -669,6 +680,7 @@ export interface SubagentLifecycleRecord {
 
 export interface SubagentLifecycleObservationOptions {
   sessionId?: string;
+  isRelevantRun?: (runId: RunId) => boolean;
   onStarted?: (record: SubagentLifecycleRecord) => void;
   onComplete?: (record: SubagentLifecycleRecord) => void;
   onConflict?: (runId: RunId) => void;
@@ -743,6 +755,12 @@ function lifecycleState(
   return isBoundedString(candidate, 128, true) ? candidate : undefined;
 }
 
+function isSubagentAsyncTerminalState(
+  value: string,
+): value is SubagentAsyncTerminalState {
+  return (SUBAGENT_ASYNC_TERMINAL_STATES as readonly string[]).includes(value);
+}
+
 function sameLifecycleRecord(
   left: SubagentLifecycleRecord,
   right: SubagentLifecycleRecord,
@@ -776,6 +794,12 @@ function lifecycleRecord(
     artifactRefs: kind === "started" ? [] : collectArtifactRefs(value),
   };
   const state = lifecycleState(value, kind);
+  if (
+    kind === "complete" &&
+    (state === undefined || !isSubagentAsyncTerminalState(state))
+  ) {
+    return undefined;
+  }
   if (state !== undefined) record.state = state;
   if (typeof value.success === "boolean") record.success = value.success;
   return record;
@@ -795,7 +819,12 @@ export function registerSubagentLifecycleObservation(
   });
   const removeComplete = events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (value) => {
     const record = lifecycleRecord(value, "complete", options.sessionId);
-    if (record === undefined) return;
+    if (
+      record === undefined ||
+      options.isRelevantRun?.(record.runId) === false
+    ) {
+      return;
+    }
     const previous = completedRuns.get(record.runId);
     if (previous !== undefined) {
       if (!sameLifecycleRecord(previous, record)) {

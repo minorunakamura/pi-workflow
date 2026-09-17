@@ -146,6 +146,7 @@ it("starts the public planning Coordinator and records its opaque run ID", async
       receivedRequest = request.request;
       return launch;
     },
+    async stop() {},
   });
 
   await commands
@@ -161,6 +162,64 @@ it("starts the public planning Coordinator and records its opaque run ID", async
   expect(notifications).toEqual([
     { message: "Started /wf-feature workflow.", type: "info" },
   ]);
+});
+
+it("stops a spawned planning run once when run ID attachment fails", async () => {
+  let appendCount = 0;
+  const registry = new RootWorkflowRegistry(() => {
+    appendCount += 1;
+    if (appendCount === 2) throw new Error("attach persistence failed");
+  });
+  const { pi, commands } = commandRegistration();
+  const notifications: Notification[] = [];
+  const stopped: string[] = [];
+  registerCommands(pi, registry, {
+    async spawnPlanningCoordinator() {
+      return { requestId: "rpc-request-1", runId: createRunId("orphan-run") };
+    },
+    async stop(runId) {
+      stopped.push(runId);
+      throw new Error("stop timeout");
+    },
+  });
+
+  await commands
+    .get("wf-feature")
+    ?.handler("start the feature", context("/repo", notifications));
+
+  expect(stopped).toEqual(["orphan-run"]);
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  expect(notifications).toEqual([
+    { message: "Started /wf-feature workflow.", type: "info" },
+    { message: "Could not start the Planning Coordinator.", type: "error" },
+  ]);
+});
+
+it("does not stop a planning run after a successful attachment", async () => {
+  const registry = new RootWorkflowRegistry(() => undefined);
+  const { pi, commands } = commandRegistration();
+  const stopped: string[] = [];
+  registerCommands(pi, registry, {
+    async spawnPlanningCoordinator() {
+      return { requestId: "rpc-request-1", runId: createRunId("planning-run") };
+    },
+    async stop(runId) {
+      stopped.push(runId);
+    },
+  });
+
+  await commands
+    .get("wf-feature")
+    ?.handler("start the feature", context("/repo", []));
+
+  expect(stopped).toEqual([]);
+  expect(registry.getState()).toMatchObject({
+    phase: "PLANNING",
+    planningRunId: "planning-run",
+  });
 });
 
 it("rejects a second active command in the same Root session", async () => {
