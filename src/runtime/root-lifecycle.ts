@@ -95,6 +95,10 @@ export class RootWorkflowRegistry {
     return this.state === undefined ? undefined : cloneState(this.state);
   }
 
+  public hasActiveWorkflow(): boolean {
+    return this.state !== undefined && isActivePhase(this.state.phase);
+  }
+
   public restore(entries: readonly unknown[]): RootWorkflowState | undefined {
     const restored = readLatestRootWorkflowState(entries);
     if (restored === undefined || !isActivePhase(restored.phase)) {

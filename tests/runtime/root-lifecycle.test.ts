@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 
+import { beforeTreeNavigation } from "../../src/events/index.ts";
 import {
   createInitialWorkflowState,
   createWorkflowId,
@@ -166,6 +167,18 @@ it("rejects condition-blind phase advances in Root state mutation", () => {
   ).toBe(false);
 
   expect(transitionPhase("PLAN_REVIEW", "IMPLEMENTING").valid).toBe(true);
+});
+
+it("blocks tree navigation only while a workflow is active", () => {
+  const none = new RootWorkflowRegistry(() => undefined);
+  expect(beforeTreeNavigation(none)).toBeUndefined();
+
+  const active = new RootWorkflowRegistry(() => undefined);
+  expect(active.start(createWorkflowId(UUID), "feature").started).toBe(true);
+  expect(beforeTreeNavigation(active)).toEqual({ cancel: true });
+
+  expect(active.transition("FAILED").transitioned).toBe(true);
+  expect(beforeTreeNavigation(active)).toBeUndefined();
 });
 
 it("blocks terminal mutation and does not create a cross-session lock", () => {
