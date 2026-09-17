@@ -52,6 +52,7 @@ const MAX_QUESTIONS = 32;
 const MAX_OPTIONS = 64;
 const MAX_TEXT_BYTES = 8 * 1024;
 const MAX_COMPLETED_REQUESTS = 64;
+const MAX_CONFLICT_RECORDS = 64;
 const ASK_USER_QUESTION_ERROR_CODES = [
   "invalid-request",
   "unsupported-version",
@@ -143,6 +144,13 @@ export interface HumanDecisionBridgeResponse {
   error?: { code: string; message: string };
 }
 
+export interface HumanDecisionConflictRecord {
+  requestId: string;
+  workflowId: string;
+  phase: "pending" | "completed";
+  reason: "fingerprint-mismatch";
+}
+
 interface HumanDecisionBindingRequest {
   version: 1;
   kind: typeof HUMAN_DECISION_BINDING_REQUEST_KIND;
@@ -167,7 +175,11 @@ export interface HumanDecisionEventBus {
 
 export interface IntercomExtensionChannel {
   readonly namespace: string;
-  snapshot(): { connected: boolean; supported: boolean };
+  snapshot(): {
+    connected: boolean;
+    supported: boolean;
+    owner?: { sessionId: string; epoch: string };
+  };
   publish(
     payload: unknown,
     options?: { audience?: "owner" | "capable"; ownerOnly?: boolean },
@@ -178,6 +190,7 @@ export type IntercomExtensionEvent =
   | {
       type: "message";
       fromSessionId: string;
+      owner?: { sessionId: string; epoch: string };
       payload: unknown;
     }
   | { type: "connection"; connected: boolean; supported: boolean }
@@ -208,6 +221,7 @@ export interface HumanDecisionRootBridgeOptions {
 
 export interface HumanDecisionRootBridge {
   dispose(): void;
+  getConflictRecords(): readonly HumanDecisionConflictRecord[];
   hasPendingInteraction(): boolean;
 }
 
@@ -814,6 +828,33 @@ function channelIsUsable(channel: IntercomExtensionChannel): boolean {
   }
 }
 
+function isCurrentRootOwner(
+  event: IntercomExtensionEvent,
+  channel: IntercomExtensionChannel | undefined,
+): boolean {
+  if (
+    channel === undefined ||
+    event.type !== "message" ||
+    event.owner === undefined
+  ) {
+    return false;
+  }
+  try {
+    const snapshot = channel.snapshot();
+    const owner = snapshot.owner;
+    return (
+      snapshot.connected &&
+      snapshot.supported &&
+      owner !== undefined &&
+      owner.sessionId === event.fromSessionId &&
+      owner.sessionId === event.owner.sessionId &&
+      owner.epoch === event.owner.epoch
+    );
+  } catch {
+    return false;
+  }
+}
+
 function partialRequestIdentity(
   value: unknown,
 ):
@@ -856,6 +897,7 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
   private channel: IntercomExtensionChannel | undefined;
   private pending: PendingRootInteraction | undefined;
   private readonly completed = new Map<string, CompletedRootInteraction>();
+  private readonly conflicts: HumanDecisionConflictRecord[] = [];
   private disposed = false;
   private readonly timeoutMs: number;
 
@@ -866,6 +908,10 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     }
     this.timeoutMs = timeout;
     this.registerIntercomChannel();
+  }
+
+  public getConflictRecords(): readonly HumanDecisionConflictRecord[] {
+    return this.conflicts.map((record) => ({ ...record }));
   }
 
   public hasPendingInteraction(): boolean {
@@ -901,6 +947,22 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     this.disposed = true;
     this.channel = undefined;
     this.completed.clear();
+    this.conflicts.length = 0;
+  }
+
+  private recordConflict(
+    request: Pick<HumanDecisionBridgeRequest, "workflowId" | "requestId">,
+    phase: HumanDecisionConflictRecord["phase"],
+  ): void {
+    this.conflicts.push({
+      requestId: request.requestId,
+      workflowId: request.workflowId,
+      phase,
+      reason: "fingerprint-mismatch",
+    });
+    if (this.conflicts.length > MAX_CONFLICT_RECORDS) {
+      this.conflicts.shift();
+    }
   }
 
   private registerIntercomChannel(): void {
@@ -956,6 +1018,8 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
         completed.originSessionId === request.originSessionId
       ) {
         this.publishResponse(completed.response);
+      } else {
+        this.recordConflict(request, "completed");
       }
       return;
     }
@@ -963,8 +1027,12 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     const pending = this.pending;
     if (pending !== undefined && !pending.settled) {
       if (pending.request.requestId === request.requestId) {
-        // Same request IDs are idempotent. A different fingerprint must not
-        // terminate the original waiter or let a conflicting reply win.
+        if (
+          pending.fingerprint !== fingerprint ||
+          pending.request.originSessionId !== request.originSessionId
+        ) {
+          this.recordConflict(request, "pending");
+        }
         return;
       }
       this.publishResponse(
@@ -1663,6 +1731,7 @@ export class HumanDecisionChildBridge {
     ) {
       return;
     }
+    if (!isCurrentRootOwner(event, this.channel)) return;
     if (!isRecord(event.payload)) return;
     const bindingResponse = validateHumanDecisionBindingResponse(event.payload);
     if (bindingResponse.valid) {
