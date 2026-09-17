@@ -30,16 +30,23 @@ it("declares bounded capability contracts and explicit external Skill rules", ()
 
   expect(source).toContain("agent: scout");
   expect(source).toContain("context: fresh");
-  expect(source).toContain("codegraph");
+  expect(source).toContain("skill: codegraph");
+  expect(source).toContain("output: scout-context.md");
+  expect(source).toContain("output: targeted-rescout-context.md");
   expect(source).toContain("outputMode: file-only");
-  expect(source).toContain("pi-ketch.researcher");
-  expect(source).toContain("never add a search-provider fallback");
-  expect(source).toContain("`grilling` explicitly");
-  expect(source).toContain("`domain-modeling`");
+  expect(source).toContain("agent: pi-ketch.researcher");
+  expect(source).toContain("output: researcher-report.md");
+  expect(source).toContain("Never add a search-provider fallback");
+  expect(source).toContain("agent: pi-workflow.grilling-coordinator");
+  expect(source).toContain("skill: grilling");
+  expect(source).toContain("domain-modeling");
   expect(source).toContain("`grill-with-doc`");
+  expect(source).toContain("agent: oracle");
+  expect(source).toContain("output: oracle-report.md");
   expect(source).toContain("maxSubagentDepth: 2");
   expect(source).toContain("Do not copy a fixed universal capability sequence");
   expect(source).not.toContain("grill-with-docs");
+  expect(source).not.toContain("pi_workflow_human_decision");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);

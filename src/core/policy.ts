@@ -1,31 +1,5 @@
 import type { ArtifactRef, WorkflowType } from "./workflow.ts";
 
-export const PLANNING_CAPABILITIES = [
-  "scout",
-  "plan-composition",
-  "researcher",
-  "grilling",
-  "human-decision",
-  "targeted-rescout",
-  "oracle",
-] as const;
-export type PlanningCapability = (typeof PLANNING_CAPABILITIES)[number];
-
-export const REQUIRED_PLANNING_CAPABILITIES = [
-  "scout",
-  "plan-composition",
-] as const satisfies readonly PlanningCapability[];
-
-export const CONDITIONAL_PLANNING_CAPABILITIES = [
-  "researcher",
-  "grilling",
-  "human-decision",
-  "targeted-rescout",
-  "oracle",
-] as const satisfies readonly PlanningCapability[];
-export type ConditionalPlanningCapability =
-  (typeof CONDITIONAL_PLANNING_CAPABILITIES)[number];
-
 export type PlanningRequirement = "required" | "evidence-driven-conditional";
 
 const commonPlanningRequirements = {
@@ -36,10 +10,19 @@ const commonPlanningRequirements = {
   "human-decision": "evidence-driven-conditional",
   "targeted-rescout": "evidence-driven-conditional",
   oracle: "evidence-driven-conditional",
-} as const satisfies Readonly<Record<PlanningCapability, PlanningRequirement>>;
+} as const satisfies Readonly<Record<string, PlanningRequirement>>;
 
 export const COMMON_PLANNING_REQUIREMENTS = Object.freeze(
   commonPlanningRequirements,
+);
+export type PlanningCapability = keyof typeof commonPlanningRequirements;
+
+function isPlanningCapability(value: string): value is PlanningCapability {
+  return Object.hasOwn(commonPlanningRequirements, value);
+}
+
+export const PLANNING_CAPABILITIES = Object.freeze(
+  Object.keys(commonPlanningRequirements).filter(isPlanningCapability),
 );
 
 export interface WorkflowTypePolicy {
