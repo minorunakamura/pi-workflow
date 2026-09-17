@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { RootWorkflowRegistry } from "../runtime/root-lifecycle.ts";
+import { registerResultDeliveryObservation } from "../runtime/result-delivery.ts";
 import { registerSubagentLifecycleObservation } from "../runtime/subagents-rpc.ts";
 
 const PLANNING_FAILURE_STATES = new Set([
@@ -29,9 +30,27 @@ export function registerSubagentLifecycle(
   registry: RootWorkflowRegistry,
   sessionId: string,
 ): () => void {
-  return registerSubagentLifecycleObservation(pi.events, {
+  const isPlanningRun = (runId: string): boolean => {
+    const state = registry.getState();
+    return state?.phase === "PLANNING" && state.planningRunId === runId;
+  };
+  const resultDelivery = registerResultDeliveryObservation(pi.events, {
     sessionId,
-    isRelevantRun: (runId) => registry.getState()?.planningRunId === runId,
+    isRelevantRun: isPlanningRun,
+    onAckFailure: (runId) => {
+      if (isPlanningRun(runId)) {
+        registry.transition("FAILED");
+      }
+    },
+    onUntrustedCompletion: (runId) => {
+      if (isPlanningRun(runId)) {
+        registry.transition("FAILED");
+      }
+    },
+  });
+  const lifecycle = registerSubagentLifecycleObservation(pi.events, {
+    sessionId,
+    isRelevantRun: isPlanningRun,
     onComplete: (record) => {
       const state = registry.getState();
       if (state?.planningRunId !== record.runId) return;
@@ -43,11 +62,15 @@ export function registerSubagentLifecycle(
       }
     },
     onConflict: (runId) => {
-      if (registry.getState()?.planningRunId === runId) {
+      if (isPlanningRun(runId)) {
         registry.transition("FAILED");
       }
     },
   });
+  return () => {
+    lifecycle();
+    resultDelivery.dispose();
+  };
 }
 
 export function beforeTreeNavigation(
