@@ -51,7 +51,28 @@ function planningResult() {
       { capability: "scout" as const, reason: "Repository evidence." },
       { capability: "plan-composition" as const, reason: "Plan is required." },
     ],
-    skippedCapabilities: [],
+    skippedCapabilities: [
+      {
+        capability: "researcher" as const,
+        reason: "No external fact is required.",
+      },
+      {
+        capability: "grilling" as const,
+        reason: "Repository evidence resolves the ambiguity.",
+      },
+      {
+        capability: "human-decision" as const,
+        reason: "No decision remains for the user.",
+      },
+      {
+        capability: "targeted-rescout" as const,
+        reason: "Scout assumptions remain current.",
+      },
+      {
+        capability: "oracle" as const,
+        reason: "No independent strategy challenge is needed.",
+      },
+    ],
     remainingBlockers: [],
   };
 }

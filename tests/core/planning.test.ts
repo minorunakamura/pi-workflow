@@ -42,6 +42,23 @@ function completedResult() {
         capability: "researcher" as const,
         reason: "The request is repository-only.",
       },
+      {
+        capability: "grilling" as const,
+        reason: "Repository evidence resolves the implementation ambiguity.",
+      },
+      {
+        capability: "human-decision" as const,
+        reason: "No product or scope choice remains for the coordinator.",
+      },
+      {
+        capability: "targeted-rescout" as const,
+        reason: "The initial Scout assumptions remain current.",
+      },
+      {
+        capability: "oracle" as const,
+        reason:
+          "One implementation strategy remains after repository evidence.",
+      },
     ],
     remainingBlockers: [],
   };
@@ -90,7 +107,30 @@ it("validates the bounded Planning Coordinator input contract", () => {
   ).toBe(false);
 });
 
-it("requires both managed planning artifact references for a completed result", () => {
+it("keeps Workflow Type policy focused on Scout evidence", () => {
+  const policy = getWorkflowPolicy();
+
+  expect(policy.typePolicies.feature.scoutFocus).toEqual([
+    "existing implementation",
+    "impact scope",
+    "related tests",
+    "existing patterns",
+    "extension points",
+  ]);
+  expect(policy.typePolicies.bug.scoutFocus).toContain(
+    "evidence-based root-cause hypothesis",
+  );
+  expect(policy.typePolicies.chore.scoutFocus).toContain(
+    "generated files/lockfiles",
+  );
+  expect(policy.typePolicies.hotfix.scoutFocus).toContain("data/security risk");
+  expect(Object.keys(policy.typePolicies.feature)).toEqual([
+    "workflowType",
+    "scoutFocus",
+  ]);
+});
+
+it("requires both managed planning artifact references and all capability decisions", () => {
   const result = completedResult();
   expect(validatePlanningCoordinatorResult(result).valid).toBe(true);
   const missingHandoffRef = { ...result };
@@ -101,6 +141,13 @@ it("requires both managed planning artifact references for a completed result", 
   const missingPlanRef = { ...result };
   Reflect.deleteProperty(missingPlanRef, "planArtifactRef");
   expect(validatePlanningCoordinatorResult(missingPlanRef).valid).toBe(false);
+  const missingConditionalDecision = {
+    ...result,
+    skippedCapabilities: result.skippedCapabilities.slice(0, -1),
+  };
+  expect(
+    validatePlanningCoordinatorResult(missingConditionalDecision).valid,
+  ).toBe(false);
   expect(
     validatePlanningCoordinatorResult({
       ...result,
