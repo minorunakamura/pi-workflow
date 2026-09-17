@@ -5,7 +5,7 @@ import extension, { isSubagentChildRuntime } from "../src/index.ts";
 
 type RootExtensionAPI = Pick<
   ExtensionAPI,
-  "on" | "appendEntry" | "registerCommand"
+  "on" | "appendEntry" | "registerCommand" | "events"
 >;
 
 function fakePi(events: string[], commands: string[] = []): RootExtensionAPI {
@@ -16,6 +16,12 @@ function fakePi(events: string[], commands: string[] = []): RootExtensionAPI {
     appendEntry() {},
     registerCommand(name, _options) {
       commands.push(name);
+    },
+    events: {
+      on() {
+        return () => {};
+      },
+      emit() {},
     },
   };
 }

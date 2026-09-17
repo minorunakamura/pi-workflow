@@ -4,6 +4,7 @@ import {
   canStartWorkflow,
   createInitialWorkflowState,
   isActivePhase,
+  isValidRunId,
   isValidWorkflowId,
   isWorkflowType,
   transitionRootWorkflowState,
@@ -169,6 +170,31 @@ export class RootWorkflowRegistry {
     }
     try {
       return { transitioned: true, state: this.commit(transition.state) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public setPlanningRunId(runId: unknown): RegistryTransitionResult {
+    if (this.state === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (
+      this.state.phase !== "PLANNING" ||
+      this.state.planningStatus !== "RUNNING" ||
+      this.state.planningRunId !== undefined ||
+      !isValidRunId(runId)
+    ) {
+      return {
+        transitioned: false,
+        reason: "Planning run identity cannot be attached",
+      };
+    }
+    try {
+      return {
+        transitioned: true,
+        state: this.commit({ ...this.state, planningRunId: runId }),
+      };
     } catch {
       return { transitioned: false, reason: "Persistence failed" };
     }

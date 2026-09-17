@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { beforeTreeNavigation } from "../../src/events/index.ts";
 import {
   createInitialWorkflowState,
+  createRunId,
   createWorkflowId,
   transitionPhase,
   transitionRootWorkflowState,
@@ -117,6 +118,30 @@ it("persists only compact Root state and restores the latest valid branch snapsh
     phase: "FAILED",
     finalStatus: "FAILED",
   });
+});
+
+it("attaches one opaque planning run identity without advancing the phase", () => {
+  const store = persistedEntries();
+  const registry = new RootWorkflowRegistry(store.append);
+  expect(registry.start(createWorkflowId(UUID), "feature").started).toBe(true);
+
+  expect(registry.setPlanningRunId(createRunId("planning-run"))).toMatchObject({
+    transitioned: true,
+    state: {
+      phase: "PLANNING",
+      planningStatus: "RUNNING",
+      planningRunId: "planning-run",
+    },
+  });
+  expect(registry.setPlanningRunId(createRunId("second-run"))).toEqual({
+    transitioned: false,
+    reason: "Planning run identity cannot be attached",
+  });
+  expect(registry.setPlanningRunId("\ninvalid")).toEqual({
+    transitioned: false,
+    reason: "Planning run identity cannot be attached",
+  });
+  expect(store.entries).toHaveLength(2);
 });
 
 it("allows IDLE to PLANNING and active states to fail or cancel", () => {
