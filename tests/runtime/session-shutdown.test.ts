@@ -46,6 +46,7 @@ function sessionContext(sessionId: string) {
   return {
     sessionManager: {
       getBranch: () => [],
+      getSessionFile: () => undefined,
       getSessionId: () => sessionId,
     },
   };
@@ -113,13 +114,18 @@ it("stops the known planning run before persisting stale failure and cleaning up
     },
     (runId) => rpc.stop(runId),
   );
+  let sessionFileReads = 0;
   let sessionIdReads = 0;
   const context = {
     sessionManager: {
       getBranch: () => [],
+      getSessionFile: () => {
+        sessionFileReads += 1;
+        return "/sessions/current.jsonl";
+      },
       getSessionId: () => {
         sessionIdReads += 1;
-        return "session-current";
+        return "logical-session-id";
       },
     },
   };
@@ -134,7 +140,7 @@ it("stops the known planning run before persisting stale failure and cleaning up
   ).toBe(true);
   events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
     runId: "planning-run",
-    sessionId: "foreign-session",
+    sessionId: "/sessions/foreign.jsonl",
     state: "failed",
     success: false,
   });
@@ -146,7 +152,8 @@ it("stops the known planning run before persisting stale failure and cleaning up
 
   await invoke(handlers, "session_shutdown", context);
 
-  expect(sessionIdReads).toBe(1);
+  expect(sessionFileReads).toBe(1);
+  expect(sessionIdReads).toBe(0);
   expect(order).toEqual(["stop:planning-run", "persist", "cleanup"]);
   expect(registry.getState()).toBeUndefined();
   expect(events.listenerCount(SUBAGENT_ASYNC_COMPLETE_EVENT)).toBe(0);

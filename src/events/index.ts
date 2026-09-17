@@ -11,13 +11,26 @@ const PLANNING_FAILURE_STATES = new Set([
   "rejected",
 ]);
 
+type SessionIdentitySource = {
+  getSessionFile(): string | null | undefined;
+  getSessionId(): string | null | undefined;
+};
+
+function currentSessionIdentity(
+  sessionManager: SessionIdentitySource,
+): string | undefined {
+  const identity =
+    sessionManager.getSessionFile() ?? sessionManager.getSessionId();
+  return identity || undefined;
+}
+
 export function registerSubagentLifecycle(
   pi: Pick<ExtensionAPI, "events">,
   registry: RootWorkflowRegistry,
-  sessionId?: string,
+  sessionId: string,
 ): () => void {
   return registerSubagentLifecycleObservation(pi.events, {
-    ...(sessionId === undefined ? {} : { sessionId }),
+    sessionId,
     isRelevantRun: (runId) => registry.getState()?.planningRunId === runId,
     onComplete: (record) => {
       const state = registry.getState();
@@ -53,13 +66,15 @@ export function registerSessionLifecycle(
 
   pi.on("session_start", (_event, ctx) => {
     removeLifecycleObservation?.();
+    removeLifecycleObservation = undefined;
     registry.restore(ctx.sessionManager.getBranch());
     const events = pi.events;
-    if (events !== undefined) {
+    const sessionId = currentSessionIdentity(ctx.sessionManager);
+    if (events !== undefined && sessionId !== undefined) {
       removeLifecycleObservation = registerSubagentLifecycle(
         { events },
         registry,
-        ctx.sessionManager.getSessionId(),
+        sessionId,
       );
     }
   });
