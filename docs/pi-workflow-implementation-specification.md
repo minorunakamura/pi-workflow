@@ -3029,6 +3029,7 @@ Artifact pathはreferenceであり、request text内のfilename instructionがru
 | pending Plannotator review | pending waiterを破棄。public statusはmanual diagnosticに使えるが、自動approval適用なし |
 | completed Coordinator before reload | event replayを仮定しない。artifact/statusの自動phase recoveryなし |
 | completed terminal workflow | custom state snapshotをrestoreし、terminal resultとして表示可能 |
+| `/tree` navigation | active Root workflow中は`session_before_tree`で拒否する。terminalまたはworkflowなしでは許可し、`session_tree`後にcurrent branchのlatest valid Root snapshotをrestoreする |
 | no persisted session / different Root process | cross-process recovery/ownership claimはunsupported |
 
 ### 36.2 Shutdown hook

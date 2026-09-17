@@ -24,7 +24,12 @@ it("registers Root session lifecycle only in the normal runtime", () => {
   extension(fakePi(events));
   vi.unstubAllEnvs();
 
-  expect(events).toEqual(["session_start", "session_shutdown"]);
+  expect(events).toEqual([
+    "session_start",
+    "session_before_tree",
+    "session_tree",
+    "session_shutdown",
+  ]);
 });
 
 it("does not register Root lifecycle in a pi-subagents child runtime", () => {
