@@ -26,11 +26,17 @@ it("uses one dedicated bounded Grilling route with explicit Skills", () => {
   expect(tools).not.toContain("contact_supervisor");
 });
 
-it("fails closed instead of using a Step 9 Human bridge", () => {
+it("uses the child-only Human Decision bridge without a Parent fallback", () => {
   const source = readFileSync(AGENT_PATH, "utf8");
 
-  expect(source).toContain("return a structured Planning blocker");
+  expect(source).toContain("pi_workflow_human_decision");
   expect(source).toContain("Do not ask the Root Parent");
-  expect(source).toContain("call a Human bridge tool");
-  expect(source).not.toContain("pi_workflow_human_decision");
+  expect(source).toContain("use a direct TUI");
+  expect(source).toContain("invent a default answer");
+  expect(source).toContain(
+    "Treat every result other than `answered` as a structured Planning blocker",
+  );
+  expect(source).toContain(
+    "subagentOnlyExtensions: ../src/runtime/human-decision-bridge.ts",
+  );
 });

@@ -4,12 +4,14 @@ import {
   canStartWorkflow,
   createInitialWorkflowState,
   isActivePhase,
+  isValidRequestId,
   validatePlanningCoordinatorResult,
   isValidRunId,
   isValidWorkflowId,
   isWorkflowType,
   transitionRootWorkflowState,
   validateRootWorkflowState,
+  type PendingInteraction,
   type RootWorkflowState,
   type WorkflowPhase,
 } from "../core/index.ts";
@@ -196,6 +198,66 @@ export class RootWorkflowRegistry {
         transitioned: true,
         state: this.commit({ ...this.state, planningRunId: runId }),
       };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public setPendingInteraction(
+    interaction: PendingInteraction,
+  ): RegistryTransitionResult {
+    if (this.state === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (
+      this.state.phase !== "PLANNING" ||
+      this.state.planningStatus !== "RUNNING" ||
+      this.state.planningRunId !== interaction.coordinatorRunId ||
+      this.state.pendingInteraction !== undefined ||
+      interaction.kind !== "human" ||
+      !isValidRequestId(interaction.requestId) ||
+      !isValidRunId(interaction.coordinatorRunId)
+    ) {
+      return {
+        transitioned: false,
+        reason: "Human Decision interaction cannot be attached",
+      };
+    }
+    try {
+      return {
+        transitioned: true,
+        state: this.commit({ ...this.state, pendingInteraction: interaction }),
+      };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public clearPendingInteraction(requestId: unknown): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (!isValidRequestId(requestId)) {
+      return {
+        transitioned: false,
+        reason: "Human Decision request ID is invalid",
+      };
+    }
+    const pending = current.pendingInteraction;
+    if (pending === undefined) {
+      return { transitioned: true, state: cloneState(current) };
+    }
+    if (pending.requestId !== requestId) {
+      return {
+        transitioned: false,
+        reason: "Human Decision request does not match the pending interaction",
+      };
+    }
+    const next: RootWorkflowState = { ...current };
+    delete next.pendingInteraction;
+    try {
+      return { transitioned: true, state: this.commit(next) };
     } catch {
       return { transitioned: false, reason: "Persistence failed" };
     }

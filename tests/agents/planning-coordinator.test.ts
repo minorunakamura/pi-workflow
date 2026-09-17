@@ -25,7 +25,7 @@ it("declares the Planning Coordinator as a bounded fresh package agent", () => {
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);
 });
 
-it("declares the Step 8 capability launch contracts and Human blocker", () => {
+it("declares the Planning capability launch contracts and Human bridge", () => {
   const source = readFileSync(AGENT_PATH, "utf8");
 
   expect(source).toContain("existing `agent: scout`");
@@ -49,18 +49,23 @@ it("declares the Step 8 capability launch contracts and Human blocker", () => {
     "`context: fresh`, `output: oracle-report.md`, and `outputMode: file-only`",
   );
   expect(source).toContain(
-    "If any Planning path selects Human Decision, record a bounded remaining blocker and fail",
+    "If any Planning path selects Human Decision, call `pi_workflow_human_decision`",
   );
   expect(source).toContain("Do not ask the Root Parent");
   expect(source).toContain("direct TUI");
   expect(source).toContain("invent a default answer");
-  expect(source).toContain("call a Human bridge tool");
+  expect(source).toContain(
+    "Treat every result other than `answered` as a fail-closed Planning blocker",
+  );
   expect(source).toContain("source writes");
   expect(source).toContain("CodeGraph `init`, `index`, `sync`, or `upgrade`");
   expect(source).toContain("Do not copy a fixed universal capability sequence");
   expect(source).not.toContain("package-owned `agent: scout`");
   expect(source).not.toContain("grill-with-docs");
-  expect(source).not.toContain("pi_workflow_human_decision");
+  expect(source).toContain("pi_workflow_human_decision");
+  expect(source).toContain(
+    "subagentOnlyExtensions: ../src/runtime/human-decision-bridge.ts",
+  );
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);

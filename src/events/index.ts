@@ -3,6 +3,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RootWorkflowRegistry } from "../runtime/root-lifecycle.ts";
 import { registerPlanningCompletionObservation } from "../runtime/planning-completion.ts";
 import { registerResultDeliveryObservation } from "../runtime/result-delivery.ts";
+import {
+  registerHumanDecisionRootBridge,
+  type HumanDecisionRootBridge,
+} from "../runtime/human-decision-bridge.ts";
 import { registerSubagentLifecycleObservation } from "../runtime/subagents-rpc.ts";
 
 const PLANNING_FAILURE_STATES = new Set([
@@ -94,14 +98,23 @@ export function registerSessionLifecycle(
   stopPlanningCoordinator?: (runId: string) => Promise<unknown>,
 ): void {
   let removeLifecycleObservation: (() => void) | undefined;
+  let humanDecisionBridge: HumanDecisionRootBridge | undefined;
 
   pi.on("session_start", (_event, ctx) => {
     removeLifecycleObservation?.();
     removeLifecycleObservation = undefined;
+    humanDecisionBridge?.dispose();
+    humanDecisionBridge = undefined;
     registry.restore(ctx.sessionManager.getBranch());
     const events = pi.events;
     const sessionId = currentSessionIdentity(ctx.sessionManager);
     if (events !== undefined && sessionId !== undefined) {
+      humanDecisionBridge = registerHumanDecisionRootBridge({
+        events,
+        registry,
+        sessionId,
+        mode: ctx.mode,
+      });
       removeLifecycleObservation = registerSubagentLifecycle(
         { events },
         registry,
@@ -121,6 +134,8 @@ export function registerSessionLifecycle(
     const planningRunId = registry.hasActiveWorkflow()
       ? current?.planningRunId
       : undefined;
+    humanDecisionBridge?.dispose();
+    humanDecisionBridge = undefined;
     if (planningRunId !== undefined && stopPlanningCoordinator !== undefined) {
       try {
         await stopPlanningCoordinator(planningRunId);

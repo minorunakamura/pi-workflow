@@ -2,7 +2,7 @@
 
 Pi packageとして配布する、Root-owned workflowの実装です。
 
-現在はImplementation Specification Section 42のStep 8（Planning capabilities）までを実装しています。Human/Plannotator bridge、Implementationは未実装です。
+現在はImplementation Specification Section 42のStep 9（Human Decision Bridge）までを実装しています。Plannotator bridge、Implementationは未実装です。Human DecisionはRoot TUIでのみ利用できます。
 
 ## 開発
 
