@@ -382,6 +382,13 @@ export class SubagentRpcAdapter {
 
     const requestId = createRequestId();
     await this.waitForReady(requestId, options.signal);
+    if (options.signal?.aborted) {
+      throw new SubagentRpcError(
+        "RPC_ABORTED",
+        "RPC request was aborted",
+        requestId,
+      );
+    }
     if (this.disposed) {
       throw new SubagentRpcError(
         "RPC_DISPOSED",
@@ -493,6 +500,15 @@ export class SubagentRpcAdapter {
     requestId: string,
     signal: AbortSignal | undefined,
   ): Promise<SubagentRpcReadyPayload> {
+    if (signal?.aborted) {
+      return Promise.reject(
+        new SubagentRpcError(
+          "RPC_ABORTED",
+          "RPC request was aborted",
+          requestId,
+        ),
+      );
+    }
     if (this.ready !== undefined) return Promise.resolve(this.ready);
     if (this.disposed) {
       return Promise.reject(
@@ -503,16 +519,6 @@ export class SubagentRpcAdapter {
         ),
       );
     }
-    if (signal?.aborted) {
-      return Promise.reject(
-        new SubagentRpcError(
-          "RPC_ABORTED",
-          "RPC request was aborted",
-          requestId,
-        ),
-      );
-    }
-
     return new Promise((resolve, reject) => {
       let removeAbortListener = () => {};
       const waiter: ReadyWaiter = {
@@ -778,14 +784,8 @@ function lifecycleRecord(
   kind: SubagentLifecycleKind,
   sessionId: string | undefined,
 ): SubagentLifecycleRecord | undefined {
-  if (!isRecord(value)) return undefined;
-  if (
-    sessionId !== undefined &&
-    value.sessionId !== undefined &&
-    value.sessionId !== sessionId
-  ) {
-    return undefined;
-  }
+  if (!isRecord(value) || sessionId === undefined) return undefined;
+  if (value.sessionId !== sessionId) return undefined;
   const runId = lifecycleRunId(value, kind);
   if (runId === undefined) return undefined;
   const record: SubagentLifecycleRecord = {

@@ -109,6 +109,67 @@ it("waits for a validated ready event before sending public RPC", async () => {
   adapter.dispose();
 });
 
+it("rejects an already-aborted request before emitting RPC, even when ready", async () => {
+  vi.useFakeTimers();
+  try {
+    const events = new FakeEventBus();
+    const adapter = new SubagentRpcAdapter(events);
+    events.emit(SUBAGENT_RPC_READY_EVENT, ready);
+    let requestCount = 0;
+    events.on(SUBAGENT_RPC_REQUEST_EVENT, () => {
+      requestCount += 1;
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      adapter.request("ping", undefined, { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "RPC_ABORTED" });
+    expect(requestCount).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    adapter.dispose();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("cleans reply listeners and timers when an in-flight request is aborted", async () => {
+  vi.useFakeTimers();
+  try {
+    const events = new FakeEventBus();
+    const adapter = new SubagentRpcAdapter(events);
+    events.emit(SUBAGENT_RPC_READY_EVENT, ready);
+    let requestId = "";
+    events.on(SUBAGENT_RPC_REQUEST_EVENT, (raw) => {
+      requestId = requestFrom(raw).requestId;
+    });
+    const controller = new AbortController();
+    const pending = adapter.request(
+      "status",
+      { id: "opaque-run" },
+      { signal: controller.signal },
+    );
+    const assertion = expect(pending).rejects.toMatchObject({
+      code: "RPC_ABORTED",
+    });
+    await Promise.resolve();
+    expect(requestId).not.toBe("");
+    expect(
+      events.listenerCount(`${SUBAGENT_RPC_REPLY_EVENT_PREFIX}${requestId}`),
+    ).toBe(1);
+
+    controller.abort();
+    await assertion;
+    expect(
+      events.listenerCount(`${SUBAGENT_RPC_REPLY_EVENT_PREFIX}${requestId}`),
+    ).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    adapter.dispose();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("cleans up the ready waiter when the fixed ready timeout expires", async () => {
   vi.useFakeTimers();
   try {
@@ -239,6 +300,48 @@ it("does not parse human-readable spawn text as a run ID", async () => {
     }),
   ).rejects.toMatchObject({ code: "RPC_MISSING_RUN_ID" });
   adapter.dispose();
+});
+
+it("uses a persisted session file as the lifecycle identity", () => {
+  const events = new FakeEventBus();
+  const completed: unknown[] = [];
+  const conflicts: unknown[] = [];
+  const dispose = registerSubagentLifecycleObservation(events, {
+    sessionId: "/sessions/current.jsonl",
+    onComplete: (record) => completed.push(record),
+    onConflict: (runId) => conflicts.push(runId),
+  });
+
+  for (const sessionId of [
+    "logical-session-id",
+    "/sessions/foreign.jsonl",
+    undefined,
+  ]) {
+    events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+      runId: "planning-run",
+      ...(sessionId === undefined ? {} : { sessionId }),
+      state: "complete",
+      success: true,
+    });
+  }
+  events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: "planning-run",
+    sessionId: "/sessions/current.jsonl",
+    state: "complete",
+    success: true,
+  });
+
+  expect(completed).toEqual([
+    {
+      kind: "complete",
+      runId: "planning-run",
+      state: "complete",
+      success: true,
+      artifactRefs: [],
+    },
+  ]);
+  expect(conflicts).toEqual([]);
+  dispose();
 });
 
 it("uses only public status and stop methods with the opaque run ID target", async () => {
@@ -390,6 +493,7 @@ it("observes compact lifecycle identities and ignores duplicate or foreign compl
   });
   events.emit(SUBAGENT_PROCESS_TERMINAL_EVENT, {
     runId: "planning-run",
+    sessionId: "session-1",
     processTerminal: { state: "observed" },
   });
 
