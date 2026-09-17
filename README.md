@@ -2,7 +2,7 @@
 
 Pi packageとして配布する、Root-owned workflowの実装です。
 
-現在はImplementation Specification Section 42のStep 3（Root lifecycle/state machine）までを実装しています。`/wf-*` command、workflow runtimeのRPC、Coordinator、Skillは後続Stepの対象であり、まだ実装していません。
+現在はImplementation Specification Section 42のStep 4（`/wf-*` Commands）までを実装しています。workflow runtimeのRPC、Coordinator、Skillは後続Stepの対象です。
 
 ## 開発
 
