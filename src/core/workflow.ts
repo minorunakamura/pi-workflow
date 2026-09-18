@@ -381,13 +381,32 @@ export const TIMEOUT_POLICY = Object.freeze({
 
 export const AUTOMATIC_RETRY_ENABLED = false;
 
+function isRelativeArtifactPath(value: string): boolean {
+  return isSafeRelativePath(value);
+}
+
+function isSafeArtifactPath(value: unknown): value is string {
+  if (!isBoundedString(value, 4096, true) || /[\0\r\n]/u.test(value)) {
+    return false;
+  }
+  const pathValue = value;
+  if (isRelativeArtifactPath(pathValue)) return true;
+  const absolute =
+    pathValue.startsWith("/") ||
+    pathValue.startsWith("\\\\") ||
+    /^[A-Za-z]:[\\/]/u.test(pathValue);
+  return (
+    absolute && pathValue.split(/[\\/]/u).every((segment) => segment !== "..")
+  );
+}
+
 export function isValidArtifactRef(value: unknown): value is ArtifactRef {
   if (!isRecord(value) || !hasOnlyKeys(value, ["kind", "path", "mediaType"])) {
     return false;
   }
   return (
     value.kind === "managed" &&
-    isSafeRelativePath(value.path) &&
+    isSafeArtifactPath(value.path) &&
     (value.mediaType === "text/markdown" ||
       value.mediaType === "application/json" ||
       value.mediaType === "text/plain" ||

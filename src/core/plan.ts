@@ -6,6 +6,7 @@ import {
   isBoundedString,
   isNormalizedOpaqueId,
   isRecord,
+  isSafeRelativePath,
   validResult,
   type ValidationResult,
 } from "./validation.ts";
@@ -93,8 +94,46 @@ function artifactDirectory(path: string): string {
   return separator < 0 ? "" : normalized.slice(0, separator);
 }
 
+function isAbsoluteManagedArtifactPath(value: string): boolean {
+  return (
+    value.startsWith("/") ||
+    value.startsWith("\\\\") ||
+    /^[A-Za-z]:[\\/]/u.test(value)
+  );
+}
+
+function isRelativeManagedPath(value: string): boolean {
+  return isSafeRelativePath(value);
+}
+
+function isManagedArtifactPath(value: unknown): value is string {
+  if (!isBoundedString(value, 4096, true) || /[\0\r\n]/u.test(value)) {
+    return false;
+  }
+  const pathValue = value;
+  const relativePath = isRelativeManagedPath(pathValue);
+  if (relativePath) return true;
+  if (!isAbsoluteManagedArtifactPath(pathValue)) return false;
+  return pathValue.split(/[\\/]/u).every((segment) => segment !== "..");
+}
+
 function copyArtifactRef(value: ArtifactRef): ArtifactRef {
   return { kind: value.kind, path: value.path, mediaType: value.mediaType };
+}
+
+function isPlanningArtifactReference(
+  value: unknown,
+  expectedFileName: string,
+  expectedMediaType: ArtifactRef["mediaType"],
+): value is ArtifactRef {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["kind", "path", "mediaType"]) &&
+    value.kind === "managed" &&
+    isManagedArtifactPath(value.path) &&
+    value.mediaType === expectedMediaType &&
+    artifactBaseName(value.path) === expectedFileName
+  );
 }
 
 function validatePlanningArtifactReference(
@@ -104,9 +143,7 @@ function validatePlanningArtifactReference(
   label: string,
 ): ValidationResult<ArtifactRef> {
   if (
-    !isValidArtifactRef(value) ||
-    value.mediaType !== expectedMediaType ||
-    artifactBaseName(value.path) !== expectedFileName
+    !isPlanningArtifactReference(value, expectedFileName, expectedMediaType)
   ) {
     return invalidResult(`${label} reference is invalid`);
   }
