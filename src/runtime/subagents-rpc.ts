@@ -1,4 +1,5 @@
 import {
+  IMPLEMENTATION_COORDINATOR_CONTRACT_VERSION,
   PLANNING_COORDINATOR_CONTRACT_VERSION,
   PLANNING_COORDINATOR_RESULT_SCHEMA,
   TIMEOUTS,
@@ -6,9 +7,11 @@ import {
   createRunId,
   getWorkflowPolicy,
   isNormalizedOpaqueId,
+  validateImplementationCoordinatorInput,
   validatePlanningCoordinatorInput,
   isValidWorkflowId,
   isWorkflowType,
+  type ImplementationCoordinatorInput,
   type PlanningCoordinatorInput,
   type RunId,
   type WorkflowRequest,
@@ -352,7 +355,36 @@ function serializePlanningCoordinatorTask(request: WorkflowRequest): string {
   }
 }
 
+function serializeImplementationCoordinatorTask(
+  input: ImplementationCoordinatorInput,
+): string {
+  const validation = validateImplementationCoordinatorInput(input);
+  if (!validation.valid) {
+    throw new SubagentRpcError(
+      "RPC_INVALID_COORDINATOR_TASK",
+      "Implementation Coordinator task is invalid",
+    );
+  }
+  const task = JSON.stringify(validation.value);
+  if (
+    !isBoundedString(task, MAX_COORDINATOR_TASK_BYTES, true) ||
+    validation.value.contractVersion !==
+      IMPLEMENTATION_COORDINATOR_CONTRACT_VERSION
+  ) {
+    throw new SubagentRpcError(
+      "RPC_INVALID_COORDINATOR_TASK",
+      "Implementation Coordinator task is invalid or too large",
+    );
+  }
+  return task;
+}
+
 export interface PlanningCoordinatorLaunchResult {
+  requestId: string;
+  runId: RunId;
+}
+
+export interface ImplementationCoordinatorLaunchResult {
   requestId: string;
   runId: RunId;
 }
@@ -485,6 +517,44 @@ export class SubagentRpcAdapter {
       throw new SubagentRpcError(
         "RPC_MISSING_RUN_ID",
         "Planning Coordinator spawn reply has no structured run ID",
+        response.requestId,
+      );
+    }
+    return { requestId: response.requestId, runId };
+  }
+
+  public async spawnImplementationCoordinator(
+    input: ImplementationCoordinatorInput,
+    options: SubagentRpcRequestOptions = {},
+  ): Promise<ImplementationCoordinatorLaunchResult> {
+    const task = serializeImplementationCoordinatorTask(input);
+    const response = await this.request(
+      "spawn",
+      {
+        agent: "pi-workflow.implementation-coordinator",
+        task,
+        context: "fresh",
+        cwd: input.workflow.cwd,
+        async: true,
+        output: "implementation-summary.md",
+        outputMode: "file-only",
+        artifacts: true,
+        timeoutMs: TIMEOUTS.coordinatorTimeoutMs,
+      },
+      options,
+    );
+    if (!isSuccessReply(response)) {
+      throw new SubagentRpcError(
+        "RPC_FAILURE",
+        `Implementation Coordinator spawn failed: ${response.error.code}`,
+        response.requestId,
+      );
+    }
+    const runId = runIdFromSpawnData(response.data);
+    if (runId === undefined) {
+      throw new SubagentRpcError(
+        "RPC_MISSING_RUN_ID",
+        "Implementation Coordinator spawn reply has no structured run ID",
         response.requestId,
       );
     }

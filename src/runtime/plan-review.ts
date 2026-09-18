@@ -27,7 +27,10 @@ import {
   type ValidationResult,
 } from "../core/validation.ts";
 import type { RegistryTransitionResult } from "./root-lifecycle.ts";
-import type { PlanningCoordinatorLaunchResult } from "./subagents-rpc.ts";
+import type {
+  ImplementationCoordinatorLaunchResult,
+  PlanningCoordinatorLaunchResult,
+} from "./subagents-rpc.ts";
 
 export const PLANNOTATOR_REQUEST_EVENT = "plannotator:request" as const;
 export const PLANNOTATOR_REVIEW_RESULT_EVENT =
@@ -83,6 +86,7 @@ export interface PlanReviewRegistry {
     reviewId: unknown,
     feedback?: unknown,
   ): RegistryTransitionResult;
+  startImplementation(runId: unknown): RegistryTransitionResult;
   preparePlanResubmission(): RegistryTransitionResult;
   setPlanningRunId(runId: unknown): RegistryTransitionResult;
   transition(to: "FAILED"): RegistryTransitionResult;
@@ -92,7 +96,11 @@ export interface PlanReviewRootBridgeOptions {
   events: PlanReviewEventBus;
   registry: PlanReviewRegistry;
   launchFreshPlanningCoordinator?: () => Promise<PlanningCoordinatorLaunchResult>;
+  launchFreshImplementationCoordinator?: (
+    state: RootWorkflowState,
+  ) => Promise<ImplementationCoordinatorLaunchResult>;
   stopPlanningCoordinator?: (runId: string) => Promise<unknown>;
+  stopImplementationCoordinator?: (runId: string) => Promise<unknown>;
   readFile?: (path: string) => Promise<Uint8Array>;
   resolveArtifactPath?: (path: string) => string;
   timeoutMs?: number;
@@ -590,6 +598,40 @@ export class PlanReviewRootBridge {
           );
       if (!transition.transitioned)
         throw new PlanReviewError(transition.reason);
+
+      if (result.approved) {
+        const launchImplementation =
+          this.options.launchFreshImplementationCoordinator;
+        if (launchImplementation !== undefined) {
+          const approvedState = this.options.registry.getState();
+          if (approvedState === undefined) {
+            throw new PlanReviewError(
+              "Root workflow disappeared after Plan approval",
+            );
+          }
+          let launch: ImplementationCoordinatorLaunchResult;
+          try {
+            launch = await launchImplementation(approvedState);
+          } catch (error) {
+            throw new PlanReviewError(
+              error instanceof Error
+                ? error.message
+                : "Fresh Implementation Coordinator could not be started",
+            );
+          }
+          const attached = this.options.registry.startImplementation(
+            launch.runId,
+          );
+          if (!attached.transitioned) {
+            try {
+              await this.options.stopImplementationCoordinator?.(launch.runId);
+            } catch {
+              // The workflow remains fail-closed when an orphan stop fails.
+            }
+            throw new PlanReviewError(attached.reason);
+          }
+        }
+      }
 
       if (pending.timer !== undefined) clearTimeout(pending.timer);
       this.pending = undefined;

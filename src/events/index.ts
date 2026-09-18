@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { RootWorkflowRegistry } from "../runtime/root-lifecycle.ts";
+import type { RootWorkflowState } from "../core/index.ts";
 import { registerPlanningCompletionObservation } from "../runtime/planning-completion.ts";
 import { registerResultDeliveryObservation } from "../runtime/result-delivery.ts";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../runtime/plan-review.ts";
 import {
   registerSubagentLifecycleObservation,
+  type ImplementationCoordinatorLaunchResult,
   type PlanningCoordinatorLaunchResult,
 } from "../runtime/subagents-rpc.ts";
 
@@ -117,6 +119,9 @@ export function registerSessionLifecycle(
   cleanup?: () => void,
   stopPlanningCoordinator?: (runId: string) => Promise<unknown>,
   launchFreshPlanningCoordinator?: () => Promise<PlanningCoordinatorLaunchResult>,
+  launchFreshImplementationCoordinator?: (
+    state: RootWorkflowState,
+  ) => Promise<ImplementationCoordinatorLaunchResult>,
 ): void {
   let removeLifecycleObservation: (() => void) | undefined;
   let humanDecisionBridge: HumanDecisionRootBridge | undefined;
@@ -145,9 +150,15 @@ export function registerSessionLifecycle(
         ...(launchFreshPlanningCoordinator === undefined
           ? {}
           : { launchFreshPlanningCoordinator }),
+        ...(launchFreshImplementationCoordinator === undefined
+          ? {}
+          : { launchFreshImplementationCoordinator }),
         ...(stopPlanningCoordinator === undefined
           ? {}
-          : { stopPlanningCoordinator }),
+          : {
+              stopPlanningCoordinator,
+              stopImplementationCoordinator: stopPlanningCoordinator,
+            }),
       });
       removeLifecycleObservation = registerSubagentLifecycle(
         { events },
