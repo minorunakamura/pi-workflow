@@ -11,7 +11,10 @@ import {
   registerPlanReviewRootBridge,
   type PlanReviewRootBridge,
 } from "../runtime/plan-review.ts";
-import { registerSubagentLifecycleObservation } from "../runtime/subagents-rpc.ts";
+import {
+  registerSubagentLifecycleObservation,
+  type PlanningCoordinatorLaunchResult,
+} from "../runtime/subagents-rpc.ts";
 
 const PLANNING_FAILURE_STATES = new Set([
   "failed",
@@ -113,6 +116,7 @@ export function registerSessionLifecycle(
   registry: RootWorkflowRegistry,
   cleanup?: () => void,
   stopPlanningCoordinator?: (runId: string) => Promise<unknown>,
+  launchFreshPlanningCoordinator?: () => Promise<PlanningCoordinatorLaunchResult>,
 ): void {
   let removeLifecycleObservation: (() => void) | undefined;
   let humanDecisionBridge: HumanDecisionRootBridge | undefined;
@@ -135,7 +139,16 @@ export function registerSessionLifecycle(
         sessionId,
         mode: ctx.mode,
       });
-      planReviewBridge = registerPlanReviewRootBridge({ events, registry });
+      planReviewBridge = registerPlanReviewRootBridge({
+        events,
+        registry,
+        ...(launchFreshPlanningCoordinator === undefined
+          ? {}
+          : { launchFreshPlanningCoordinator }),
+        ...(stopPlanningCoordinator === undefined
+          ? {}
+          : { stopPlanningCoordinator }),
+      });
       removeLifecycleObservation = registerSubagentLifecycle(
         { events },
         registry,

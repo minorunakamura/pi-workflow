@@ -17,6 +17,7 @@ import {
   type PendingInteraction,
   type RootWorkflowState,
   type WorkflowPhase,
+  type WorkflowRequest,
 } from "../core/index.ts";
 import { isBoundedString, isRecord } from "../core/validation.ts";
 
@@ -95,6 +96,7 @@ export function persistRootWorkflowState(
 
 export class RootWorkflowRegistry {
   private state: RootWorkflowState | undefined;
+  private activeWorkflowRequest: WorkflowRequest | undefined;
 
   public constructor(private readonly appendEntry: AppendEntry) {}
 
@@ -102,11 +104,44 @@ export class RootWorkflowRegistry {
     return this.state === undefined ? undefined : cloneState(this.state);
   }
 
+  public bindWorkflowRequest(request: WorkflowRequest): boolean {
+    const state = this.state;
+    if (
+      state === undefined ||
+      !isActivePhase(state.phase) ||
+      request.workflowId !== state.workflowId ||
+      !isWorkflowType(request.workflowType) ||
+      !isBoundedString(request.request, 64 * 1024, true) ||
+      !isBoundedString(request.cwd, 4096, true) ||
+      /[\0\r\n]/u.test(request.cwd) ||
+      !isBoundedString(request.createdAt, 128, true)
+    ) {
+      return false;
+    }
+    this.activeWorkflowRequest = structuredClone(request);
+    return true;
+  }
+
+  public getActiveWorkflowRequest(): WorkflowRequest | undefined {
+    const state = this.state;
+    const request = this.activeWorkflowRequest;
+    if (
+      state === undefined ||
+      !isActivePhase(state.phase) ||
+      request === undefined ||
+      request.workflowId !== state.workflowId
+    ) {
+      return undefined;
+    }
+    return structuredClone(request);
+  }
+
   public hasActiveWorkflow(): boolean {
     return this.state !== undefined && isActivePhase(this.state.phase);
   }
 
   public restore(entries: readonly unknown[]): RootWorkflowState | undefined {
+    this.activeWorkflowRequest = undefined;
     const restored = readLatestRootWorkflowState(entries);
     if (restored === undefined || !isActivePhase(restored.phase)) {
       this.state = restored;
@@ -141,6 +176,7 @@ export class RootWorkflowRegistry {
 
   public clear(): void {
     this.state = undefined;
+    this.activeWorkflowRequest = undefined;
   }
 
   public start(
@@ -160,6 +196,7 @@ export class RootWorkflowRegistry {
       return { started: false, reason: "INVALID_STATE" };
     }
     try {
+      this.activeWorkflowRequest = undefined;
       return { started: true, state: this.commit(transition.state) };
     } catch {
       return { started: false, reason: "PERSISTENCE_FAILED" };
@@ -314,14 +351,26 @@ export class RootWorkflowRegistry {
       return { transitioned: false, reason: "No Root workflow exists" };
     }
     const pending = current.pendingInteraction;
-    if (
-      current.phase !== "PLAN_REVIEW" ||
-      current.planningStatus !== "COMPLETED" ||
-      pending?.kind !== "plan-review" ||
-      pending.reviewId !== reviewId ||
-      !isValidReviewId(reviewId) ||
-      (feedback !== undefined && !isBoundedString(feedback, 16 * 1024))
-    ) {
+    const validReview =
+      current.phase === "PLAN_REVIEW" &&
+      current.planningStatus === "COMPLETED" &&
+      pending?.kind === "plan-review" &&
+      pending.reviewId === reviewId &&
+      isValidReviewId(reviewId) &&
+      (feedback === undefined || isBoundedString(feedback, 16 * 1024));
+    if (!validReview) {
+      if (
+        current.phase === "PLAN_REVIEW" &&
+        current.planningStatus === "COMPLETED"
+      ) {
+        const failure = this.transition("FAILED");
+        return failure.transitioned
+          ? {
+              transitioned: false,
+              reason: "Plan rejection does not match the pending review",
+            }
+          : failure;
+      }
       return {
         transitioned: false,
         reason: "Plan rejection does not match the pending review",
@@ -330,6 +379,9 @@ export class RootWorkflowRegistry {
 
     const next: RootWorkflowState = {
       ...current,
+      ...(current.planResubmissionCount === 1
+        ? { phase: "FAILED" as const, finalStatus: "FAILED" as const }
+        : {}),
       reviewId,
       approval: false,
     };
@@ -352,17 +404,19 @@ export class RootWorkflowRegistry {
     if (current === undefined) {
       return { transitioned: false, reason: "No Root workflow exists" };
     }
-    if (
-      current.phase !== "PLAN_REVIEW" ||
-      current.planningStatus !== "COMPLETED" ||
-      current.pendingInteraction !== undefined ||
-      current.approval === true ||
-      !canResubmitPlan(current.planResubmissionCount)
-    ) {
-      return {
-        transitioned: false,
-        reason: "Plan resubmission is not allowed",
-      };
+    const validRejectedPlan =
+      current.phase === "PLAN_REVIEW" &&
+      current.planningStatus === "COMPLETED" &&
+      current.pendingInteraction === undefined &&
+      current.approval === false &&
+      isValidReviewId(current.reviewId) &&
+      current.planResubmissionCount === 0 &&
+      canResubmitPlan(current.planResubmissionCount);
+    if (!validRejectedPlan) {
+      const failure = this.transition("FAILED");
+      return failure.transitioned
+        ? { transitioned: false, reason: "Plan resubmission is not allowed" }
+        : failure;
     }
 
     const next: RootWorkflowState = {
@@ -513,6 +567,7 @@ export class RootWorkflowRegistry {
     const next = cloneState(state);
     persistRootWorkflowState(this.appendEntry, next);
     this.state = next;
+    if (!isActivePhase(next.phase)) this.activeWorkflowRequest = undefined;
     return cloneState(next);
   }
 }

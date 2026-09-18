@@ -16,6 +16,8 @@ import {
   PlanReviewRootBridge,
   isPlanReviewRequest,
 } from "../../src/runtime/plan-review.ts";
+import { registerPlanningCompletionObservation } from "../../src/runtime/planning-completion.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/runtime/subagents-rpc.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
 
 const WORKFLOW_ID = createWorkflowId("00000000-0000-4000-8000-000000000011");
@@ -45,6 +47,7 @@ class FakeEventBus {
 function writeArtifacts(
   root: string,
   content: string,
+  planningRunId = createRunId("planning-run"),
 ): {
   planPath: string;
   handoffPath: string;
@@ -65,7 +68,7 @@ function writeArtifacts(
     testSeams: ["Plan Review bridge"],
     constraints: ["Keep approval Root-owned."],
     nonGoals: ["Do not implement the next phase."],
-    planningRunId: createRunId("planning-run"),
+    planningRunId,
   });
   if (!handoff.valid) throw new Error(handoff.errors.join("; "));
   writeFileSync(handoffPath, `${JSON.stringify(handoff.value)}\n`);
@@ -191,6 +194,7 @@ it("supports review-status recovery and keeps rejection in PLAN_REVIEW", async (
   const registry = readyRegistry(artifacts);
   const events = new FakeEventBus();
   const actions: string[] = [];
+  let launchCount = 0;
   events.on(PLANNOTATOR_REQUEST_EVENT, (value) => {
     if (!isPlanReviewRequest(value)) return;
     actions.push(value.action);
@@ -215,6 +219,10 @@ it("supports review-status recovery and keeps rejection in PLAN_REVIEW", async (
   const bridge = new PlanReviewRootBridge({
     events,
     registry,
+    launchFreshPlanningCoordinator: async () => {
+      launchCount += 1;
+      return { requestId: "unused", runId: createRunId("unused-run") };
+    },
     timeoutMs: 5,
   });
   expect((await bridge.start()).started).toBe(true);
@@ -227,6 +235,7 @@ it("supports review-status recovery and keeps rejection in PLAN_REVIEW", async (
     reviewId: "review-status",
     approvalFeedback: "Please clarify the constraints.",
   });
+  expect(launchCount).toBe(0);
   bridge.dispose();
 });
 
@@ -273,20 +282,38 @@ it("rejects changed Plan content and permits one fresh resubmission only", async
   const secondRegistry = readyRegistry(secondInitial);
   const secondEvents = new FakeEventBus();
   const secondIds = ["review-rejected", "review-resubmitted"];
+  const reviewedPlanContents: string[] = [];
   secondEvents.on(PLANNOTATOR_REQUEST_EVENT, (value) => {
     if (!isPlanReviewRequest(value) || value.action !== "plan-review") return;
     const reviewId = secondIds.shift();
     if (reviewId === undefined) return;
+    if (typeof value.payload.planContent === "string") {
+      reviewedPlanContents.push(value.payload.planContent);
+    }
     value.respond({
       status: "handled",
       result: { status: "pending", reviewId },
     });
   });
+  const newRun = createRunId("planning-run-2");
+  let launchCount = 0;
   const secondBridge = new PlanReviewRootBridge({
     events: secondEvents,
     registry: secondRegistry,
+    launchFreshPlanningCoordinator: async () => {
+      launchCount += 1;
+      return { requestId: "rpc-resubmission", runId: newRun };
+    },
     timeoutMs: 1_000,
   });
+  const completionObservation = registerPlanningCompletionObservation(
+    secondEvents,
+    secondRegistry,
+    "session-1",
+    { isCompletionTrusted: () => true },
+    { onPlanningCompleted: (state) => void secondBridge.start(state) },
+  );
+
   expect((await secondBridge.start()).started).toBe(true);
   secondEvents.emit(PLANNOTATOR_REVIEW_RESULT_EVENT, {
     reviewId: "review-rejected",
@@ -294,20 +321,56 @@ it("rejects changed Plan content and permits one fresh resubmission only", async
     feedback: "Revise the plan.",
   });
   await settle();
-  expect(secondRegistry.preparePlanResubmission().transitioned).toBe(true);
-  const newRun = createRunId("planning-run-2");
-  expect(secondRegistry.setPlanningRunId(newRun).transitioned).toBe(true);
+
+  const resubmission = await secondBridge.resubmitPlanning();
+  expect(resubmission).toMatchObject({ started: true, runId: newRun });
+  expect(launchCount).toBe(1);
+  expect(secondRegistry.getState()).toMatchObject({
+    phase: "PLAN_REVIEW",
+    planningStatus: "RUNNING",
+    planResubmissionCount: 1,
+    planningRunId: newRun,
+  });
+
   const replacement = writeArtifacts(
     secondRoot,
     PLAN.replace("Bounded plan.", "Fresh bounded plan."),
-  );
-  const completion = secondRegistry.completePlanning(
     newRun,
-    planningResult(replacement.handoffPath, replacement.planPath),
   );
-  expect(completion.transitioned).toBe(true);
+  expect(replacement.hash).not.toBe(hashPlan(PLAN).value);
+  expect(
+    JSON.parse(readFileSync(replacement.handoffPath, "utf8")),
+  ).toMatchObject({
+    planArtifact: { path: "implementation-plan.md" },
+    planHash: { value: replacement.hash },
+  });
+  secondEvents.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+    runId: newRun,
+    sessionId: "session-1",
+    state: "complete",
+    success: true,
+    results: [
+      {
+        structuredOutput: planningResult(
+          replacement.handoffPath,
+          replacement.planPath,
+        ),
+      },
+    ],
+  });
+  await settle();
+  expect(reviewedPlanContents.at(-1)).toContain("Fresh bounded plan.");
+  expect(secondRegistry.getState()).toMatchObject({
+    phase: "PLAN_REVIEW",
+    planningStatus: "COMPLETED",
+    planningRunId: newRun,
+    planningHandoffRef: { path: replacement.handoffPath },
+    pendingInteraction: {
+      kind: "plan-review",
+      reviewId: "review-resubmitted",
+    },
+  });
 
-  expect((await secondBridge.start()).started).toBe(true);
   secondEvents.emit(PLANNOTATOR_REVIEW_RESULT_EVENT, {
     reviewId: "review-resubmitted",
     approved: false,
@@ -315,14 +378,45 @@ it("rejects changed Plan content and permits one fresh resubmission only", async
   });
   await settle();
   expect(secondRegistry.getState()).toMatchObject({
-    phase: "PLAN_REVIEW",
+    phase: "FAILED",
+    finalStatus: "FAILED",
     planResubmissionCount: 1,
-    planningRunId: newRun,
-    approval: false,
     reviewId: "review-resubmitted",
-    planningHandoffRef: { path: replacement.handoffPath },
+    approval: false,
     approvalFeedback: "The revised plan is still incomplete.",
   });
-  expect(secondRegistry.preparePlanResubmission().transitioned).toBe(false);
+  expect(launchCount).toBe(1);
+
+  const invalidResubmission = await secondBridge.resubmitPlanning();
+  expect(invalidResubmission.started).toBe(false);
+  expect(secondRegistry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  completionObservation.dispose();
   secondBridge.dispose();
+
+  const invalidRoot = mkdtempSync(join(tmpdir(), "pi-workflow-plan-invalid-"));
+  roots.push(invalidRoot);
+  const invalidRegistry = readyRegistry(writeArtifacts(invalidRoot, PLAN));
+  const invalidEvents = new FakeEventBus();
+  let invalidLaunchCount = 0;
+  const invalidBridge = new PlanReviewRootBridge({
+    events: invalidEvents,
+    registry: invalidRegistry,
+    launchFreshPlanningCoordinator: async () => {
+      invalidLaunchCount += 1;
+      return { requestId: "should-not-launch", runId: newRun };
+    },
+    timeoutMs: 1_000,
+  });
+  const invalidResubmissionBeforeRejection =
+    await invalidBridge.resubmitPlanning();
+  expect(invalidResubmissionBeforeRejection.started).toBe(false);
+  expect(invalidLaunchCount).toBe(0);
+  expect(invalidRegistry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  invalidBridge.dispose();
 });

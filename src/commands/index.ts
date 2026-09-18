@@ -32,6 +32,11 @@ export function registerCommands(
       planningCoordinator.preflightResultDelivery(),
     );
     if (!result.started) return;
+    if (!registry.bindWorkflowRequest(result.request)) {
+      registry.transition("FAILED");
+      context.ui.notify("Could not retain the workflow request.", "error");
+      return;
+    }
 
     try {
       const launch = await planningCoordinator.spawnPlanningCoordinator(
