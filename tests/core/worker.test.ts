@@ -69,7 +69,7 @@ it("builds a fake Worker handoff with fresh context, bounded output, and explici
     output: "worker-summary.md",
     outputMode: "file-only",
     worktree: false,
-    skills: ["tdd"],
+    skill: ["tdd"],
   });
   expect(JSON.parse(result.value.task)).toMatchObject({
     contractVersion: 1,
@@ -86,6 +86,30 @@ it("builds a fake Worker handoff with fresh context, bounded output, and explici
       ],
     },
   });
+});
+
+it("does not inject TDD Skill when TDD is not required", () => {
+  const result = createWorkerLaunchRequest({
+    ...handoff(),
+    tddMode: "optional",
+  });
+
+  expect(result.valid).toBe(true);
+  if (!result.valid) return;
+  expect(result.value).not.toHaveProperty("skill");
+});
+
+it("accepts a Worker handoff when no file or area paths are known", () => {
+  const result = validateWorkerHandoff({
+    ...handoff(),
+    scope: { allowedPaths: [], allowedAreas: [] },
+  });
+
+  expect(result.valid).toBe(true);
+  if (!result.valid) return;
+  expect(
+    validateWorkerChangedPaths(["src/unknown.ts"], result.value.scope).valid,
+  ).toBe(true);
 });
 
 it("accepts a valid behavioral RED/GREEN cycle and rejects infrastructure RED", () => {
