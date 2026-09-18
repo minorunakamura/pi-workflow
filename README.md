@@ -2,7 +2,7 @@
 
 Pi packageとして配布する、Root-owned workflowの実装です。
 
-現在はImplementation Specification Section 42のStep 14（Trusted Gates）までを実装しています。Planningのevidence-backed Gate確認、実装開始時のdrift検証、public acceptance gateによるmanaged実行、required/optional statusを提供します。Human DecisionはRoot TUIで、Plan ReviewはRoot-ownedのPlannotator bridgeで利用します。
+現在はImplementation Specification Section 42のStep 15（Reviewer / Finding / Disposition）までを実装しています。fresh read-only Reviewer、managed raw report、Coordinator-ownedのFinding normalizationとDispositionを提供します。Human DecisionはRoot TUIで、Plan ReviewはRoot-ownedのPlannotator bridgeで利用します。
 
 ## 開発
 
