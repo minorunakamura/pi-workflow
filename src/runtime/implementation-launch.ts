@@ -4,13 +4,21 @@ import {
   TIMEOUTS,
   validateApprovalIdentity,
   validateImplementationCoordinatorInput,
+  validateRequiredGateResolution,
   isValidRequestId,
   isValidRunId,
   type ImplementationCoordinatorInput,
   type RootWorkflowState,
+  type TrustedGate,
   type WorkflowRequest,
 } from "../core/index.ts";
-import { isRecord } from "../core/validation.ts";
+import {
+  hasOnlyKeys,
+  invalidResult,
+  isRecord,
+  validResult,
+  type ValidationResult,
+} from "../core/validation.ts";
 import {
   readPlanReviewSnapshot,
   type PlanReviewSnapshot,
@@ -28,10 +36,16 @@ export interface ImplementationCoordinatorSpawner {
   ): Promise<ImplementationCoordinatorLaunchResult>;
 }
 
+export interface ImplementationGateResolution {
+  readonly approvedGates: readonly TrustedGate[];
+  readonly repositoryGates: readonly TrustedGate[];
+}
+
 export interface FreshImplementationLaunchOptions
   extends ImplementationCoordinatorSpawner {
   registry: ImplementationLaunchRegistry;
   state?: RootWorkflowState;
+  gateResolution?: ImplementationGateResolution;
   stopImplementationCoordinator?: (runId: string) => Promise<unknown>;
   readFile?: (path: string) => Promise<Uint8Array>;
   resolveArtifactPath?: (path: string) => string;
@@ -51,6 +65,49 @@ function resolvedArtifactPath(
 
 function failure(reason: string): FreshImplementationLaunchResult {
   return { started: false, reason };
+}
+
+function hasTrustedGateExpectations(planContent: string): boolean {
+  const section =
+    /^## Trusted Gate expectations\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/mu.exec(
+      planContent,
+    )?.[1];
+  if (section === undefined) return true;
+  return section.replace(/<!--[\s\S]*?-->/gu, "").trim().length > 0;
+}
+
+function validatePreLaunchGateResolution(
+  planContent: string,
+  value: unknown,
+): ValidationResult<true> {
+  if (value === undefined && !hasTrustedGateExpectations(planContent)) {
+    return validResult(true);
+  }
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["approvedGates", "repositoryGates"]) ||
+    !Array.isArray(value.approvedGates) ||
+    !Array.isArray(value.repositoryGates)
+  ) {
+    return invalidResult(
+      "Approved required Gate resolution is missing or invalid",
+    );
+  }
+  if (
+    hasTrustedGateExpectations(planContent) &&
+    value.approvedGates.length === 0
+  ) {
+    return invalidResult(
+      "Trusted Gate expectations have no approved Gate resolution",
+    );
+  }
+  const resolution = validateRequiredGateResolution(
+    value.approvedGates,
+    value.repositoryGates,
+  );
+  return resolution.valid
+    ? validResult(true)
+    : invalidResult(...resolution.errors);
 }
 
 function approvalFromState(
@@ -166,6 +223,14 @@ export async function launchFreshImplementationCoordinator(
 
   if (!samePlanningRun(snapshot, state)) {
     return failure("Planning Handoff run identity does not match Root state");
+  }
+
+  const gateResolution = validatePreLaunchGateResolution(
+    snapshot.planContent,
+    options.gateResolution,
+  );
+  if (!gateResolution.valid) {
+    return failure(gateResolution.errors.join("; "));
   }
 
   const approvalCandidate = approvalFromState(state);

@@ -12,9 +12,11 @@ import {
   isRecord,
   type ImplementationCoordinatorInput,
   type RootWorkflowState,
+  type TrustedGate,
 } from "../../src/core/index.ts";
 import {
   launchFreshImplementationCoordinator,
+  type ImplementationGateResolution,
   type ImplementationLaunchRegistry,
 } from "../../src/runtime/implementation-launch.ts";
 import {
@@ -187,6 +189,27 @@ function approvedRegistry(artifacts: {
   return registry;
 }
 
+function gate(overrides: Partial<TrustedGate> = {}): TrustedGate {
+  return {
+    name: "package-check",
+    command: "pnpm check",
+    requirement: "required",
+    status: "UNKNOWN",
+    reason: "Repository declaration is unresolved until execution.",
+    source: "package-script",
+    ...overrides,
+  };
+}
+
+function gateResolution(
+  repositoryGates: readonly TrustedGate[] = [gate()],
+): ImplementationGateResolution {
+  return {
+    approvedGates: [gate()],
+    repositoryGates,
+  };
+}
+
 function launch(
   registry: ImplementationLaunchRegistry,
   spawn: (
@@ -194,9 +217,14 @@ function launch(
   ) =>
     | ImplementationCoordinatorLaunchResult
     | Promise<ImplementationCoordinatorLaunchResult>,
+  resolution: ImplementationGateResolution = {
+    approvedGates: [],
+    repositoryGates: [],
+  },
 ) {
   return launchFreshImplementationCoordinator({
     registry,
+    gateResolution: resolution,
     spawnImplementationCoordinator: async (input) => spawn(input),
   });
 }
@@ -259,6 +287,57 @@ it("validates the three phase-boundary artifacts before spawning a fresh Coordin
   });
   expect(received).not.toHaveProperty("workflow.request");
   expect(received).not.toHaveProperty("planningTranscript");
+});
+
+it("requires matching required Gate resolution before spawning", async () => {
+  const root = mkdtempSync(
+    join(tmpdir(), "pi-workflow-implementation-gate-resolution-"),
+  );
+  roots.push(root);
+  const artifacts = writeArtifacts(root);
+  const registry = approvedRegistry(artifacts);
+  let spawnCount = 0;
+  const spawn = async () => {
+    spawnCount += 1;
+    return {
+      requestId: "00000000-0000-4000-8000-000000000015",
+      runId: createRunId("implementation-run"),
+    };
+  };
+
+  expect((await launch(registry, spawn, gateResolution())).started).toBe(true);
+  expect(spawnCount).toBe(1);
+
+  const driftCases: ImplementationGateResolution[] = [
+    gateResolution([gate({ command: "pnpm test" })]),
+    gateResolution([gate({ source: "ci-config" })]),
+    gateResolution([]),
+    gateResolution([gate({ requirement: "optional" })]),
+  ];
+  for (const resolution of driftCases) {
+    spawnCount = 0;
+    const result = await launch(registry, spawn, resolution);
+    expect(result.started).toBe(false);
+    expect(spawnCount).toBe(0);
+    expect(registry.getState()?.phase).toBe("PLAN_REVIEW");
+  }
+
+  const unresolvedRoot = mkdtempSync(
+    join(tmpdir(), "pi-workflow-implementation-gate-missing-"),
+  );
+  roots.push(unresolvedRoot);
+  const unresolvedArtifacts = writeArtifacts(
+    unresolvedRoot,
+    PLAN.replace(
+      "## Risks / assumptions",
+      "- package-check is required but has no resolved evidence.\n\n## Risks / assumptions",
+    ),
+  );
+  const unresolvedRegistry = approvedRegistry(unresolvedArtifacts);
+  spawnCount = 0;
+  const unresolved = await launch(unresolvedRegistry, spawn);
+  expect(unresolved.started).toBe(false);
+  expect(spawnCount).toBe(0);
 });
 
 it("transitions to IMPLEMENTING only after Root approval and a fresh run", async () => {

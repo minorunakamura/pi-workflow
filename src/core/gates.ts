@@ -93,6 +93,9 @@ export function validateTrustedGate(
   ) {
     return invalidResult("Trusted Gate contains an invalid value");
   }
+  if (status === "PASS" && !isValidArtifactRef(value.evidence)) {
+    return invalidResult("PASS Trusted Gate requires managed evidence");
+  }
 
   const gate: TrustedGate = { name, command, requirement, status, source };
   if ("evidence" in value) {
