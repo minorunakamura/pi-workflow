@@ -55,7 +55,6 @@ const GATE_SOURCES: readonly TrustedGateSource[] = [
   "repository-doc",
 ];
 const TRUSTED_GATE_PLAN_MARKER = "pi-workflow-trusted-gates:";
-const MAX_PLAN_GATES = 32;
 
 function planGateSection(planContent: string): string | undefined {
   return /^## Trusted Gate expectations\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/mu.exec(
@@ -82,10 +81,6 @@ export function parseTrustedGateExpectations(
       ? validResult([])
       : invalidResult("Trusted Gate expectations are not machine-readable");
   }
-  if (visible.length > 0) {
-    return invalidResult("Trusted Gate expectations contain untrusted text");
-  }
-
   let declarations: unknown;
   try {
     declarations = JSON.parse(
@@ -94,7 +89,7 @@ export function parseTrustedGateExpectations(
   } catch {
     return invalidResult("Trusted Gate expectations are not valid JSON");
   }
-  if (!Array.isArray(declarations) || declarations.length > MAX_PLAN_GATES) {
+  if (!Array.isArray(declarations)) {
     return invalidResult("Trusted Gate expectations are invalid");
   }
 

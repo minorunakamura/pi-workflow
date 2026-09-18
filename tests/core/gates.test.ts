@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import {
   buildFinalGateSet,
   evaluateTrustedGates,
+  parseTrustedGateExpectations,
   validateRequiredGateResolution,
   validateRequiredGatesPreserved,
   type TrustedGate,
@@ -33,6 +34,20 @@ function gate(
     ...overrides,
   };
 }
+
+it("reads marker declarations alongside human-readable Gate guidance", () => {
+  const result = parseTrustedGateExpectations(
+    [
+      "## Trusted Gate expectations",
+      "Run the approved package check and record its host evidence.",
+      '<!-- pi-workflow-trusted-gates: [{"name":"package-check","command":"pnpm check","requirement":"required","source":"package-script"}] -->',
+      "## Risks / assumptions",
+    ].join("\n"),
+  );
+
+  expect(result.valid).toBe(true);
+  expect(result.valid && result.value[0]?.command).toBe("pnpm check");
+});
 
 it("requires managed evidence for PASS without changing status semantics", () => {
   const noEvidence = { ...gate("PASS") };
