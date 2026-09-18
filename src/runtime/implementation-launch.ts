@@ -1,7 +1,9 @@
-import { isAbsolute, resolve } from "node:path";
+import { readFile as readFileFromDisk } from "node:fs/promises";
+import { isAbsolute, join, resolve } from "node:path";
 
 import {
   TIMEOUTS,
+  parseTrustedGateExpectations,
   validateApprovalIdentity,
   validateImplementationCoordinatorInput,
   validateRequiredGateResolution,
@@ -12,13 +14,7 @@ import {
   type TrustedGate,
   type WorkflowRequest,
 } from "../core/index.ts";
-import {
-  hasOnlyKeys,
-  invalidResult,
-  isRecord,
-  validResult,
-  type ValidationResult,
-} from "../core/validation.ts";
+import { isRecord } from "../core/validation.ts";
 import {
   readPlanReviewSnapshot,
   type PlanReviewSnapshot,
@@ -36,16 +32,16 @@ export interface ImplementationCoordinatorSpawner {
   ): Promise<ImplementationCoordinatorLaunchResult>;
 }
 
-export interface ImplementationGateResolution {
-  readonly approvedGates: readonly TrustedGate[];
-  readonly repositoryGates: readonly TrustedGate[];
-}
+export type RepositoryGateResolver = (
+  cwd: string,
+  approvedGates: readonly TrustedGate[],
+) => Promise<readonly TrustedGate[]>;
 
 export interface FreshImplementationLaunchOptions
   extends ImplementationCoordinatorSpawner {
   registry: ImplementationLaunchRegistry;
   state?: RootWorkflowState;
-  gateResolution?: ImplementationGateResolution;
+  repositoryGateResolver: RepositoryGateResolver;
   stopImplementationCoordinator?: (runId: string) => Promise<unknown>;
   readFile?: (path: string) => Promise<Uint8Array>;
   resolveArtifactPath?: (path: string) => string;
@@ -67,47 +63,63 @@ function failure(reason: string): FreshImplementationLaunchResult {
   return { started: false, reason };
 }
 
-function hasTrustedGateExpectations(planContent: string): boolean {
-  const section =
-    /^## Trusted Gate expectations\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/mu.exec(
-      planContent,
-    )?.[1];
-  if (section === undefined) return true;
-  return section.replace(/<!--[\s\S]*?-->/gu, "").trim().length > 0;
+function packageScriptName(command: string): string | undefined {
+  if (/[;&|<>`$]/u.test(command)) return undefined;
+  return /^pnpm(?:\s+run)?\s+([A-Za-z0-9][A-Za-z0-9:_-]*)(?:\s|$)/u.exec(
+    command,
+  )?.[1];
 }
 
-function validatePreLaunchGateResolution(
-  planContent: string,
-  value: unknown,
-): ValidationResult<true> {
-  if (value === undefined && !hasTrustedGateExpectations(planContent)) {
-    return validResult(true);
-  }
-  if (
-    !isRecord(value) ||
-    !hasOnlyKeys(value, ["approvedGates", "repositoryGates"]) ||
-    !Array.isArray(value.approvedGates) ||
-    !Array.isArray(value.repositoryGates)
-  ) {
-    return invalidResult(
-      "Approved required Gate resolution is missing or invalid",
-    );
-  }
-  if (
-    hasTrustedGateExpectations(planContent) &&
-    value.approvedGates.length === 0
-  ) {
-    return invalidResult(
-      "Trusted Gate expectations have no approved Gate resolution",
-    );
-  }
-  const resolution = validateRequiredGateResolution(
-    value.approvedGates,
-    value.repositoryGates,
+export async function resolveRepositoryGatesFromPackageScripts(
+  cwd: string,
+  approvedGates: readonly TrustedGate[],
+  readFile: (path: string) => Promise<Uint8Array> = (path) =>
+    readFileFromDisk(path),
+): Promise<readonly TrustedGate[]> {
+  const requiredGates = approvedGates.filter(
+    (gate) => gate.requirement === "required",
   );
-  return resolution.valid
-    ? validResult(true)
-    : invalidResult(...resolution.errors);
+  if (requiredGates.length === 0) return [];
+
+  let packageJson: unknown;
+  try {
+    const bytes = await readFile(join(resolve(cwd), "package.json"));
+    packageJson = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    );
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? `Current package-script evidence is unavailable: ${error.message}`
+        : "Current package-script evidence is unavailable",
+      { cause: error },
+    );
+  }
+  if (!isRecord(packageJson) || !isRecord(packageJson.scripts)) {
+    throw new Error("Current package-script evidence is unresolved");
+  }
+  const scripts = packageJson.scripts;
+
+  return requiredGates.map((gate) => {
+    if (gate.source !== "package-script") {
+      throw new Error(`Gate source is not safely resolved: ${gate.name}`);
+    }
+    const scriptName = packageScriptName(gate.command);
+    if (
+      scriptName === undefined ||
+      typeof scripts[scriptName] !== "string" ||
+      scripts[scriptName].trim().length === 0
+    ) {
+      throw new Error(
+        `Package script Gate is missing or changed: ${gate.name}`,
+      );
+    }
+    return {
+      ...gate,
+      status: "UNKNOWN" as const,
+      reason: "Resolved from the current package.json scripts.",
+    };
+  });
 }
 
 function approvalFromState(
@@ -225,9 +237,28 @@ export async function launchFreshImplementationCoordinator(
     return failure("Planning Handoff run identity does not match Root state");
   }
 
-  const gateResolution = validatePreLaunchGateResolution(
-    snapshot.planContent,
-    options.gateResolution,
+  const approvedGates = parseTrustedGateExpectations(snapshot.planContent);
+  if (!approvedGates.valid) {
+    return failure(approvedGates.errors.join("; "));
+  }
+  let repositoryGates: readonly TrustedGate[] = [];
+  if (approvedGates.value.some((gate) => gate.requirement === "required")) {
+    try {
+      repositoryGates = await options.repositoryGateResolver(
+        request.cwd,
+        approvedGates.value,
+      );
+    } catch (error) {
+      return failure(
+        error instanceof Error
+          ? error.message
+          : "Current repository Gate evidence is unresolved",
+      );
+    }
+  }
+  const gateResolution = validateRequiredGateResolution(
+    approvedGates.value,
+    repositoryGates,
   );
   if (!gateResolution.valid) {
     return failure(gateResolution.errors.join("; "));

@@ -54,6 +54,71 @@ const GATE_SOURCES: readonly TrustedGateSource[] = [
   "ci-config",
   "repository-doc",
 ];
+const TRUSTED_GATE_PLAN_MARKER = "pi-workflow-trusted-gates:";
+const MAX_PLAN_GATES = 32;
+
+function planGateSection(planContent: string): string | undefined {
+  return /^## Trusted Gate expectations\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/mu.exec(
+    planContent,
+  )?.[1];
+}
+
+export function parseTrustedGateExpectations(
+  planContent: string,
+): ValidationResult<TrustedGate[]> {
+  const section = planGateSection(planContent);
+  if (section === undefined) {
+    return invalidResult("Plan is missing Trusted Gate expectations");
+  }
+  const markers = [...section.matchAll(/<!--[\s\S]*?-->/gu)].map((match) =>
+    match[0].slice(4, -3).trim(),
+  );
+  const marker = markers.find((value) =>
+    value.startsWith(TRUSTED_GATE_PLAN_MARKER),
+  );
+  const visible = section.replace(/<!--[\s\S]*?-->/gu, "").trim();
+  if (marker === undefined) {
+    return visible.length === 0
+      ? validResult([])
+      : invalidResult("Trusted Gate expectations are not machine-readable");
+  }
+  if (visible.length > 0) {
+    return invalidResult("Trusted Gate expectations contain untrusted text");
+  }
+
+  let declarations: unknown;
+  try {
+    declarations = JSON.parse(
+      marker.slice(TRUSTED_GATE_PLAN_MARKER.length).trim(),
+    );
+  } catch {
+    return invalidResult("Trusted Gate expectations are not valid JSON");
+  }
+  if (!Array.isArray(declarations) || declarations.length > MAX_PLAN_GATES) {
+    return invalidResult("Trusted Gate expectations are invalid");
+  }
+
+  const gates: TrustedGate[] = [];
+  for (const declaration of declarations) {
+    if (
+      !isRecord(declaration) ||
+      !hasOnlyKeys(declaration, ["name", "command", "requirement", "source"])
+    ) {
+      return invalidResult("Trusted Gate declaration is invalid");
+    }
+    const gate = validateTrustedGate({
+      ...declaration,
+      status: "UNKNOWN",
+      reason: "Approved Plan declaration; execution pending.",
+    });
+    if (!gate.valid) return invalidResult(...gate.errors);
+    gates.push(gate.value);
+  }
+  const evaluation = evaluateTrustedGates(gates);
+  return evaluation.valid
+    ? validResult(gates)
+    : invalidResult(...evaluation.blockers.map(({ reason }) => reason));
+}
 
 function isGateRequirement(value: unknown): value is GateRequirement {
   return value === "required" || value === "optional";

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
 
@@ -28,6 +30,18 @@ function fakePi(events: string[], commands: string[] = []): RootExtensionAPI {
 
 it("exports a Pi Extension entry point", () => {
   expect(extension).toEqual(expect.any(Function));
+});
+
+it("wires production Implementation launch to repository Gate resolution", () => {
+  const source = readFileSync(
+    new URL("../src/index.ts", import.meta.url),
+    "utf8",
+  );
+
+  expect(source).toContain("resolveRepositoryGatesFromPackageScripts");
+  expect(source).toContain(
+    "repositoryGateResolver: resolveRepositoryGatesFromPackageScripts",
+  );
 });
 
 it("registers Root commands and session lifecycle only in the normal runtime", () => {

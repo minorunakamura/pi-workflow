@@ -75,6 +75,8 @@ it("declares the Planning capability launch contracts and Human bridge", () => {
   expect(source).toContain("repository documentation");
   expect(source).toContain("Do not turn a tool filename");
   expect(source).toContain("a required `pnpm check` is one Gate");
+  expect(source).toContain("pi-workflow-trusted-gates");
+  expect(source).toContain("use `[]` when no Gate is required");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);
