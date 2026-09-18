@@ -1,4 +1,11 @@
 import {
+  PLAN_ARTIFACT_FILE_NAME,
+  PLANNING_HANDOFF_FILE_NAME,
+  validatePlanArtifactReference,
+  validatePlanningArtifactReferences,
+  validatePlanningHandoffReference,
+} from "./plan.ts";
+import {
   COMMON_PLANNING_REQUIREMENTS,
   getWorkflowPolicy,
   PLANNING_CAPABILITIES,
@@ -160,8 +167,6 @@ const MAX_SELECTIONS = PLANNING_CAPABILITIES.length;
 const MAX_BLOCKERS = 32;
 const MAX_REASON_BYTES = 4096;
 const MAX_CHILD_COUNT = 32;
-const PLAN_FILE_NAME = "implementation-plan.md";
-const HANDOFF_FILE_NAME = "planning-handoff.json";
 
 function isPlanningCapability(value: unknown): value is PlanningCapability {
   return (
@@ -190,23 +195,6 @@ function validateArtifactRef(
     );
   }
   return validResult(copyArtifactRef(value));
-}
-
-function artifactFileName(path: string): string {
-  const segments = path.split(/[\\/]/u);
-  return segments[segments.length - 1] ?? "";
-}
-
-function validateReferenceFileName(
-  value: unknown,
-  fileName: string,
-  mediaType: ArtifactRef["mediaType"],
-): ValidationResult<ArtifactRef> {
-  const reference = validateArtifactRef(value, mediaType);
-  if (!reference.valid) return reference;
-  return artifactFileName(reference.value.path) === fileName
-    ? reference
-    : invalidResult(`Artifact reference must point to ${fileName}`);
 }
 
 function validateArtifactRefs(
@@ -351,8 +339,8 @@ export function validatePlanningCoordinatorInput(
     !policy.valid ||
     !isRecord(artifact) ||
     !hasOnlyKeys(artifact, ["planFileName", "handoffFileName", "outputMode"]) ||
-    artifact.planFileName !== PLAN_FILE_NAME ||
-    artifact.handoffFileName !== HANDOFF_FILE_NAME ||
+    artifact.planFileName !== PLAN_ARTIFACT_FILE_NAME ||
+    artifact.handoffFileName !== PLANNING_HANDOFF_FILE_NAME ||
     artifact.outputMode !== "file-only" ||
     !isPlanningRuntime(runtime)
   ) {
@@ -375,8 +363,8 @@ export function validatePlanningCoordinatorInput(
     workflow: workflow.value,
     policy: policy.value,
     artifact: {
-      planFileName: PLAN_FILE_NAME,
-      handoffFileName: HANDOFF_FILE_NAME,
+      planFileName: PLAN_ARTIFACT_FILE_NAME,
+      handoffFileName: PLANNING_HANDOFF_FILE_NAME,
       outputMode: "file-only",
     },
     runtime: runtimeValue,
@@ -555,25 +543,26 @@ export function validatePlanningCoordinatorResult(
 
   const planArtifactRef =
     "planArtifactRef" in value
-      ? validateReferenceFileName(
-          value.planArtifactRef,
-          PLAN_FILE_NAME,
-          "text/markdown",
-        )
+      ? validatePlanArtifactReference(value.planArtifactRef)
       : undefined;
   const planningHandoffRef =
     "planningHandoffRef" in value
-      ? validateReferenceFileName(
-          value.planningHandoffRef,
-          HANDOFF_FILE_NAME,
-          "application/json",
-        )
+      ? validatePlanningHandoffReference(value.planningHandoffRef)
       : undefined;
   if (
     (planArtifactRef !== undefined && !planArtifactRef.valid) ||
     (planningHandoffRef !== undefined && !planningHandoffRef.valid)
   ) {
     return invalidResult("Planning Coordinator artifact reference is invalid");
+  }
+  if (planArtifactRef?.valid && planningHandoffRef?.valid) {
+    const references = validatePlanningArtifactReferences(
+      planArtifactRef.value,
+      planningHandoffRef.value,
+    );
+    if (!references.valid) {
+      return invalidResult("Planning Coordinator artifacts are not co-located");
+    }
   }
 
   if (value.status === "COMPLETED") {
