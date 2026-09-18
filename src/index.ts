@@ -31,5 +31,12 @@ export default function extension(pi: RootExtensionAPI): void {
       rpc.dispose();
     },
     (runId) => rpc.stop(runId),
+    async () => {
+      const request = registry.getActiveWorkflowRequest();
+      if (request === undefined) {
+        throw new Error("Active workflow request is unavailable");
+      }
+      return rpc.spawnPlanningCoordinator(request);
+    },
   );
 }

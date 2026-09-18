@@ -27,6 +27,7 @@ import {
   type ValidationResult,
 } from "../core/validation.ts";
 import type { RegistryTransitionResult } from "./root-lifecycle.ts";
+import type { PlanningCoordinatorLaunchResult } from "./subagents-rpc.ts";
 
 export const PLANNOTATOR_REQUEST_EVENT = "plannotator:request" as const;
 export const PLANNOTATOR_REVIEW_RESULT_EVENT =
@@ -83,12 +84,15 @@ export interface PlanReviewRegistry {
     feedback?: unknown,
   ): RegistryTransitionResult;
   preparePlanResubmission(): RegistryTransitionResult;
+  setPlanningRunId(runId: unknown): RegistryTransitionResult;
   transition(to: "FAILED"): RegistryTransitionResult;
 }
 
 export interface PlanReviewRootBridgeOptions {
   events: PlanReviewEventBus;
   registry: PlanReviewRegistry;
+  launchFreshPlanningCoordinator?: () => Promise<PlanningCoordinatorLaunchResult>;
+  stopPlanningCoordinator?: (runId: string) => Promise<unknown>;
   readFile?: (path: string) => Promise<Uint8Array>;
   resolveArtifactPath?: (path: string) => string;
   timeoutMs?: number;
@@ -96,6 +100,10 @@ export interface PlanReviewRootBridgeOptions {
 
 export type PlanReviewStartResult =
   | { started: true; requestId: string; reviewId: ReviewId }
+  | { started: false; reason: string };
+
+export type PlanResubmissionResult =
+  | { started: true; runId: PlanningCoordinatorLaunchResult["runId"] }
   | { started: false; reason: string };
 
 export class PlanReviewError extends Error {
@@ -408,8 +416,48 @@ export class PlanReviewRootBridge {
     });
   }
 
-  public prepareResubmission(): RegistryTransitionResult {
-    return this.options.registry.preparePlanResubmission();
+  public async resubmitPlanning(): Promise<PlanResubmissionResult> {
+    if (this.disposed) {
+      return { started: false, reason: "Bridge is disposed" };
+    }
+    const prepared = this.options.registry.preparePlanResubmission();
+    if (!prepared.transitioned) {
+      return { started: false, reason: prepared.reason };
+    }
+    const launchPlanning = this.options.launchFreshPlanningCoordinator;
+    if (launchPlanning === undefined) {
+      this.failWorkflow();
+      return {
+        started: false,
+        reason: "Fresh Planning launcher is unavailable",
+      };
+    }
+
+    let launch: PlanningCoordinatorLaunchResult;
+    try {
+      launch = await launchPlanning();
+    } catch (error) {
+      this.failWorkflow();
+      return {
+        started: false,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "Fresh Planning Coordinator could not be started",
+      };
+    }
+
+    const attached = this.options.registry.setPlanningRunId(launch.runId);
+    if (!attached.transitioned) {
+      try {
+        await this.options.stopPlanningCoordinator?.(launch.runId);
+      } catch {
+        // The workflow remains failed when an orphan stop cannot complete.
+      }
+      this.failWorkflow();
+      return { started: false, reason: attached.reason };
+    }
+    return { started: true, runId: launch.runId };
   }
 
   public dispose(): void {
