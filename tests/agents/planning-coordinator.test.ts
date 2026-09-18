@@ -63,9 +63,9 @@ it("declares the Planning capability launch contracts and Human bridge", () => {
   expect(source).not.toContain("package-owned `agent: scout`");
   expect(source).not.toContain("grill-with-docs");
   expect(source).toContain("pi_workflow_human_decision");
-  expect(source).toContain(
-    "subagentOnlyExtensions: ../src/runtime/human-decision-bridge.ts",
-  );
+  expect(source).toContain("- ../src/runtime/human-decision-bridge.ts");
+  expect(source).toContain("- ../src/runtime/plan-handoff.ts");
+  expect(source).toContain("pi_workflow_write_handoff");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);

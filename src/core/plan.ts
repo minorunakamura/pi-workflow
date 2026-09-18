@@ -29,6 +29,11 @@ export const PLAN_ARTIFACT_FILE_NAME = "implementation-plan.md" as const;
 export const PLANNING_HANDOFF_FILE_NAME = "planning-handoff.json" as const;
 export const PLANNING_HANDOFF_KIND = "pi-workflow.planning-handoff" as const;
 
+export interface PlanningArtifactReferences {
+  readonly planArtifactRef: ArtifactRef;
+  readonly planningHandoffRef: ArtifactRef;
+}
+
 export interface PlanningHandoff {
   readonly schemaVersion: 1;
   readonly kind: typeof PLANNING_HANDOFF_KIND;
@@ -77,11 +82,105 @@ function isTestStrategyKind(value: unknown): value is TestStrategy["kind"] {
   );
 }
 
+function artifactBaseName(path: string): string {
+  const normalized = path.replace(/\\/gu, "/");
+  return normalized.slice(normalized.lastIndexOf("/") + 1);
+}
+
+function artifactDirectory(path: string): string {
+  const normalized = path.replace(/\\/gu, "/");
+  const separator = normalized.lastIndexOf("/");
+  return separator < 0 ? "" : normalized.slice(0, separator);
+}
+
+function copyArtifactRef(value: ArtifactRef): ArtifactRef {
+  return { kind: value.kind, path: value.path, mediaType: value.mediaType };
+}
+
+function validatePlanningArtifactReference(
+  value: unknown,
+  expectedFileName: string,
+  expectedMediaType: ArtifactRef["mediaType"],
+  label: string,
+): ValidationResult<ArtifactRef> {
+  if (
+    !isValidArtifactRef(value) ||
+    value.mediaType !== expectedMediaType ||
+    artifactBaseName(value.path) !== expectedFileName
+  ) {
+    return invalidResult(`${label} reference is invalid`);
+  }
+  return validResult(copyArtifactRef(value));
+}
+
+export function validatePlanArtifactReference(
+  value: unknown,
+): ValidationResult<ArtifactRef> {
+  return validatePlanningArtifactReference(
+    value,
+    PLAN_ARTIFACT_FILE_NAME,
+    "text/markdown",
+    "Plan Artifact",
+  );
+}
+
+export function validatePlanningHandoffReference(
+  value: unknown,
+): ValidationResult<ArtifactRef> {
+  return validatePlanningArtifactReference(
+    value,
+    PLANNING_HANDOFF_FILE_NAME,
+    "application/json",
+    "Planning Handoff",
+  );
+}
+
+export function validatePlanningArtifactReferences(
+  planArtifact: unknown,
+  planningHandoff: unknown,
+): ValidationResult<PlanningArtifactReferences> {
+  const plan = validatePlanArtifactReference(planArtifact);
+  const handoff = validatePlanningHandoffReference(planningHandoff);
+  if (!plan.valid || !handoff.valid) {
+    return invalidResult(
+      ...(!plan.valid ? plan.errors : []),
+      ...(!handoff.valid ? handoff.errors : []),
+    );
+  }
+  if (
+    artifactDirectory(plan.value.path) !== artifactDirectory(handoff.value.path)
+  ) {
+    return invalidResult(
+      "Plan Artifact and Planning Handoff must share a directory",
+    );
+  }
+  return validResult({
+    planArtifactRef: plan.value,
+    planningHandoffRef: handoff.value,
+  });
+}
+
 function isTddMode(value: unknown): value is TddMode {
   return (
     value === "required" || value === "optional" || value === "not-applicable"
   );
 }
+
+export const REQUIRED_PLAN_HEADINGS = [
+  "# Implementation Plan",
+  "## Goal",
+  "## Requirements",
+  "## Non-goals",
+  "## Constraints",
+  "## Expected change areas",
+  "## Implementation approach",
+  "## TDD mode",
+  "## Test strategy",
+  "## Test seams",
+  "## Verification",
+  "## Trusted Gate expectations",
+  "## Risks / assumptions",
+] as const;
 
 export function canonicalizePlan(content: string | Uint8Array): string {
   const text =
@@ -91,6 +190,29 @@ export function canonicalizePlan(content: string | Uint8Array): string {
   const withoutBom = text.startsWith("\uFEFF") ? text.slice(1) : text;
   const withLf = withoutBom.replace(/\r\n?/gu, "\n");
   return withLf.endsWith("\n") ? withLf : `${withLf}\n`;
+}
+
+export function validatePlanArtifactTemplate(
+  content: string | Uint8Array,
+): ValidationResult<true> {
+  let canonical: string;
+  try {
+    canonical = canonicalizePlan(content);
+  } catch {
+    return invalidResult("Plan Artifact is not valid UTF-8");
+  }
+  const headings = new Set(
+    canonical
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("#")),
+  );
+  const missing = REQUIRED_PLAN_HEADINGS.filter(
+    (heading) => !headings.has(heading),
+  );
+  return missing.length === 0
+    ? validResult(true)
+    : invalidResult(`Plan Artifact is missing headings: ${missing.join(", ")}`);
 }
 
 export function hashPlan(content: string | Uint8Array): PlanHash {
@@ -341,6 +463,30 @@ export function validatePlanHashBinding(
   return isPlanHashBound(handoff, currentPlanHash)
     ? validResult(true)
     : invalidResult("Plan hash does not match the Planning Handoff");
+}
+
+export function validatePlanningHandoffAgainstPlan(
+  value: unknown,
+  planContent: string | Uint8Array,
+  workflowId?: unknown,
+): ValidationResult<PlanningHandoff> {
+  const handoff = validatePlanningHandoff(value);
+  if (!handoff.valid) return handoff;
+  if (
+    workflowId !== undefined &&
+    (!isValidWorkflowId(workflowId) || handoff.value.workflowId !== workflowId)
+  ) {
+    return invalidResult("Planning Handoff workflow identity does not match");
+  }
+  let planHash: PlanHash;
+  try {
+    planHash = hashPlan(planContent);
+  } catch {
+    return invalidResult("Plan Artifact cannot be hashed");
+  }
+  return handoff.value.planHash.value === planHash.value
+    ? handoff
+    : invalidResult("Planning Handoff is not bound to the Plan Artifact");
 }
 
 export function validateApprovalIdentity(
