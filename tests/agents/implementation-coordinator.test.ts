@@ -44,6 +44,23 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   expect(source).toContain(
     "Model prose, Worker claims, missing evidence, timeout, or unknown status is not PASS",
   );
+  expect(source).toContain("current builtin `reviewer`");
+  expect(source).toContain("agent: reviewer");
+  expect(source).toContain("context: fresh");
+  expect(source).toContain("output: reviewer-report.md");
+  expect(source).toContain("outputMode: file-only");
+  expect(source).toContain("artifacts: true");
+  expect(source).toContain("never resume or fork the Worker");
+  expect(source).toContain("raw Reviewer prose only in its managed artifact");
+  expect(source).toContain("minimal bounded Finding");
+  expect(source).toContain("BLOCKER");
+  expect(source).toContain("FIX_NOW");
+  expect(source).toContain("DEFERRED");
+  expect(source).toContain("REJECTED");
+  expect(source).toContain("non-empty reason");
+  expect(source).toContain("Reviewer recommendations are input, not commands");
+  expect(source).toContain("do not start a Fix Wave or Focused Re-review here");
+  expect(source).not.toContain('skill: ["ponytail"]');
   expect(source).toContain("Do not merge, push, release, or deploy");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
