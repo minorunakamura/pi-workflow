@@ -54,15 +54,23 @@ export interface FixWave {
   acceptedFindingIds: readonly FindingId[];
 }
 
+export type FixWaveCreationReason =
+  | "NO_ACCEPTED_FINDINGS"
+  | "MAX_FIX_WAVES_REACHED"
+  | "INVALID_FINDING";
+
 export type FixWaveCreationResult =
   | { created: true; wave: FixWave }
-  | {
-      created: false;
-      reason:
-        | "NO_ACCEPTED_FINDINGS"
-        | "MAX_FIX_WAVES_REACHED"
-        | "INVALID_FINDING";
-    };
+  | { created: false; reason: FixWaveCreationReason };
+
+export interface FixWavePlan {
+  wave: FixWave;
+  acceptedFindings: readonly DispositionedFinding[];
+}
+
+export type FixWavePlanResult =
+  | { created: true; plan: FixWavePlan }
+  | { created: false; reason: FixWaveCreationReason };
 
 export type FocusedReviewStatus = "RESOLVED" | "STILL_PRESENT";
 
@@ -344,6 +352,30 @@ export function buildFixWave(
   return {
     created: true,
     wave: { waveNumber: 1, acceptedFindingIds },
+  };
+}
+
+export function buildFixWavePlan(
+  findings: readonly DispositionedFinding[],
+  completedWaveCount = 0,
+): FixWavePlanResult {
+  const waveResult = buildFixWave(findings, completedWaveCount);
+  if (!waveResult.created) return waveResult;
+
+  const acceptedFindings: DispositionedFinding[] = [];
+  const acceptedIds = new Set(waveResult.wave.acceptedFindingIds);
+  for (const value of findings) {
+    const validated = validateDispositionedFinding(value);
+    if (!validated.valid) {
+      return { created: false, reason: "INVALID_FINDING" };
+    }
+    if (acceptedIds.has(validated.value.finding.id)) {
+      acceptedFindings.push(validated.value);
+    }
+  }
+  return {
+    created: true,
+    plan: { wave: waveResult.wave, acceptedFindings },
   };
 }
 
