@@ -9,6 +9,7 @@ import {
   isWorkflowType,
   validateFocusedReviewResult,
   validateFixWave,
+  validateRequiredGatesPreserved,
   validateWorkerHandoff,
   validateWorkerResult,
   WORKER_FORBIDDEN_OPERATIONS,
@@ -92,6 +93,14 @@ export interface AffectedGateSelectionInput {
   readonly approvedGates: readonly TrustedGate[];
   readonly mechanicallyRequiredGates?: readonly TrustedGate[];
   readonly affectedGateNames?: readonly string[];
+  readonly changedPaths?: readonly string[];
+  readonly acceptedFindingLocations?: readonly string[];
+}
+
+export interface SkippedGate {
+  readonly name: string;
+  readonly requirement: TrustedGate["requirement"];
+  readonly reason: string;
 }
 
 export interface SkippedOptionalGate {
@@ -100,10 +109,16 @@ export interface SkippedOptionalGate {
 }
 
 export interface AffectedGateSelection {
+  readonly finalGates: readonly TrustedGate[];
   readonly gates: readonly TrustedGate[];
   readonly requiredGateKeys: readonly string[];
+  readonly skippedGates: readonly SkippedGate[];
   readonly skippedOptionalGates: readonly SkippedOptionalGate[];
 }
+
+export type AffectedGateSelector = (
+  input: AffectedGateSelectionInput,
+) => ValidationResult<AffectedGateSelection>;
 
 export interface FocusedReviewLaunchInput {
   readonly workflow: WorkerHandoff["workflow"];
@@ -151,6 +166,7 @@ export interface FixWaveExecutionOptions extends AffectedGateSelectionInput {
   readonly fixWorkerRunner: FixWorkerRunner;
   readonly gateRunner: ManagedGateRunner;
   readonly focusedReviewRunner: FocusedReviewRunner;
+  readonly affectedGateSelector?: AffectedGateSelector;
 }
 
 export type FixWaveExecutionResult =
@@ -169,6 +185,7 @@ export type FixWaveExecutionResult =
       worker: WorkerResult;
       fixWorkerDiffRef: ArtifactRef;
       gates: readonly TrustedGate[];
+      skippedGates: readonly SkippedGate[];
       skippedOptionalGates: readonly SkippedOptionalGate[];
       focusedReReview: FocusedReviewResult;
       focusedReviewReportRef: ArtifactRef;
@@ -198,9 +215,6 @@ function workerFindingPayload(
     ...(finding.location === undefined ? {} : { location: finding.location }),
     evidence: finding.evidence,
     reason: finding.reason,
-    ...(finding.recommendedAction === undefined
-      ? {}
-      : { recommendedAction: finding.recommendedAction }),
   };
 }
 
@@ -349,6 +363,36 @@ function validateAffectedGateNames(
   return validResult(names);
 }
 
+function validateSelectionEvidence(
+  value: readonly string[] | undefined,
+  label: string,
+): ValidationResult<readonly string[]> {
+  if (value === undefined) return validResult([]);
+  if (!Array.isArray(value) || value.length > MAX_LIST_ITEMS) {
+    return invalidResult(`${label} is not bounded`);
+  }
+  if (
+    !value.every(
+      (item) =>
+        isBoundedString(item, MAX_LIST_ITEM_BYTES, true) &&
+        !/[\0\r\n]/u.test(item),
+    )
+  ) {
+    return invalidResult(`${label} contains an invalid value`);
+  }
+  return validResult([...value]);
+}
+
+function reGateSkipReason(
+  changedPathCount: number,
+  findingLocationCount: number,
+): string {
+  return (
+    "Gate was not selected by bounded Fix evidence: " +
+    `${changedPathCount} changed path(s), ${findingLocationCount} accepted Finding location(s).`
+  );
+}
+
 export function selectAffectedGates(
   input: AffectedGateSelectionInput,
 ): ValidationResult<AffectedGateSelection> {
@@ -361,6 +405,16 @@ export function selectAffectedGates(
 
   const names = validateAffectedGateNames(input.affectedGateNames);
   if (!names.valid) return names;
+  const changedPaths = validateSelectionEvidence(
+    input.changedPaths,
+    "Fix changed paths",
+  );
+  if (!changedPaths.valid) return changedPaths;
+  const findingLocations = validateSelectionEvidence(
+    input.acceptedFindingLocations,
+    "Accepted Finding locations",
+  );
+  if (!findingLocations.valid) return findingLocations;
 
   for (const selector of names.value) {
     if (!finalGates.value.some((gate) => gateMatchesSelector(gate, selector))) {
@@ -368,33 +422,67 @@ export function selectAffectedGates(
     }
   }
 
+  const mechanicallyRequiredKeys = new Set(
+    (input.mechanicallyRequiredGates ?? []).map(gateIdentity),
+  );
   const selected = finalGates.value
     .filter(
       (gate) =>
-        gate.requirement === "required" ||
+        mechanicallyRequiredKeys.has(gateIdentity(gate)) ||
         names.value.some((selector) => gateMatchesSelector(gate, selector)),
     )
     .map(gatePendingForExecution);
-  const requiredGateKeys = selected
+  const requiredGateKeys = finalGates.value
     .filter((gate) => gate.requirement === "required")
     .map(gateIdentity);
   const selectedKeys = new Set(selected.map(gateIdentity));
-  const skippedOptionalGates = finalGates.value
-    .filter(
-      (gate) =>
-        gate.requirement === "optional" &&
-        !selectedKeys.has(gateIdentity(gate)),
-    )
+  const skipReason = reGateSkipReason(
+    changedPaths.value.length,
+    findingLocations.value.length,
+  );
+  const skippedGates = finalGates.value
+    .filter((gate) => !selectedKeys.has(gateIdentity(gate)))
     .map((gate) => ({
       name: gate.name,
-      reason: "No affected Gate evidence was selected for this Fix Wave.",
+      requirement: gate.requirement,
+      reason: skipReason,
     }));
+  const skippedOptionalGates = skippedGates
+    .filter(({ requirement }) => requirement === "optional")
+    .map(({ name, reason }) => ({ name, reason }));
 
   return validResult({
+    finalGates: finalGates.value,
     gates: selected,
     requiredGateKeys,
+    skippedGates,
     skippedOptionalGates,
   });
+}
+
+function mergeGateResults(
+  finalGates: readonly TrustedGate[],
+  rerunGates: readonly TrustedGate[],
+): ValidationResult<TrustedGate[]> {
+  const finalKeys = new Set(finalGates.map(gateIdentity));
+  const replacements = new Map<string, TrustedGate>();
+  for (const gate of rerunGates) {
+    const key = gateIdentity(gate);
+    if (!finalKeys.has(key) || replacements.has(key)) {
+      return invalidResult(`Re-gate result is not declared: ${gate.name}`);
+    }
+    replacements.set(key, gate);
+  }
+
+  const merged = finalGates.map(
+    (gate) => replacements.get(gateIdentity(gate)) ?? gate,
+  );
+  const evaluation = evaluateTrustedGates(merged);
+  if (!evaluation.valid) {
+    return invalidResult(...evaluation.blockers.map(({ reason }) => reason));
+  }
+  const preserved = validateRequiredGatesPreserved(finalGates, merged);
+  return preserved.valid ? validResult(merged) : preserved;
 }
 
 function validWorkflow(value: unknown): value is WorkerHandoff["workflow"] {
@@ -516,11 +604,6 @@ export async function executeFixWave(
     );
   }
 
-  const selection = selectAffectedGates(options);
-  if (!selection.valid) {
-    return failed(selection.errors.join("; "), prepared.value.wave);
-  }
-
   let workerRun: FixWorkerRun;
   try {
     workerRun = await options.fixWorkerRunner(
@@ -552,7 +635,36 @@ export async function executeFixWave(
     );
   }
 
-  const gates: TrustedGate[] = [];
+  const selectionInput: AffectedGateSelectionInput = {
+    approvedGates: options.approvedGates,
+    changedPaths: worker.value.changedPaths,
+    acceptedFindingLocations: prepared.value.acceptedFindings.flatMap(
+      ({ finding }) =>
+        finding.location === undefined ? [] : [finding.location],
+    ),
+    ...(options.mechanicallyRequiredGates === undefined
+      ? {}
+      : { mechanicallyRequiredGates: options.mechanicallyRequiredGates }),
+    ...(options.affectedGateNames === undefined
+      ? {}
+      : { affectedGateNames: options.affectedGateNames }),
+  };
+  const selectGates = options.affectedGateSelector ?? selectAffectedGates;
+  let selection: ValidationResult<AffectedGateSelection>;
+  try {
+    selection = selectGates(selectionInput);
+  } catch (error) {
+    return failed(boundedFailureReason(error), prepared.value.wave, {
+      worker: worker.value,
+    });
+  }
+  if (!selection.valid) {
+    return failed(selection.errors.join("; "), prepared.value.wave, {
+      worker: worker.value,
+    });
+  }
+
+  const reGateResults: TrustedGate[] = [];
   for (const [index, gate] of selection.value.gates.entries()) {
     const result = await executeTrustedGate(
       gate,
@@ -562,20 +674,30 @@ export async function executeFixWave(
     if (!result.valid) {
       return failed(result.errors.join("; "), prepared.value.wave, {
         worker: worker.value,
-        gates,
+        gates: selection.value.finalGates,
       });
     }
-    gates.push(result.value);
+    reGateResults.push(result.value);
+  }
+  const mergedGates = mergeGateResults(
+    selection.value.finalGates,
+    reGateResults,
+  );
+  if (!mergedGates.valid) {
+    return failed(mergedGates.errors.join("; "), prepared.value.wave, {
+      worker: worker.value,
+      gates: selection.value.finalGates,
+    });
   }
   const gateEvaluation = evaluateTrustedGates(
-    gates,
+    mergedGates.value,
     selection.value.requiredGateKeys,
   );
   if (!gateEvaluation.passed) {
     return failed(
       gateEvaluation.blockers.map(({ reason }) => reason).join("; "),
       prepared.value.wave,
-      { worker: worker.value, gates },
+      { worker: worker.value, gates: mergedGates.value },
     );
   }
 
@@ -591,7 +713,7 @@ export async function executeFixWave(
   if (!reviewRequest.valid) {
     return failed(reviewRequest.errors.join("; "), prepared.value.wave, {
       worker: worker.value,
-      gates,
+      gates: mergedGates.value,
     });
   }
 
@@ -604,21 +726,21 @@ export async function executeFixWave(
   } catch (error) {
     return failed(boundedFailureReason(error), prepared.value.wave, {
       worker: worker.value,
-      gates,
+      gates: mergedGates.value,
     });
   }
   if (!isRecord(focusedRun) || !isValidArtifactRef(focusedRun.reportRef)) {
     return failed(
       "Focused Re-review report artifact reference is invalid",
       prepared.value.wave,
-      { worker: worker.value, gates },
+      { worker: worker.value, gates: mergedGates.value },
     );
   }
   const focusedReview = validateFocusedReviewResult(focusedRun.result);
   if (!focusedReview.valid) {
     return failed(focusedReview.errors.join("; "), prepared.value.wave, {
       worker: worker.value,
-      gates,
+      gates: mergedGates.value,
     });
   }
   const evaluation = evaluateFocusedReview(
@@ -628,7 +750,7 @@ export async function executeFixWave(
   if (!evaluation.passed) {
     return failed(evaluation.reason, prepared.value.wave, {
       worker: worker.value,
-      gates,
+      gates: mergedGates.value,
       focusedReReview: focusedReview.value,
     });
   }
@@ -638,7 +760,8 @@ export async function executeFixWave(
     wave: prepared.value.wave,
     worker: worker.value,
     fixWorkerDiffRef: workerRun.diffRef,
-    gates,
+    gates: mergedGates.value,
+    skippedGates: selection.value.skippedGates,
     skippedOptionalGates: selection.value.skippedOptionalGates,
     focusedReReview: focusedReview.value,
     focusedReviewReportRef: focusedRun.reportRef,

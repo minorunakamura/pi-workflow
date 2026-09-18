@@ -65,6 +65,10 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   expect(source).toContain("RESOLVED");
   expect(source).toContain("STILL_PRESENT");
   expect(source).toContain("Never start Fix Wave #2 or an automatic retry");
+  expect(source).toContain("preserving its status/evidence");
+  expect(source).not.toContain(
+    "normalized bounded location/evidence/reason/recommended action",
+  );
   expect(source).toContain("do not perform Final Diff Inspection");
   expect(source).not.toContain('skill: ["ponytail"]');
   expect(source).toContain("Do not merge, push, release, or deploy");

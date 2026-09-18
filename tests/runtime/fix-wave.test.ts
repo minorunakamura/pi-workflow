@@ -60,6 +60,25 @@ function gate(
   };
 }
 
+function passedGate(
+  name: string,
+  command: string,
+  requirement: TrustedGate["requirement"],
+): TrustedGate {
+  return {
+    name,
+    command,
+    requirement,
+    status: "PASS",
+    source: "package-script",
+    evidence: {
+      kind: "managed",
+      path: `baseline/${name}.log`,
+      mediaType: "text/plain",
+    },
+  };
+}
+
 function parseTask(value: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(value);
   if (!isRecord(parsed)) throw new Error("Expected a structured task");
@@ -167,9 +186,10 @@ function options(
   return {
     approvedGates: [
       gate("package-check", "pnpm check", "required"),
+      passedGate("type-check", "pnpm typecheck", "required"),
       gate("docs-check", "pnpm docs", "optional"),
     ],
-    affectedGateNames: ["docs-check"],
+    affectedGateNames: ["package-check", "docs-check"],
     planArtifactRef,
     planningHandoffRef: handoffRef,
     fixWorkerRunner: async (_key: string, _request: unknown) => ({
@@ -192,6 +212,7 @@ it("consolidates accepted findings, re-gates selected commands, and runs a fresh
     gates: [] as string[],
     reviewer: 0,
   };
+  let workerFinished = false;
   const result = await executeFixWave(input(), {
     ...options(),
     fixWorkerRunner: async (_key, request) => {
@@ -204,6 +225,7 @@ it("consolidates accepted findings, re-gates selected commands, and runs a fresh
       if (Array.isArray(task.requiredChanges)) {
         expect(task.requiredChanges).toHaveLength(1);
         expect(task.requiredChanges[0]).not.toHaveProperty("rawReport");
+        expect(task.requiredChanges[0]).not.toHaveProperty("recommendedAction");
       }
       expect(request).toMatchObject({
         agent: "worker",
@@ -213,7 +235,16 @@ it("consolidates accepted findings, re-gates selected commands, and runs a fresh
         worktree: false,
         skill: ["tdd"],
       });
+      workerFinished = true;
       return { result: workerResult(), diffRef };
+    },
+    affectedGateSelector: (selectionInput) => {
+      expect(workerFinished).toBe(true);
+      expect(selectionInput.changedPaths).toEqual(["src/feature.ts"]);
+      expect(selectionInput.acceptedFindingLocations).toEqual([
+        "src/feature.ts:12",
+      ]);
+      return selectAffectedGates(selectionInput);
     },
     gateRunner: async (_key, params) => {
       calls.gates.push(params.gate);
@@ -250,6 +281,23 @@ it("consolidates accepted findings, re-gates selected commands, and runs a fresh
     gates: ["pnpm check", "pnpm docs"],
     reviewer: 1,
   });
+  expect(result.gates).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        name: "type-check",
+        command: "pnpm typecheck",
+        status: "PASS",
+      }),
+    ]),
+  );
+  expect(result.skippedGates).toEqual([
+    {
+      name: "type-check",
+      requirement: "required",
+      reason:
+        "Gate was not selected by bounded Fix evidence: 1 changed path(s), 1 accepted Finding location(s).",
+    },
+  ]);
   expect(result.skippedOptionalGates).toHaveLength(0);
 });
 
@@ -259,20 +307,66 @@ it("keeps required Gates and records unselected optional Gates without inventing
       gate("package-check", "pnpm check", "required"),
       gate("docs-check", "pnpm docs", "optional"),
     ],
+    changedPaths: ["src/feature.ts"],
+    acceptedFindingLocations: ["src/feature.ts:12"],
   });
 
   expect(result.valid).toBe(true);
   if (!result.valid) return;
-  expect(result.value.gates.map(({ name }) => name)).toEqual(["package-check"]);
+  expect(result.value.gates).toHaveLength(0);
+  expect(result.value.finalGates).toEqual([
+    gate("package-check", "pnpm check", "required"),
+    gate("docs-check", "pnpm docs", "optional"),
+  ]);
   expect(result.value.requiredGateKeys).toEqual([
     "package-check\u0000pnpm check",
+  ]);
+  expect(result.value.skippedGates).toEqual([
+    {
+      name: "package-check",
+      requirement: "required",
+      reason:
+        "Gate was not selected by bounded Fix evidence: 1 changed path(s), 1 accepted Finding location(s).",
+    },
+    {
+      name: "docs-check",
+      requirement: "optional",
+      reason:
+        "Gate was not selected by bounded Fix evidence: 1 changed path(s), 1 accepted Finding location(s).",
+    },
   ]);
   expect(result.value.skippedOptionalGates).toEqual([
     {
       name: "docs-check",
-      reason: "No affected Gate evidence was selected for this Fix Wave.",
+      reason:
+        "Gate was not selected by bounded Fix evidence: 1 changed path(s), 1 accepted Finding location(s).",
     },
   ]);
+});
+
+it("fails closed when an unselected required Gate is unresolved", async () => {
+  let reviewerCalls = 0;
+  const result = await executeFixWave(input(), {
+    ...options({
+      approvedGates: [
+        gate("package-check", "pnpm check", "required"),
+        gate("type-check", "pnpm typecheck", "required"),
+      ],
+      affectedGateNames: ["package-check"],
+    }),
+    focusedReviewRunner: async () => {
+      reviewerCalls += 1;
+      return {
+        result: { status: "RESOLVED", fresh: true, readOnly: true },
+        reportRef: reviewRef,
+      };
+    },
+  });
+
+  expect(result.status).toBe("FAILED");
+  if (result.status !== "FAILED") return;
+  expect(result.reason).toContain("Required Gate type-check is UNKNOWN");
+  expect(reviewerCalls).toBe(0);
 });
 
 it("does not start a wave when no finding is accepted", async () => {
