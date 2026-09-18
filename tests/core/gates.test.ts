@@ -18,12 +18,29 @@ function gate(
     requirement: "required",
     status,
     source: "package-script",
+    ...(status === "PASS"
+      ? {
+          evidence: {
+            kind: "managed" as const,
+            path: "evidence/package-check.log",
+            mediaType: "text/plain" as const,
+          },
+        }
+      : {}),
     ...(status === "SKIPPED" || status === "UNKNOWN"
       ? { reason: "The command could not be safely established." }
       : {}),
     ...overrides,
   };
 }
+
+it("requires managed evidence for PASS without changing status semantics", () => {
+  const noEvidence = { ...gate("PASS") };
+  delete noEvidence.evidence;
+  expect(evaluateTrustedGates([noEvidence]).valid).toBe(false);
+  expect(evaluateTrustedGates([gate("PASS")]).passed).toBe(true);
+  expect(evaluateTrustedGates([gate("FAIL")]).valid).toBe(true);
+});
 
 it("blocks required gates while allowing an optional skipped gate", () => {
   expect(evaluateTrustedGates([gate("FAIL")]).passed).toBe(false);

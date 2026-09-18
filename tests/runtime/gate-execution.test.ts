@@ -160,6 +160,7 @@ it("maps failed commands to FAIL and timeout or missing evidence to UNKNOWN", as
     gate(),
     async () => ({
       ok: true,
+      outputReference: { path: "/managed/model-output.md" },
       results: [
         {
           acceptance: {

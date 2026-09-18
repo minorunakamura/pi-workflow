@@ -74,25 +74,6 @@ function artifactFromPath(value: unknown): ArtifactRef | undefined {
   return isValidArtifactRef(candidate) ? candidate : undefined;
 }
 
-function resultArtifact(value: unknown): ArtifactRef | undefined {
-  if (!isRecord(value)) return undefined;
-  const direct = artifactFromPath(value.artifactPath);
-  if (direct !== undefined) return direct;
-  const output = artifactFromPath(value.outputReference);
-  if (output !== undefined) return output;
-  if (isRecord(value.artifactPaths)) {
-    const mapped = artifactFromPath(value.artifactPaths.outputPath);
-    if (mapped !== undefined) return mapped;
-  }
-  if (Array.isArray(value.artifactPaths)) {
-    for (const path of value.artifactPaths) {
-      const artifact = artifactFromPath(path);
-      if (artifact !== undefined) return artifact;
-    }
-  }
-  return undefined;
-}
-
 function verificationRecords(value: unknown): VerificationRecord[] {
   if (!isRecord(value)) return [];
   const records: VerificationRecord[] = [];
@@ -237,7 +218,7 @@ export function normalizeManagedGateResult(
     );
   }
 
-  const evidence = record.artifact ?? resultArtifact(managedResult);
+  const evidence = record.artifact;
   if (evidence === undefined) {
     return validResult(
       withOutcome(

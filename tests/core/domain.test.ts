@@ -94,6 +94,13 @@ function makeGate(
     status,
     source: "package-script",
   };
+  if (status === "PASS") {
+    gate.evidence = {
+      kind: "managed",
+      path: "evidence/package-check.log",
+      mediaType: "text/plain",
+    };
+  }
   if (status === "SKIPPED" || status === "UNKNOWN") {
     return {
       ...gate,
