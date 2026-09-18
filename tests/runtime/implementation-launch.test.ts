@@ -11,6 +11,7 @@ import {
   hashPlan,
   isRecord,
   type ImplementationCoordinatorInput,
+  type RootWorkflowState,
 } from "../../src/core/index.ts";
 import {
   launchFreshImplementationCoordinator,
@@ -309,6 +310,76 @@ it("transitions to IMPLEMENTING only after Root approval and a fresh run", async
   bridge.dispose();
 });
 
+it("refuses invalid pre-launch state categories without spawning", async () => {
+  const root = mkdtempSync(
+    join(tmpdir(), "pi-workflow-implementation-prelaunch-state-"),
+  );
+  roots.push(root);
+  const artifacts = writeArtifacts(root);
+  const approved = approvedRegistry(artifacts);
+  const baseState = approved.getState();
+  const request = approved.getActiveWorkflowRequest();
+  if (baseState === undefined || request === undefined) {
+    throw new Error("Expected an approved workflow state");
+  }
+
+  const missingPlanningRun = { ...baseState };
+  delete missingPlanningRun.planningRunId;
+  const missingHandoff = { ...baseState };
+  delete missingHandoff.planningHandoffRef;
+  const cases: Array<{ name: string; state: RootWorkflowState }> = [
+    {
+      name: "wrong workflow phase",
+      state: { ...baseState, phase: "PLANNING" },
+    },
+    {
+      name: "Planning Coordinator is not completed",
+      state: { ...baseState, planningStatus: "RUNNING" },
+    },
+    { name: "missing Planning run identity", state: missingPlanningRun },
+    { name: "missing Plan/Handoff boundary", state: missingHandoff },
+    {
+      name: "missing Approval Identity",
+      state: { ...baseState, approval: null },
+    },
+    {
+      name: "mismatched Approval Identity",
+      state: {
+        ...baseState,
+        approvedPlanHash: hashPlan("different approved plan").value,
+      },
+    },
+    {
+      name: "active Implementation Coordinator",
+      state: {
+        ...baseState,
+        implementationStatus: "RUNNING",
+        implementationRunId: createRunId("existing-implementation-run"),
+      },
+    },
+  ];
+
+  for (const testCase of cases) {
+    let spawnCalled = false;
+    const result = await launch(
+      {
+        getState: () => testCase.state,
+        getActiveWorkflowRequest: () => request,
+      },
+      async () => {
+        spawnCalled = true;
+        return {
+          requestId: "00000000-0000-4000-8000-000000000015",
+          runId: createRunId("unexpected-implementation-run"),
+        };
+      },
+    );
+
+    expect(result.started, testCase.name).toBe(false);
+    expect(spawnCalled, testCase.name).toBe(false);
+  }
+});
+
 it("refuses every invalid phase-boundary input without spawning", async () => {
   const root = mkdtempSync(
     join(tmpdir(), "pi-workflow-implementation-invalid-"),
@@ -324,7 +395,22 @@ it("refuses every invalid phase-boundary input without spawning", async () => {
       runId: createRunId("implementation-run"),
     };
   };
+  const validHandoff = readFileSync(artifacts.handoffPath, "utf8");
 
+  rmSync(artifacts.planPath);
+  expect((await launch(registry, spawn)).started).toBe(false);
+  expect(spawnCount).toBe(0);
+
+  writeFileSync(artifacts.planPath, "# Implementation Plan\n");
+  expect((await launch(registry, spawn)).started).toBe(false);
+  expect(spawnCount).toBe(0);
+
+  writeFileSync(artifacts.planPath, PLAN);
+  rmSync(artifacts.handoffPath);
+  expect((await launch(registry, spawn)).started).toBe(false);
+  expect(spawnCount).toBe(0);
+
+  writeFileSync(artifacts.handoffPath, validHandoff);
   writeFileSync(artifacts.planPath, `${PLAN}changed after approval\n`);
   expect((await launch(registry, spawn)).started).toBe(false);
   expect(spawnCount).toBe(0);
