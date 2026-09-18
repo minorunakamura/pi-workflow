@@ -2,7 +2,7 @@
 
 Pi packageとして配布する、Root-owned workflowの実装です。
 
-現在はImplementation Specification Section 42のStep 10（Plan Artifact / Planning Handoff）までを実装しています。Plannotator bridge、Implementationは未実装です。Human DecisionはRoot TUIでのみ利用できます。
+現在はImplementation Specification Section 42のStep 11（Plan Review + Approval Identity）までを実装しています。Implementationは未実装です。Human DecisionはRoot TUIで、Plan ReviewはRoot-ownedのPlannotator bridgeで利用します。
 
 ## 開発
 

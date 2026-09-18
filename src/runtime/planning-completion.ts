@@ -1,6 +1,7 @@
 import {
   isValidRunId,
   type PlanningCoordinatorResult,
+  type RootWorkflowState,
   validatePlanningCoordinatorResult,
 } from "../core/index.ts";
 import { isRecord, type ValidationResult } from "../core/validation.ts";
@@ -41,11 +42,16 @@ export interface PlanningCompletionObservation {
   dispose(): void;
 }
 
+export interface PlanningCompletionOptions {
+  onPlanningCompleted?: (state: RootWorkflowState) => void;
+}
+
 export function registerPlanningCompletionObservation(
   events: SubagentRpcEventBus,
   registry: RootWorkflowRegistry,
   sessionId: string,
   resultDelivery: Pick<ResultDeliveryObservation, "isCompletionTrusted">,
+  options: PlanningCompletionOptions = {},
 ): PlanningCompletionObservation {
   let disposed = false;
 
@@ -55,7 +61,8 @@ export function registerPlanningCompletionObservation(
 
     const state = registry.getState();
     if (
-      state?.phase !== "PLANNING" ||
+      state === undefined ||
+      (state.phase !== "PLANNING" && state.phase !== "PLAN_REVIEW") ||
       state.planningStatus !== "RUNNING" ||
       state.planningRunId !== value.runId
     ) {
@@ -86,7 +93,15 @@ export function registerPlanningCompletionObservation(
     }
 
     const completed = registry.completePlanning(value.runId, result.value);
-    if (!completed.transitioned) registry.transition("FAILED");
+    if (!completed.transitioned) {
+      registry.transition("FAILED");
+      return;
+    }
+    try {
+      options.onPlanningCompleted?.(completed.state);
+    } catch {
+      registry.transition("FAILED");
+    }
   };
 
   const remove = events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, onComplete);

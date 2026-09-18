@@ -7,6 +7,10 @@ import {
   registerHumanDecisionRootBridge,
   type HumanDecisionRootBridge,
 } from "../runtime/human-decision-bridge.ts";
+import {
+  registerPlanReviewRootBridge,
+  type PlanReviewRootBridge,
+} from "../runtime/plan-review.ts";
 import { registerSubagentLifecycleObservation } from "../runtime/subagents-rpc.ts";
 
 const PLANNING_FAILURE_STATES = new Set([
@@ -34,10 +38,16 @@ export function registerSubagentLifecycle(
   pi: Pick<ExtensionAPI, "events">,
   registry: RootWorkflowRegistry,
   sessionId: string,
+  planReview?: PlanReviewRootBridge,
 ): () => void {
   const isPlanningRun = (runId: string): boolean => {
     const state = registry.getState();
-    return state?.phase === "PLANNING" && state.planningRunId === runId;
+    return (
+      state !== undefined &&
+      (state.phase === "PLANNING" || state.phase === "PLAN_REVIEW") &&
+      state.planningStatus === "RUNNING" &&
+      state.planningRunId === runId
+    );
   };
   const resultDelivery = registerResultDeliveryObservation(pi.events, {
     sessionId,
@@ -77,6 +87,13 @@ export function registerSubagentLifecycle(
     registry,
     sessionId,
     resultDelivery,
+    planReview === undefined
+      ? undefined
+      : {
+          onPlanningCompleted: (state) => {
+            void planReview.start(state);
+          },
+        },
   );
   return () => {
     planningCompletion.dispose();
@@ -99,12 +116,15 @@ export function registerSessionLifecycle(
 ): void {
   let removeLifecycleObservation: (() => void) | undefined;
   let humanDecisionBridge: HumanDecisionRootBridge | undefined;
+  let planReviewBridge: PlanReviewRootBridge | undefined;
 
   pi.on("session_start", (_event, ctx) => {
     removeLifecycleObservation?.();
     removeLifecycleObservation = undefined;
     humanDecisionBridge?.dispose();
     humanDecisionBridge = undefined;
+    planReviewBridge?.dispose();
+    planReviewBridge = undefined;
     registry.restore(ctx.sessionManager.getBranch());
     const events = pi.events;
     const sessionId = currentSessionIdentity(ctx.sessionManager);
@@ -115,10 +135,12 @@ export function registerSessionLifecycle(
         sessionId,
         mode: ctx.mode,
       });
+      planReviewBridge = registerPlanReviewRootBridge({ events, registry });
       removeLifecycleObservation = registerSubagentLifecycle(
         { events },
         registry,
         sessionId,
+        planReviewBridge,
       );
     }
   });
@@ -131,11 +153,14 @@ export function registerSessionLifecycle(
 
   pi.on("session_shutdown", async () => {
     const current = registry.getState();
-    const planningRunId = registry.hasActiveWorkflow()
-      ? current?.planningRunId
-      : undefined;
+    const planningRunId =
+      registry.hasActiveWorkflow() && current?.planningStatus === "RUNNING"
+        ? current.planningRunId
+        : undefined;
     humanDecisionBridge?.dispose();
     humanDecisionBridge = undefined;
+    planReviewBridge?.dispose();
+    planReviewBridge = undefined;
     if (planningRunId !== undefined && stopPlanningCoordinator !== undefined) {
       try {
         await stopPlanningCoordinator(planningRunId);
