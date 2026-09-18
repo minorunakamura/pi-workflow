@@ -69,6 +69,12 @@ it("declares the Planning capability launch contracts and Human bridge", () => {
   expect(source).toContain("managedPlanOutput");
   expect(source).toContain("outputPathMapping");
   expect(source).toContain("never resolve the Plan from `ctx.cwd`");
+  expect(source).toContain("`package.json` scripts");
+  expect(source).toContain("build configuration/targets");
+  expect(source).toContain("CI configuration");
+  expect(source).toContain("repository documentation");
+  expect(source).toContain("Do not turn a tool filename");
+  expect(source).toContain("a required `pnpm check` is one Gate");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);

@@ -86,6 +86,7 @@ export function validateTrustedGate(
   if (
     !isBoundedString(name, 4096, true) ||
     !isBoundedString(command, 4096, true) ||
+    /[\0\r\n]/u.test(command) ||
     !isGateRequirement(requirement) ||
     !isTrustedGateStatus(status) ||
     !isTrustedGateSource(source)
