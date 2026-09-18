@@ -66,3 +66,22 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);
 });
+
+it("declares the canonical managed Reviewer input contract", () => {
+  const source = readFileSync(AGENT_PATH, "utf8");
+  const start = source.indexOf("After the approved implementation");
+  const end = source.indexOf("Keep the raw Reviewer prose only");
+  const reviewerContract = source.slice(start, end);
+
+  expect(reviewerContract).toContain("workflow identity");
+  expect(reviewerContract).toContain("Plan Artifact ref");
+  expect(reviewerContract).toContain("Planning Handoff ref");
+  expect(reviewerContract).toContain("Worker output/diff artifact refs");
+  expect(reviewerContract).toContain("current cwd");
+  expect(reviewerContract).toContain("non-goals");
+  expect(reviewerContract).toContain("bounded review scope");
+  expect(reviewerContract).toContain("only as managed artifact references");
+  expect(reviewerContract).toContain(
+    "do not copy raw Worker reports or the full diff",
+  );
+});
