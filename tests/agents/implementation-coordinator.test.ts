@@ -21,6 +21,15 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   expect(source).toContain("Approval Identity");
   expect(source).toContain("Do not resume or fork the Planning Coordinator");
   expect(source).toContain("Do not edit source directly");
+  expect(source).toContain("current builtin `worker`");
+  expect(source).toContain("`agent: worker`");
+  expect(source).toContain("`context: fresh`");
+  expect(source).toContain("`outputMode: file-only`");
+  expect(source).toContain("`worktree: false`");
+  expect(source).toContain('skills: ["tdd"]');
+  expect(source).toContain("valid RED/GREEN record");
+  expect(source).toContain("outside the approved scope");
+  expect(source).toContain("Do not merge, push, release, or deploy");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);

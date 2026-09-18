@@ -6,4 +6,5 @@ export * from "./policy.ts";
 export * from "./planning.ts";
 export * from "./readiness.ts";
 export * from "./validation.ts";
+export * from "./worker.ts";
 export * from "./workflow.ts";
