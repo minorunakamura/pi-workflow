@@ -1,10 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
+  canResubmitPlan,
   canStartWorkflow,
   createInitialWorkflowState,
   isActivePhase,
   isValidRequestId,
+  isValidReviewId,
+  validateApprovalIdentity,
   validatePlanningCoordinatorResult,
   isValidRunId,
   isValidWorkflowId,
@@ -15,7 +18,7 @@ import {
   type RootWorkflowState,
   type WorkflowPhase,
 } from "../core/index.ts";
-import { isRecord } from "../core/validation.ts";
+import { isBoundedString, isRecord } from "../core/validation.ts";
 
 export const ROOT_LIFECYCLE_ENTRY_TYPE = "pi-workflow.lifecycle.v1" as const;
 
@@ -182,9 +185,14 @@ export class RootWorkflowRegistry {
     if (this.state === undefined) {
       return { transitioned: false, reason: "No Root workflow exists" };
     }
+    const canAttachInitialRun =
+      this.state.phase === "PLANNING" &&
+      this.state.planningStatus === "RUNNING";
+    const canAttachResubmissionRun =
+      this.state.phase === "PLAN_REVIEW" &&
+      this.state.planningStatus === "RUNNING";
     if (
-      this.state.phase !== "PLANNING" ||
-      this.state.planningStatus !== "RUNNING" ||
+      (!canAttachInitialRun && !canAttachResubmissionRun) ||
       this.state.planningRunId !== undefined ||
       !isValidRunId(runId)
     ) {
@@ -198,6 +206,183 @@ export class RootWorkflowRegistry {
         transitioned: true,
         state: this.commit({ ...this.state, planningRunId: runId }),
       };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public setPlanReviewPending(
+    requestId: unknown,
+    reviewId: unknown,
+  ): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (
+      current.phase !== "PLAN_REVIEW" ||
+      current.planningStatus !== "COMPLETED" ||
+      !isValidRunId(current.planningRunId) ||
+      current.pendingInteraction !== undefined ||
+      current.approval === true ||
+      !isValidRequestId(requestId) ||
+      !isValidReviewId(reviewId)
+    ) {
+      return {
+        transitioned: false,
+        reason: "Plan Review interaction cannot be attached",
+      };
+    }
+
+    const next: RootWorkflowState = {
+      ...current,
+      reviewId,
+      approval: null,
+      pendingInteraction: {
+        kind: "plan-review",
+        requestId,
+        coordinatorRunId: current.planningRunId,
+        reviewId,
+      },
+    };
+    delete next.approvedPlanHash;
+    delete next.approvalFeedback;
+    try {
+      return { transitioned: true, state: this.commit(next) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public recordPlanApproval(
+    identity: unknown,
+    currentPlanHash: unknown,
+    handoff: unknown,
+  ): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    const pending = current.pendingInteraction;
+    if (
+      current.phase !== "PLAN_REVIEW" ||
+      current.planningStatus !== "COMPLETED" ||
+      pending?.kind !== "plan-review" ||
+      !isRecord(identity) ||
+      pending.reviewId !== identity.reviewId
+    ) {
+      return {
+        transitioned: false,
+        reason: "Plan approval does not match the pending review",
+      };
+    }
+
+    const approval = validateApprovalIdentity(
+      identity,
+      currentPlanHash,
+      handoff,
+    );
+    if (!approval.valid) {
+      return { transitioned: false, reason: approval.errors.join("; ") };
+    }
+
+    const next: RootWorkflowState = {
+      ...current,
+      reviewId: approval.value.reviewId,
+      approvedPlanHash: approval.value.approvedPlanHash,
+      approval: true,
+    };
+    if (approval.value.approvalFeedback === undefined) {
+      delete next.approvalFeedback;
+    } else {
+      next.approvalFeedback = approval.value.approvalFeedback;
+    }
+    delete next.pendingInteraction;
+    try {
+      return { transitioned: true, state: this.commit(next) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public recordPlanRejection(
+    reviewId: unknown,
+    feedback?: unknown,
+  ): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    const pending = current.pendingInteraction;
+    if (
+      current.phase !== "PLAN_REVIEW" ||
+      current.planningStatus !== "COMPLETED" ||
+      pending?.kind !== "plan-review" ||
+      pending.reviewId !== reviewId ||
+      !isValidReviewId(reviewId) ||
+      (feedback !== undefined && !isBoundedString(feedback, 16 * 1024))
+    ) {
+      return {
+        transitioned: false,
+        reason: "Plan rejection does not match the pending review",
+      };
+    }
+
+    const next: RootWorkflowState = {
+      ...current,
+      reviewId,
+      approval: false,
+    };
+    delete next.approvedPlanHash;
+    delete next.pendingInteraction;
+    if (feedback === undefined) {
+      delete next.approvalFeedback;
+    } else {
+      next.approvalFeedback = feedback;
+    }
+    try {
+      return { transitioned: true, state: this.commit(next) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public preparePlanResubmission(): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (
+      current.phase !== "PLAN_REVIEW" ||
+      current.planningStatus !== "COMPLETED" ||
+      current.pendingInteraction !== undefined ||
+      current.approval === true ||
+      !canResubmitPlan(current.planResubmissionCount)
+    ) {
+      return {
+        transitioned: false,
+        reason: "Plan resubmission is not allowed",
+      };
+    }
+
+    const next: RootWorkflowState = {
+      ...current,
+      phase: "PLAN_REVIEW",
+      planResubmissionCount: current.planResubmissionCount + 1,
+      planningStatus: "RUNNING",
+      implementationStatus: "NOT_STARTED",
+      approval: null,
+      finalStatus: "NONE",
+    };
+    delete next.planningRunId;
+    delete next.planningHandoffRef;
+    delete next.reviewId;
+    delete next.approvedPlanHash;
+    delete next.approvalFeedback;
+    delete next.pendingInteraction;
+    delete next.codeReviewResult;
+    try {
+      return { transitioned: true, state: this.commit(next) };
     } catch {
       return { transitioned: false, reason: "Persistence failed" };
     }
@@ -270,8 +455,10 @@ export class RootWorkflowRegistry {
     if (this.state === undefined) {
       return { transitioned: false, reason: "No Root workflow exists" };
     }
+    const planningPhase =
+      this.state.phase === "PLANNING" || this.state.phase === "PLAN_REVIEW";
     if (
-      this.state.phase !== "PLANNING" ||
+      !planningPhase ||
       this.state.planningStatus !== "RUNNING" ||
       !isValidRunId(runId) ||
       this.state.planningRunId !== runId
