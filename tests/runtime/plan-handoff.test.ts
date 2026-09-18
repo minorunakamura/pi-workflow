@@ -1,10 +1,4 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -25,18 +19,27 @@ const WORKFLOW_ID = createWorkflowId("00000000-0000-4000-8000-000000000002");
 const PLAN = `${REQUIRED_PLAN_HEADINGS.join("\n")}\n\nBounded plan.\n`;
 const roots: string[] = [];
 
-function input(): PlanHandoffToolInput {
+function input(managedRoot: string): PlanHandoffToolInput {
+  const managedPlan = join(managedRoot, "implementation-plan.md");
   return {
     workflowId: WORKFLOW_ID,
     planArtifactRef: {
       kind: "managed",
-      path: "artifacts/implementation-plan.md",
+      path: "implementation-plan.md",
       mediaType: "text/markdown",
     },
     planningHandoffRef: {
       kind: "managed",
-      path: "artifacts/planning-handoff.json",
+      path: "planning-handoff.json",
       mediaType: "application/json",
+    },
+    managedPlanOutput: {
+      outputReference: managedPlan,
+      outputPathMapping: {
+        requestedPath: "implementation-plan.md",
+        savedPath: managedPlan,
+      },
+      artifactPaths: { outputPath: managedPlan },
     },
     tddMode: "required",
     testStrategy: {
@@ -51,12 +54,12 @@ function input(): PlanHandoffToolInput {
   };
 }
 
-function makeRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "pi-workflow-plan-"));
-  roots.push(root);
-  mkdirSync(join(root, "artifacts"));
-  writeFileSync(join(root, "artifacts/implementation-plan.md"), PLAN);
-  return root;
+function makeRoots(): { projectRoot: string; managedRoot: string } {
+  const projectRoot = mkdtempSync(join(tmpdir(), "pi-workflow-project-"));
+  const managedRoot = mkdtempSync(join(tmpdir(), "pi-workflow-managed-"));
+  roots.push(projectRoot, managedRoot);
+  writeFileSync(join(managedRoot, "implementation-plan.md"), PLAN);
+  return { projectRoot, managedRoot };
 }
 
 afterEach(() => {
@@ -65,11 +68,16 @@ afterEach(() => {
 });
 
 it("creates one immutable-schema Handoff beside the managed Plan", async () => {
-  const root = makeRoot();
-  const details = await writePlanningHandoffArtifact(input(), root);
+  const { projectRoot, managedRoot } = makeRoots();
+  const details = await writePlanningHandoffArtifact(input(managedRoot));
   const persisted: unknown = JSON.parse(
-    readFileSync(join(root, "artifacts/planning-handoff.json"), "utf8"),
+    readFileSync(join(managedRoot, "planning-handoff.json"), "utf8"),
   );
+
+  expect(projectRoot).not.toBe(managedRoot);
+  expect(
+    readFileSync(join(managedRoot, "implementation-plan.md"), "utf8"),
+  ).toBe(PLAN);
 
   expect(details.planHash).toEqual(hashPlan(PLAN));
   expect(persisted).toMatchObject({
@@ -87,22 +95,28 @@ it("creates one immutable-schema Handoff beside the managed Plan", async () => {
 });
 
 it("does not overwrite an existing Handoff or accept a non-template Plan", async () => {
-  const root = makeRoot();
-  await writePlanningHandoffArtifact(input(), root);
-  await expect(writePlanningHandoffArtifact(input(), root)).rejects.toThrow(
-    /EEXIST|already exists/u,
-  );
+  const { managedRoot } = makeRoots();
+  await writePlanningHandoffArtifact(input(managedRoot));
+  await expect(
+    writePlanningHandoffArtifact(input(managedRoot)),
+  ).rejects.toThrow(/EEXIST|already exists/u);
 
   const invalidRoot = mkdtempSync(join(tmpdir(), "pi-workflow-plan-invalid-"));
   roots.push(invalidRoot);
-  mkdirSync(join(invalidRoot, "artifacts"));
   writeFileSync(
-    join(invalidRoot, "artifacts/implementation-plan.md"),
+    join(invalidRoot, "implementation-plan.md"),
     "# Implementation Plan\n## Goal\n",
   );
   await expect(
-    writePlanningHandoffArtifact(input(), invalidRoot),
+    writePlanningHandoffArtifact(input(invalidRoot)),
   ).rejects.toThrow(/missing headings/u);
+
+  await expect(
+    writePlanningHandoffArtifact({
+      ...input(invalidRoot),
+      managedPlanOutput: { outputReference: "implementation-plan.md" },
+    }),
+  ).rejects.toThrow(/public reference|outputReference/u);
 });
 
 it("registers the Handoff writer only as the child-only tool", () => {

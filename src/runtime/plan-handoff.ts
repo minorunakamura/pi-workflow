@@ -3,13 +3,16 @@ import {
   type ExtensionAPI,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { readFile, realpath, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { Type, type Static } from "typebox";
 
 import {
+  PLAN_ARTIFACT_FILE_NAME,
+  PLANNING_HANDOFF_FILE_NAME,
   createPlanningHandoff,
   createRunId,
+  isRecord,
   isValidRunId,
   isValidWorkflowId,
   validatePlanArtifactTemplate,
@@ -30,6 +33,12 @@ const ARTIFACT_REF_SCHEMA = Type.Object({
   mediaType: Type.String(),
 });
 
+const MANAGED_PLAN_OUTPUT_SCHEMA = Type.Object({
+  outputReference: Type.Optional(Type.Any()),
+  outputPathMapping: Type.Optional(Type.Any()),
+  artifactPaths: Type.Optional(Type.Any()),
+});
+
 const TEST_STRATEGY_SCHEMA = Type.Object({
   kind: Type.String(),
   required: Type.Boolean(),
@@ -40,6 +49,7 @@ export const PLAN_HANDOFF_TOOL_PARAMETERS = Type.Object({
   workflowId: Type.String(),
   planArtifactRef: ARTIFACT_REF_SCHEMA,
   planningHandoffRef: ARTIFACT_REF_SCHEMA,
+  managedPlanOutput: MANAGED_PLAN_OUTPUT_SCHEMA,
   tddMode: Type.String(),
   testStrategy: TEST_STRATEGY_SCHEMA,
   testSeams: Type.Array(Type.String()),
@@ -74,29 +84,95 @@ function ensureNotAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw toolError("operation was cancelled");
 }
 
-function isWithin(root: string, candidate: string): boolean {
-  const child = relative(root, candidate);
+function isAbsoluteManagedPath(value: string): boolean {
   return (
-    child === "" ||
-    (child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child))
+    isAbsolute(value) ||
+    value.startsWith("\\\\") ||
+    /^[A-Za-z]:[\\/]/u.test(value)
   );
 }
 
-async function realPathInside(root: string, target: string): Promise<void> {
-  const targetPath = await realpath(target);
-  if (!isWithin(root, targetPath)) {
-    throw toolError("artifact path escapes the managed artifact directory");
-  }
+function outputReferencePath(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (isRecord(value) && typeof value.path === "string") return value.path;
+  return undefined;
 }
 
-async function parentPathInside(root: string, target: string): Promise<void> {
-  await realPathInside(root, dirname(target));
+function validateManagedPlanPath(value: unknown, source: string): string {
+  if (
+    typeof value !== "string" ||
+    !isAbsoluteManagedPath(value) ||
+    /[\0\r\n]/u.test(value) ||
+    value.split(/[\\/]/u).some((segment) => segment === "..") ||
+    basename(value) !== PLAN_ARTIFACT_FILE_NAME
+  ) {
+    throw toolError(`${source} does not reference implementation-plan.md`);
+  }
+  return normalize(value);
+}
+
+function managedPlanPathFromOutput(value: unknown): string {
+  if (!isRecord(value)) {
+    throw toolError("managed Plan output reference is missing");
+  }
+
+  if (Object.hasOwn(value, "outputReference")) {
+    const path = outputReferencePath(value.outputReference);
+    if (path === undefined) {
+      throw toolError("outputReference has no saved path");
+    }
+    return validateManagedPlanPath(path, "outputReference");
+  }
+
+  if (Object.hasOwn(value, "outputPathMapping")) {
+    if (!isRecord(value.outputPathMapping)) {
+      throw toolError("outputPathMapping is invalid");
+    }
+    if (
+      value.outputPathMapping.requestedPath !== undefined &&
+      (typeof value.outputPathMapping.requestedPath !== "string" ||
+        basename(value.outputPathMapping.requestedPath) !==
+          PLAN_ARTIFACT_FILE_NAME)
+    ) {
+      throw toolError("outputPathMapping requestedPath is invalid");
+    }
+    return validateManagedPlanPath(
+      value.outputPathMapping.savedPath,
+      "outputPathMapping.savedPath",
+    );
+  }
+
+  if (Object.hasOwn(value, "artifactPaths")) {
+    const paths = value.artifactPaths;
+    if (isRecord(paths) && typeof paths.outputPath === "string") {
+      return validateManagedPlanPath(
+        paths.outputPath,
+        "artifactPaths.outputPath",
+      );
+    }
+    if (Array.isArray(paths)) {
+      const matches = paths.filter(
+        (path): path is string =>
+          typeof path === "string" &&
+          isAbsoluteManagedPath(path) &&
+          basename(path) === PLAN_ARTIFACT_FILE_NAME,
+      );
+      if (matches.length === 1) {
+        return validateManagedPlanPath(matches[0], "artifactPaths");
+      }
+      if (matches.length > 1) {
+        throw toolError("artifactPaths has conflicting Plan paths");
+      }
+    }
+  }
+
+  throw toolError("managed Plan output has no usable public reference");
 }
 
 async function resolveArtifactPaths(
-  cwd: string,
   planArtifact: unknown,
   planningHandoff: unknown,
+  managedPlanOutput: unknown,
 ): Promise<ResolvedArtifactPaths> {
   const references = validatePlanningArtifactReferences(
     planArtifact,
@@ -106,27 +182,33 @@ async function resolveArtifactPaths(
     throw toolError(references.errors.join("; "));
   }
 
-  const root = await realpath(cwd);
-  const planPath = resolve(root, references.value.planArtifactRef.path);
-  const handoffPath = resolve(root, references.value.planningHandoffRef.path);
-  if (!isWithin(root, planPath) || !isWithin(root, handoffPath)) {
-    throw toolError("artifact path escapes the managed artifact directory");
+  const requestedPlanPath = managedPlanPathFromOutput(managedPlanOutput);
+  const planPath = await realpath(requestedPlanPath);
+  const planStat = await lstat(requestedPlanPath);
+  if (!planStat.isFile() || planStat.isSymbolicLink()) {
+    throw toolError("managed Plan reference is not a regular file");
+  }
+  if (basename(planPath) !== PLAN_ARTIFACT_FILE_NAME) {
+    throw toolError("managed Plan reference resolves to the wrong file");
   }
 
-  await realPathInside(root, planPath);
-  await parentPathInside(root, handoffPath);
-  const planDirectory = await realpath(dirname(planPath));
-  const handoffDirectory = await realpath(dirname(handoffPath));
-  if (planDirectory !== handoffDirectory) {
-    throw toolError(
-      "Plan Artifact and Planning Handoff must share a directory",
-    );
-  }
-
+  const managedDirectory = await realpath(dirname(planPath));
+  const handoffPath = join(managedDirectory, PLANNING_HANDOFF_FILE_NAME);
   return {
     planPath,
     handoffPath,
-    references: references.value,
+    references: {
+      planArtifactRef: {
+        kind: "managed",
+        path: planPath,
+        mediaType: "text/markdown",
+      },
+      planningHandoffRef: {
+        kind: "managed",
+        path: handoffPath,
+        mediaType: "application/json",
+      },
+    },
   };
 }
 
@@ -197,13 +279,12 @@ function createHandoff(
 
 export async function writePlanningHandoffArtifact(
   input: PlanHandoffToolInput,
-  cwd: string,
   signal?: AbortSignal,
 ): Promise<PlanHandoffToolDetails> {
   const paths = await resolveArtifactPaths(
-    cwd,
     input.planArtifactRef,
     input.planningHandoffRef,
+    input.managedPlanOutput,
   );
 
   return withFileMutationQueue(paths.handoffPath, async () => {
@@ -220,9 +301,9 @@ export async function writePlanningHandoffArtifact(
       flag: "wx",
     });
 
-    const persisted = JSON.parse(
+    const persisted: unknown = JSON.parse(
       await readFile(paths.handoffPath, { encoding: "utf8" }),
-    ) as unknown;
+    );
     const verification = validatePlanningHandoffAgainstPlan(
       persisted,
       planContent,
@@ -251,12 +332,8 @@ function createPlanningHandoffTool(): ToolDefinition<
     description:
       "Create the immutable planning-handoff.json beside the canonical implementation-plan.md after validating its hash and metadata.",
     parameters: PLAN_HANDOFF_TOOL_PARAMETERS,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const details = await writePlanningHandoffArtifact(
-        params,
-        ctx.cwd,
-        signal,
-      );
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      const details = await writePlanningHandoffArtifact(params, signal);
       return {
         content: [
           {

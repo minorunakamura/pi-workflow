@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 
 import {
   REQUIRED_PLAN_HEADINGS,
+  createInitialWorkflowState,
   createPlanningHandoff,
   createWorkflowId,
   hashPlan,
@@ -11,6 +12,7 @@ import {
   validatePlanningArtifactReferences,
   validatePlanningHandoffAgainstPlan,
   validatePlanningHandoffReference,
+  validateRootWorkflowState,
 } from "../../src/core/index.ts";
 
 const WORKFLOW_ID = createWorkflowId("00000000-0000-4000-8000-000000000001");
@@ -62,6 +64,20 @@ it("validates co-located managed Plan and Handoff references", () => {
   expect(validatePlanningArtifactReferences(planRef, handoffRef).valid).toBe(
     true,
   );
+  const actualPlanRef = {
+    ...planRef,
+    path: "/managed/run-1/implementation-plan.md",
+  };
+  const actualHandoffRef = {
+    ...handoffRef,
+    path: "/managed/run-1/planning-handoff.json",
+  };
+  expect(
+    validatePlanningArtifactReferences(actualPlanRef, actualHandoffRef).valid,
+  ).toBe(true);
+  const state = createInitialWorkflowState(WORKFLOW_ID, "feature");
+  state.planningHandoffRef = actualHandoffRef;
+  expect(validateRootWorkflowState(state).valid).toBe(true);
   expect(
     validatePlanningArtifactReferences(planRef, {
       ...handoffRef,

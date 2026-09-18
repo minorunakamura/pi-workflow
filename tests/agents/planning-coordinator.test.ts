@@ -66,6 +66,9 @@ it("declares the Planning capability launch contracts and Human bridge", () => {
   expect(source).toContain("- ../src/runtime/human-decision-bridge.ts");
   expect(source).toContain("- ../src/runtime/plan-handoff.ts");
   expect(source).toContain("pi_workflow_write_handoff");
+  expect(source).toContain("managedPlanOutput");
+  expect(source).toContain("outputPathMapping");
+  expect(source).toContain("never resolve the Plan from `ctx.cwd`");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
   expect(tools).not.toMatch(/\b(write|edit|bash)\b/u);
