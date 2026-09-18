@@ -62,7 +62,7 @@ export interface WorkerLaunchRequest {
   readonly agent: typeof WORKER_AGENT;
   readonly context: "fresh";
   readonly task: string;
-  readonly skills?: readonly ["tdd"];
+  readonly skill?: readonly ["tdd"];
   readonly output: typeof WORKER_OUTPUT_FILE;
   readonly outputMode: "file-only";
   readonly worktree: false;
@@ -229,10 +229,9 @@ function validateScope(value: unknown): ValidationResult<WorkerScope> {
   }
   if (
     allowedPaths.length > MAX_LIST_ITEMS ||
-    allowedAreas.length > MAX_LIST_ITEMS ||
-    allowedPaths.length + allowedAreas.length === 0
+    allowedAreas.length > MAX_LIST_ITEMS
   ) {
-    return invalidResult("Worker scope must be bounded and non-empty");
+    return invalidResult("Worker scope must be bounded");
   }
   return validResult({ allowedPaths, allowedAreas });
 }
@@ -398,7 +397,10 @@ export function validateWorkerChangedPaths(
     if (normalized === undefined || seen.has(normalized)) {
       return invalidResult("Worker changed paths contain an invalid path");
     }
-    if (!isWithinWorkerScope(normalized, scope)) {
+    if (
+      scope.allowedPaths.length + scope.allowedAreas.length > 0 &&
+      !isWithinWorkerScope(normalized, scope)
+    ) {
       return invalidResult(
         `Worker changed path is outside approved scope: ${path}`,
       );
@@ -504,7 +506,7 @@ export function createWorkerLaunchRequest(
     context: "fresh",
     task,
     ...(handoff.value.tddMode === "required"
-      ? { skills: ["tdd"] as const }
+      ? { skill: ["tdd"] as const }
       : {}),
     output: WORKER_OUTPUT_FILE,
     outputMode: "file-only",
