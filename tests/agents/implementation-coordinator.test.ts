@@ -29,6 +29,21 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   expect(source).toContain('skill: ["tdd"]');
   expect(source).toContain("valid RED/GREEN record");
   expect(source).toContain("outside the approved scope");
+  expect(source).toContain("Verification");
+  expect(source).toContain("Trusted Gate expectations");
+  expect(source).toContain("repository drift");
+  expect(source).toContain("never downgrade it to optional");
+  expect(source).toContain("actual change makes it mechanically required");
+  expect(source).toContain(
+    "never expand an aggregate command such as `pnpm check`",
+  );
+  expect(source).toContain('agent: "scout"');
+  expect(source).toContain("gate: gate.command");
+  expect(source).toContain("timeoutMs: 1200000");
+  expect(source).toContain("saved log/evidence path");
+  expect(source).toContain(
+    "Model prose, Worker claims, missing evidence, timeout, or unknown status is not PASS",
+  );
   expect(source).toContain("Do not merge, push, release, or deploy");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
