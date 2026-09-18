@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -119,11 +125,30 @@ it("does not overwrite an existing Handoff or accept a non-template Plan", async
   ).rejects.toThrow(/public reference|outputReference/u);
 });
 
+it("rejects a tracked source Plan without creating a Handoff", async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "pi-workflow-source-"));
+  roots.push(projectRoot);
+  const sourcePlan = join(projectRoot, "implementation-plan.md");
+  writeFileSync(sourcePlan, PLAN);
+
+  await expect(
+    writePlanningHandoffArtifact(input(projectRoot), undefined, {
+      cwd: projectRoot,
+      isTrackedPath: async () => true,
+    }),
+  ).rejects.toThrow(/tracked source file/u);
+  expect(readFileSync(sourcePlan, "utf8")).toBe(PLAN);
+  expect(existsSync(join(projectRoot, "planning-handoff.json"))).toBe(false);
+});
+
 it("registers the Handoff writer only as the child-only tool", () => {
   const registered: string[] = [];
   const pi = {
     registerTool(tool: { name: string }) {
       registered.push(tool.name);
+    },
+    async exec() {
+      return { stdout: "", stderr: "", code: 1, killed: false };
     },
   };
 

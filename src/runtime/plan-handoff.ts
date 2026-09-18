@@ -4,7 +4,15 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, normalize } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  sep,
+} from "node:path";
 import { Type, type Static } from "typebox";
 
 import {
@@ -65,6 +73,15 @@ export interface PlanHandoffToolDetails {
   planArtifactRef: ArtifactRef;
   planningHandoffRef: ArtifactRef;
   planHash: PlanHash;
+}
+
+interface SourceBoundary {
+  cwd: string;
+  isTrackedPath: (
+    path: string,
+    cwd: string,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
 }
 
 interface ResolvedArtifactPaths {
@@ -169,10 +186,34 @@ function managedPlanPathFromOutput(value: unknown): string {
   throw toolError("managed Plan output has no usable public reference");
 }
 
+function isWithin(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return (
+    path === "" ||
+    (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path))
+  );
+}
+
+async function rejectTrackedSourcePlan(
+  planPath: string,
+  sourceBoundary: SourceBoundary | undefined,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (sourceBoundary === undefined) return;
+  const sourceRoot = await realpath(sourceBoundary.cwd);
+  const actualPlanPath = await realpath(planPath);
+  if (!isWithin(sourceRoot, actualPlanPath)) return;
+  if (await sourceBoundary.isTrackedPath(actualPlanPath, sourceRoot, signal)) {
+    throw toolError("managed Plan reference points to a tracked source file");
+  }
+}
+
 async function resolveArtifactPaths(
   planArtifact: unknown,
   planningHandoff: unknown,
   managedPlanOutput: unknown,
+  sourceBoundary: SourceBoundary | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<ResolvedArtifactPaths> {
   const references = validatePlanningArtifactReferences(
     planArtifact,
@@ -191,6 +232,7 @@ async function resolveArtifactPaths(
   if (basename(planPath) !== PLAN_ARTIFACT_FILE_NAME) {
     throw toolError("managed Plan reference resolves to the wrong file");
   }
+  await rejectTrackedSourcePlan(planPath, sourceBoundary, signal);
 
   const managedDirectory = await realpath(dirname(planPath));
   const handoffPath = join(managedDirectory, PLANNING_HANDOFF_FILE_NAME);
@@ -280,11 +322,14 @@ function createHandoff(
 export async function writePlanningHandoffArtifact(
   input: PlanHandoffToolInput,
   signal?: AbortSignal,
+  sourceBoundary?: SourceBoundary,
 ): Promise<PlanHandoffToolDetails> {
   const paths = await resolveArtifactPaths(
     input.planArtifactRef,
     input.planningHandoffRef,
     input.managedPlanOutput,
+    sourceBoundary,
+    signal,
   );
 
   return withFileMutationQueue(paths.handoffPath, async () => {
@@ -322,18 +367,38 @@ export async function writePlanningHandoffArtifact(
   });
 }
 
-function createPlanningHandoffTool(): ToolDefinition<
-  typeof PLAN_HANDOFF_TOOL_PARAMETERS,
-  PlanHandoffToolDetails
-> {
+async function isTrackedSourcePath(
+  exec: ExtensionAPI["exec"],
+  path: string,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const result = await exec(
+    "git",
+    ["ls-files", "--error-unmatch", "--", relative(cwd, path)],
+    {
+      cwd,
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return result.code === 0 && result.stdout.trim().length > 0;
+}
+
+function createPlanningHandoffTool(
+  exec: ExtensionAPI["exec"],
+): ToolDefinition<typeof PLAN_HANDOFF_TOOL_PARAMETERS, PlanHandoffToolDetails> {
   return {
     name: PLAN_HANDOFF_TOOL_NAME,
     label: "Write Planning Handoff",
     description:
       "Create the immutable planning-handoff.json beside the canonical implementation-plan.md after validating its hash and metadata.",
     parameters: PLAN_HANDOFF_TOOL_PARAMETERS,
-    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
-      const details = await writePlanningHandoffArtifact(params, signal);
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const details = await writePlanningHandoffArtifact(params, signal, {
+        cwd: ctx.cwd,
+        isTrackedPath: (path, cwd, sourceSignal) =>
+          isTrackedSourcePath(exec, path, cwd, sourceSignal),
+      });
       return {
         content: [
           {
@@ -348,13 +413,13 @@ function createPlanningHandoffTool(): ToolDefinition<
 }
 
 export function registerPlanningHandoffChildTool(
-  pi: Pick<ExtensionAPI, "registerTool">,
+  pi: Pick<ExtensionAPI, "registerTool" | "exec">,
 ): void {
-  pi.registerTool(createPlanningHandoffTool());
+  pi.registerTool(createPlanningHandoffTool(pi.exec));
 }
 
 export default function planningHandoffChildExtension(
-  pi: Pick<ExtensionAPI, "registerTool">,
+  pi: Pick<ExtensionAPI, "registerTool" | "exec">,
 ): void {
   if (process.env.PI_SUBAGENT_CHILD !== "1") return;
   registerPlanningHandoffChildTool(pi);
