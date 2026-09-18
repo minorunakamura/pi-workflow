@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { registerCommands } from "./commands/index.ts";
 import { registerSessionLifecycle } from "./events/index.ts";
+import { launchFreshImplementationCoordinator } from "./runtime/implementation-launch.ts";
 import { createRootWorkflowRegistry } from "./runtime/root-lifecycle.ts";
 import { SubagentRpcAdapter } from "./runtime/subagents-rpc.ts";
 
@@ -37,6 +38,17 @@ export default function extension(pi: RootExtensionAPI): void {
         throw new Error("Active workflow request is unavailable");
       }
       return rpc.spawnPlanningCoordinator(request);
+    },
+    async (state) => {
+      const launch = await launchFreshImplementationCoordinator({
+        registry,
+        state,
+        spawnImplementationCoordinator: (input) =>
+          rpc.spawnImplementationCoordinator(input),
+        stopImplementationCoordinator: (runId) => rpc.stop(runId),
+      });
+      if (!launch.started) throw new Error(launch.reason);
+      return launch;
     },
   );
 }

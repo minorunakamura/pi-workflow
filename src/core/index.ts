@@ -1,5 +1,6 @@
 export * from "./findings.ts";
 export * from "./gates.ts";
+export * from "./implementation.ts";
 export * from "./plan.ts";
 export * from "./policy.ts";
 export * from "./planning.ts";

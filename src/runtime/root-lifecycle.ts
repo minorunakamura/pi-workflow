@@ -5,6 +5,7 @@ import {
   canStartWorkflow,
   createInitialWorkflowState,
   isActivePhase,
+  isValidPlanHashValue,
   isValidRequestId,
   isValidReviewId,
   validateApprovalIdentity,
@@ -335,6 +336,44 @@ export class RootWorkflowRegistry {
       next.approvalFeedback = approval.value.approvalFeedback;
     }
     delete next.pendingInteraction;
+    try {
+      return { transitioned: true, state: this.commit(next) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public startImplementation(runId: unknown): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (
+      current.phase !== "PLAN_REVIEW" ||
+      current.planningStatus !== "COMPLETED" ||
+      current.implementationStatus !== "NOT_STARTED" ||
+      current.implementationRunId !== undefined ||
+      current.pendingInteraction !== undefined ||
+      current.planningHandoffRef === undefined ||
+      current.approval !== true ||
+      !isValidReviewId(current.reviewId) ||
+      !isValidPlanHashValue(current.approvedPlanHash) ||
+      !isValidRunId(current.planningRunId) ||
+      !isValidRunId(runId) ||
+      runId === current.planningRunId
+    ) {
+      return {
+        transitioned: false,
+        reason: "Implementation Coordinator launch preconditions are not met",
+      };
+    }
+
+    const next: RootWorkflowState = {
+      ...current,
+      phase: "IMPLEMENTING",
+      implementationStatus: "RUNNING",
+      implementationRunId: runId,
+    };
     try {
       return { transitioned: true, state: this.commit(next) };
     } catch {

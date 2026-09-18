@@ -3,8 +3,12 @@ import { expect, it, vi } from "vitest";
 import { isRecord } from "../../src/core/validation.ts";
 import {
   TIMEOUTS,
+  createReviewId,
   createWorkflowId,
+  hashPlan,
+  validateImplementationCoordinatorInput,
   validatePlanningCoordinatorInput,
+  type ImplementationCoordinatorInput,
 } from "../../src/core/index.ts";
 import {
   SUBAGENT_ASYNC_COMPLETE_EVENT,
@@ -273,6 +277,70 @@ it("sends the bounded fresh planning Coordinator payload and captures the struct
   expect(task).not.toHaveProperty("hiddenContext");
   expect(task).not.toHaveProperty("rawContext");
 
+  adapter.dispose();
+});
+
+it("sends only the three fresh Implementation boundary inputs", async () => {
+  const events = new FakeEventBus();
+  const adapter = new SubagentRpcAdapter(events);
+  events.emit(SUBAGENT_RPC_READY_EVENT, ready);
+  const input: ImplementationCoordinatorInput = {
+    contractVersion: 1,
+    workflow: {
+      workflowId: createWorkflowId(UUID),
+      workflowType: "bug",
+      cwd: "/repo",
+    },
+    planArtifactRef: {
+      kind: "managed",
+      path: "/managed/run/implementation-plan.md",
+      mediaType: "text/markdown",
+    },
+    planningHandoffRef: {
+      kind: "managed",
+      path: "/managed/run/planning-handoff.json",
+      mediaType: "application/json",
+    },
+    approval: {
+      approvedPlanHash: hashPlan("approved plan").value,
+      reviewId: createReviewId("review-implementation"),
+      approval: true,
+    },
+    runtime: {
+      timeoutMs: TIMEOUTS.coordinatorTimeoutMs,
+      maxSubagentDepth: 2,
+      outputMode: "file-only",
+    },
+  };
+  let request: SubagentRpcRequestEnvelope | undefined;
+  events.on(SUBAGENT_RPC_REQUEST_EVENT, (raw) => {
+    request = requestFrom(raw);
+    events.emit(
+      subagentRpcReplyEvent(request.requestId),
+      successReply(request, {
+        details: { results: [{ runId: "implementation-run" }] },
+      }),
+    );
+  });
+
+  const result = await adapter.spawnImplementationCoordinator(input);
+
+  expect(result.runId).toBe("implementation-run");
+  expect(request?.params).toMatchObject({
+    agent: "pi-workflow.implementation-coordinator",
+    context: "fresh",
+    cwd: "/repo",
+    async: true,
+    output: "implementation-summary.md",
+    outputMode: "file-only",
+    artifacts: true,
+    timeoutMs: TIMEOUTS.coordinatorTimeoutMs,
+  });
+  const task: unknown = JSON.parse(String(request?.params?.task));
+  expect(validateImplementationCoordinatorInput(task).valid).toBe(true);
+  if (request === undefined) return;
+  expect(request.params?.task).not.toContain("transcript");
+  expect(request.params?.task).not.toContain("hiddenContext");
   adapter.dispose();
 });
 

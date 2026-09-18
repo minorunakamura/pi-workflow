@@ -2,7 +2,7 @@
 
 Pi packageとして配布する、Root-owned workflowの実装です。
 
-現在はImplementation Specification Section 42のStep 11（Plan Review + Approval Identity）までを実装しています。Implementationは未実装です。Human DecisionはRoot TUIで、Plan ReviewはRoot-ownedのPlannotator bridgeで利用します。
+現在はImplementation Specification Section 42のStep 12（Fresh Implementation launch）までを実装しています。Worker以降のImplementation phase機能は未実装です。Human DecisionはRoot TUIで、Plan ReviewはRoot-ownedのPlannotator bridgeで利用します。
 
 ## 開発
 
