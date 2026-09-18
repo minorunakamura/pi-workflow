@@ -59,7 +59,13 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   expect(source).toContain("REJECTED");
   expect(source).toContain("non-empty reason");
   expect(source).toContain("Reviewer recommendations are input, not commands");
-  expect(source).toContain("do not start a Fix Wave or Focused Re-review here");
+  expect(source).toContain("combine all `BLOCKER` and `FIX_NOW` findings");
+  expect(source).toContain("at most once");
+  expect(source).toContain("fresh read-only Focused Re-review");
+  expect(source).toContain("RESOLVED");
+  expect(source).toContain("STILL_PRESENT");
+  expect(source).toContain("Never start Fix Wave #2 or an automatic retry");
+  expect(source).toContain("do not perform Final Diff Inspection");
   expect(source).not.toContain('skill: ["ponytail"]');
   expect(source).toContain("Do not merge, push, release, or deploy");
 
