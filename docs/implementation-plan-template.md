@@ -32,6 +32,8 @@
 
 ## Trusted Gate expectations
 <!-- Required Gate expectations from the Plan and repository evidence; do not fabricate PASS results. -->
+<!-- pi-workflow-trusted-gates: [] -->
+<!-- Replace [] with a JSON array of {"name","command","requirement","source"} declarations. -->
 
 ## Risks / assumptions
 <!-- Known risks, unresolved facts, and explicit decision requests. -->
