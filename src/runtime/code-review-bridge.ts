@@ -437,7 +437,7 @@ export function validateCodeReviewBridgeResponse(
     ? value.annotationsRef
     : undefined;
   const error = "error" in value ? validateError(value.error) : undefined;
-  return validResult({
+  const response: CodeReviewBridgeResponse = {
     version: 1,
     kind: CODE_REVIEW_RESPONSE_KIND,
     workflowId: value.workflowId,
@@ -450,7 +450,10 @@ export function validateCodeReviewBridgeResponse(
     ...(feedbackRef === undefined ? {} : { feedbackRef }),
     ...(annotationsRef === undefined ? {} : { annotationsRef }),
     ...(error === undefined || !error.valid ? {} : { error: error.value }),
-  });
+  };
+  return isWithinPayloadLimit(response)
+    ? validResult(response)
+    : invalidResult("Code Review response exceeds the intercom payload limit");
 }
 
 export function isCodeReviewBridgeResponse(
@@ -556,7 +559,7 @@ function failureResponse(
   code: string,
   message: string,
 ): CodeReviewBridgeResponse {
-  return {
+  const response: CodeReviewBridgeResponse = {
     version: 1,
     kind: CODE_REVIEW_RESPONSE_KIND,
     workflowId: request.workflowId,
@@ -565,6 +568,20 @@ function failureResponse(
     status,
     approved: false,
     error: { code, message },
+  };
+  if (isWithinPayloadLimit(response)) return response;
+  return {
+    version: 1,
+    kind: CODE_REVIEW_RESPONSE_KIND,
+    workflowId: request.workflowId,
+    requestId: request.requestId,
+    recipientSessionId: request.originSessionId,
+    status: "failed",
+    approved: false,
+    error: {
+      code: "response-too-large",
+      message: "Code Review response exceeds the intercom payload limit",
+    },
   };
 }
 
@@ -991,6 +1008,29 @@ export class CodeReviewRootBridge {
     const status: "approved" | "rejected" = result.approved
       ? "approved"
       : "rejected";
+    const response: CodeReviewBridgeResponse = {
+      version: 1,
+      kind: CODE_REVIEW_RESPONSE_KIND,
+      workflowId: pending.request.workflowId,
+      requestId: pending.request.requestId,
+      recipientSessionId: pending.request.originSessionId,
+      status,
+      approved: result.approved,
+      ...(result.feedback === undefined ? {} : { feedback: result.feedback }),
+      ...(result.annotations === undefined
+        ? {}
+        : { annotations: result.annotations }),
+    };
+    const responseValidation = validateCodeReviewBridgeResponse(response);
+    if (!responseValidation.valid) {
+      this.settleFailure(
+        pending,
+        "failed",
+        "response-too-large",
+        "Code Review response exceeds the intercom payload limit",
+      );
+      return;
+    }
     const summary: CodeReviewResultSummary = {
       requestId: pending.request.requestId,
       status,
@@ -1006,19 +1046,7 @@ export class CodeReviewRootBridge {
       );
       return;
     }
-    this.finish(pending, {
-      version: 1,
-      kind: CODE_REVIEW_RESPONSE_KIND,
-      workflowId: pending.request.workflowId,
-      requestId: pending.request.requestId,
-      recipientSessionId: pending.request.originSessionId,
-      status,
-      approved: result.approved,
-      ...(result.feedback === undefined ? {} : { feedback: result.feedback }),
-      ...(result.annotations === undefined
-        ? {}
-        : { annotations: result.annotations }),
-    });
+    this.finish(pending, responseValidation.value);
   }
 
   private settleFailure(
