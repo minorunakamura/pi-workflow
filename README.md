@@ -2,7 +2,7 @@
 
 Pi packageとして配布する、Root-owned workflowの実装です。
 
-現在はImplementation Specification Section 42のStep 17（Final Diff Inspection）までを実装しています。fresh read-only Reviewer、Coordinator-ownedのFinding normalization、最大1回のbounded Fix Wave、affected Gate再実行、fresh Focused Re-review、Coordinator-ownedのread-only Final Diff Inspectionを提供します。Human DecisionはRoot TUIで、Plan ReviewはRoot-ownedのPlannotator bridgeで利用します。
+現在はImplementation Specification Section 42のStep 18（Plannotator Code Review）までを実装しています。fresh read-only Reviewer、Coordinator-ownedのFinding normalization、最大1回のbounded Fix Wave、affected Gate再実行、fresh Focused Re-review、Coordinator-ownedのread-only Final Diff Inspection、Root-ownedのdirect Plannotator Code Review bridgeを提供します。Human DecisionはRoot TUIで、Plan ReviewとCode ReviewはRoot-ownedのPlannotator bridgeで利用します。
 
 ## 開発
 

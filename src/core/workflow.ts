@@ -508,7 +508,9 @@ function hasValidPendingInteraction(value: unknown): boolean {
   return !("reviewId" in value) || isValidReviewId(value.reviewId);
 }
 
-function hasValidCodeReviewResult(value: unknown): boolean {
+export function validateCodeReviewResultSummary(
+  value: unknown,
+): ValidationResult<CodeReviewResultSummary> {
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, [
@@ -517,17 +519,40 @@ function hasValidCodeReviewResult(value: unknown): boolean {
       "approved",
       "feedbackRef",
       "annotationsRef",
-    ])
+    ]) ||
+    !isValidRequestId(value.requestId) ||
+    !isCodeReviewStatus(value.status) ||
+    typeof value.approved !== "boolean" ||
+    (value.status === "approved" && !value.approved) ||
+    (value.status !== "approved" && value.approved) ||
+    ("feedbackRef" in value && !isValidArtifactRef(value.feedbackRef)) ||
+    ("annotationsRef" in value && !isValidArtifactRef(value.annotationsRef))
   ) {
-    return false;
+    return invalidResult("Code Review result summary is invalid");
   }
-  return (
-    isValidRequestId(value.requestId) &&
-    isCodeReviewStatus(value.status) &&
-    typeof value.approved === "boolean" &&
-    (!("feedbackRef" in value) || isValidArtifactRef(value.feedbackRef)) &&
-    (!("annotationsRef" in value) || isValidArtifactRef(value.annotationsRef))
-  );
+  const feedbackRef = isValidArtifactRef(value.feedbackRef)
+    ? value.feedbackRef
+    : undefined;
+  const annotationsRef = isValidArtifactRef(value.annotationsRef)
+    ? value.annotationsRef
+    : undefined;
+  return validResult({
+    requestId: value.requestId,
+    status: value.status,
+    approved: value.approved,
+    ...(feedbackRef === undefined ? {} : { feedbackRef }),
+    ...(annotationsRef === undefined ? {} : { annotationsRef }),
+  });
+}
+
+export function isValidCodeReviewResultSummary(
+  value: unknown,
+): value is CodeReviewResultSummary {
+  return validateCodeReviewResultSummary(value).valid;
+}
+
+function hasValidCodeReviewResult(value: unknown): boolean {
+  return validateCodeReviewResultSummary(value).valid;
 }
 
 function hasValidRootWorkflowValues(
