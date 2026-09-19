@@ -223,6 +223,10 @@ export interface HumanDecisionRootBridge {
   dispose(): void;
   getConflictRecords(): readonly HumanDecisionConflictRecord[];
   hasPendingInteraction(): boolean;
+  getIntercomChannel(): IntercomExtensionChannel | undefined;
+  addIntercomEventHandler(
+    handler: (event: IntercomExtensionEvent) => void,
+  ): () => void;
 }
 
 export type HumanDecisionToolInput = Static<
@@ -898,6 +902,9 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
   private pending: PendingRootInteraction | undefined;
   private readonly completed = new Map<string, CompletedRootInteraction>();
   private readonly conflicts: HumanDecisionConflictRecord[] = [];
+  private readonly intercomEventHandlers = new Set<
+    (event: IntercomExtensionEvent) => void
+  >();
   private disposed = false;
   private readonly timeoutMs: number;
 
@@ -916,6 +923,20 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
 
   public hasPendingInteraction(): boolean {
     return this.pending !== undefined && !this.pending.settled;
+  }
+
+  public getIntercomChannel(): IntercomExtensionChannel | undefined {
+    return this.channel;
+  }
+
+  public addIntercomEventHandler(
+    handler: (event: IntercomExtensionEvent) => void,
+  ): () => void {
+    if (this.disposed) return () => {};
+    this.intercomEventHandlers.add(handler);
+    return () => {
+      this.intercomEventHandlers.delete(handler);
+    };
   }
 
   public dispose(): void {
@@ -946,6 +967,7 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     }
     this.disposed = true;
     this.channel = undefined;
+    this.intercomEventHandlers.clear();
     this.completed.clear();
     this.conflicts.length = 0;
   }
@@ -985,8 +1007,15 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
   }
 
   private onIntercomEvent(event: IntercomExtensionEvent): void {
+    if (this.disposed) return;
+    for (const handler of [...this.intercomEventHandlers]) {
+      try {
+        handler(event);
+      } catch {
+        // One bridge must not break the Root intercom dispatcher.
+      }
+    }
     if (
-      this.disposed ||
       !isRecord(event) ||
       event.type !== "message" ||
       !isNormalizedOpaqueId(event.fromSessionId)
@@ -996,6 +1025,13 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     const binding = validateHumanDecisionBindingRequest(event.payload);
     if (binding.valid) {
       this.handleBindingRequest(event.fromSessionId, binding.value);
+      return;
+    }
+    if (
+      isRecord(event.payload) &&
+      typeof event.payload.kind === "string" &&
+      event.payload.kind !== HUMAN_DECISION_REQUEST_KIND
+    ) {
       return;
     }
     const parsed = validateHumanDecisionBridgeRequest(event.payload);

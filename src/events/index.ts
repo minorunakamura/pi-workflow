@@ -13,6 +13,10 @@ import {
   type PlanReviewRootBridge,
 } from "../runtime/plan-review.ts";
 import {
+  registerCodeReviewRootBridge,
+  type CodeReviewRootBridge,
+} from "../runtime/code-review-bridge.ts";
+import {
   registerSubagentLifecycleObservation,
   type ImplementationCoordinatorLaunchResult,
   type PlanningCoordinatorLaunchResult,
@@ -126,6 +130,7 @@ export function registerSessionLifecycle(
   let removeLifecycleObservation: (() => void) | undefined;
   let humanDecisionBridge: HumanDecisionRootBridge | undefined;
   let planReviewBridge: PlanReviewRootBridge | undefined;
+  let codeReviewBridge: CodeReviewRootBridge | undefined;
 
   pi.on("session_start", (_event, ctx) => {
     removeLifecycleObservation?.();
@@ -134,6 +139,8 @@ export function registerSessionLifecycle(
     humanDecisionBridge = undefined;
     planReviewBridge?.dispose();
     planReviewBridge = undefined;
+    codeReviewBridge?.dispose();
+    codeReviewBridge = undefined;
     registry.restore(ctx.sessionManager.getBranch());
     const events = pi.events;
     const sessionId = currentSessionIdentity(ctx.sessionManager);
@@ -160,6 +167,12 @@ export function registerSessionLifecycle(
               stopImplementationCoordinator: stopPlanningCoordinator,
             }),
       });
+      codeReviewBridge = registerCodeReviewRootBridge({
+        events,
+        registry,
+        sessionId,
+        intercom: humanDecisionBridge,
+      });
       removeLifecycleObservation = registerSubagentLifecycle(
         { events },
         registry,
@@ -185,6 +198,8 @@ export function registerSessionLifecycle(
     humanDecisionBridge = undefined;
     planReviewBridge?.dispose();
     planReviewBridge = undefined;
+    codeReviewBridge?.dispose();
+    codeReviewBridge = undefined;
     if (planningRunId !== undefined && stopPlanningCoordinator !== undefined) {
       try {
         await stopPlanningCoordinator(planningRunId);

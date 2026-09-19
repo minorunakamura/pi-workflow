@@ -74,6 +74,15 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
     "normalized bounded location/evidence/reason/recommended action",
   );
   expect(source).toContain("Coordinator-owned Final Diff Inspection");
+  expect(source).toContain("pi_workflow_code_review");
+  expect(source).toContain(
+    "direct Root-owned Plannotator `code-review` action",
+  );
+  expect(source).toContain("same Implementation Coordinator run");
+  expect(source).toContain(
+    "first rejection may start exactly one approved-scope change cycle",
+  );
+  expect(source).toContain("second rejection");
   expect(source).toContain("approved requirements are implemented");
   expect(source).toContain("unexpected path");
   expect(source).toContain("working-tree evidence");
@@ -94,7 +103,9 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   );
   expect(source).toContain("If the Fix Wave was already used, return `FAILED`");
   expect(source).toContain("never start Fix Wave #2 or an automatic retry");
-  expect(source).toContain("do not perform Plannotator Code Review");
+  expect(source).not.toContain(
+    "At this Step 17 boundary, do not perform Plannotator Code Review",
+  );
   expect(source).not.toContain("do not perform Final Diff Inspection");
   expect(source).not.toContain('skill: ["ponytail"]');
   expect(source).toContain("Do not merge, push, release, or deploy");

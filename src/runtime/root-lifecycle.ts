@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
   canResubmitPlan,
+  canStartCodeReviewChangeCycle,
   canStartWorkflow,
   createInitialWorkflowState,
   isActivePhase,
@@ -9,6 +10,7 @@ import {
   isValidRequestId,
   isValidReviewId,
   validateApprovalIdentity,
+  validateCodeReviewResultSummary,
   validatePlanningCoordinatorResult,
   isValidRunId,
   isValidWorkflowId,
@@ -374,6 +376,99 @@ export class RootWorkflowRegistry {
       implementationStatus: "RUNNING",
       implementationRunId: runId,
     };
+    try {
+      return { transitioned: true, state: this.commit(next) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public setCodeReviewPending(
+    requestId: unknown,
+    coordinatorRunId: unknown,
+  ): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (
+      current.phase !== "IMPLEMENTING" ||
+      current.planningStatus !== "COMPLETED" ||
+      current.implementationStatus !== "RUNNING" ||
+      current.pendingInteraction !== undefined ||
+      !isValidRequestId(requestId) ||
+      !isValidRunId(coordinatorRunId) ||
+      current.implementationRunId !== coordinatorRunId
+    ) {
+      return {
+        transitioned: false,
+        reason: "Code Review interaction cannot be attached",
+      };
+    }
+
+    const next: RootWorkflowState = {
+      ...current,
+      phase: "CODE_REVIEW",
+      implementationStatus: "COMPLETED",
+      pendingInteraction: {
+        kind: "code-review",
+        requestId,
+        coordinatorRunId,
+      },
+    };
+    try {
+      return { transitioned: true, state: this.commit(next) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public recordCodeReviewResult(result: unknown): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    const parsed = validateCodeReviewResultSummary(result);
+    const pending = current.pendingInteraction;
+    if (
+      !parsed.valid ||
+      current.phase !== "CODE_REVIEW" ||
+      current.implementationStatus !== "COMPLETED" ||
+      pending?.kind !== "code-review" ||
+      pending.requestId !== parsed.value.requestId ||
+      pending.coordinatorRunId !== current.implementationRunId
+    ) {
+      return {
+        transitioned: false,
+        reason: parsed.valid
+          ? "Code Review result does not match the pending interaction"
+          : parsed.errors.join("; "),
+      };
+    }
+
+    const next: RootWorkflowState = {
+      ...current,
+      codeReviewResult: parsed.value,
+    };
+    delete next.pendingInteraction;
+
+    if (parsed.value.status === "rejected") {
+      if (!canStartCodeReviewChangeCycle(current.codeReviewChangeCycleCount)) {
+        next.phase = "FAILED";
+        next.implementationStatus = "FAILED";
+        next.finalStatus = "FAILED";
+      } else {
+        next.phase = "IMPLEMENTING";
+        next.implementationStatus = "RUNNING";
+        next.codeReviewChangeCycleCount =
+          current.codeReviewChangeCycleCount + 1;
+      }
+    } else if (parsed.value.status !== "approved") {
+      next.phase = "FAILED";
+      next.implementationStatus = "FAILED";
+      next.finalStatus = "FAILED";
+    }
+
     try {
       return { transitioned: true, state: this.commit(next) };
     } catch {
