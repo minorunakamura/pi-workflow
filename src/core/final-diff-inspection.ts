@@ -13,7 +13,6 @@ import {
 
 export const FINAL_DIFF_INSPECTION_CONTRACT_VERSION = 1 as const;
 
-const MAX_LIST_ITEMS = 32;
 const MAX_LIST_ITEM_BYTES = 4096;
 
 export type FinalDiffInspectionStatus = "PASS" | "FAIL" | "MISSING" | "UNKNOWN";
@@ -97,10 +96,8 @@ function validateStringList(
   value: unknown,
   fieldName: string,
 ): ValidationResult<string[]> {
-  if (!Array.isArray(value) || value.length > MAX_LIST_ITEMS) {
-    return invalidResult(
-      `${fieldName} must contain at most ${MAX_LIST_ITEMS} items`,
-    );
+  if (!Array.isArray(value)) {
+    return invalidResult(`${fieldName} must be an array`);
   }
   const list: string[] = [];
   const seen = new Set<string>();

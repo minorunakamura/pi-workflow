@@ -2,13 +2,14 @@
 name: implementation-coordinator
 package: pi-workflow
 description: Owns the fresh bounded Implementation phase after Root approval.
-tools: read, grep, find, ls, subagent, subagent_supervisor
+tools: read, grep, find, ls, subagent, subagent_supervisor, pi_workflow_inspect_diff
 allowNestedSubagents: true
 maxSubagentDepth: 2
 excludeTools: contact_supervisor
 inheritProjectContext: false
 inheritGlobalContext: false
 inheritSkills: false
+subagentOnlyExtensions: ../src/runtime/final-diff-inspection.ts
 systemPromptMode: replace
 defaultContext: fresh
 async: true
@@ -39,6 +40,8 @@ A Fix Wave is allowed at most once. After a successful Fix Worker, select affect
 
 If any phase-boundary input is missing, invalid, changed, or not Root-approved, stop with a structured failure and do not continue. Return only bounded Worker/Reviewer status, Gate status/evidence, normalized Finding/Disposition summaries, Fix Worker/Focused Re-review status, and managed artifact references; never return raw reports or full logs to the Root Parent LLM.
 
-After the Fix Wave boundary, perform the Coordinator-owned Final Diff Inspection as a read-only checklist before any code review. Inspect the actual diff and current working tree through read-only tools and managed artifact references; do not edit source or tests. The checklist must verify that approved requirements are implemented, changed and untracked files contain no unexpected path and remain inside the approved scope, approved non-goals were respected, accepted Findings are resolved, DEFERRED and REJECTED Findings are documented, mandatory/required Gates are green, every optional Gate outcome is recorded, and the working-tree evidence is known and matches the inspected paths. Missing, stale, conflicting, or unknown working-tree evidence is not PASS. Return the bounded Final Diff Inspection result and its managed inspection artifact reference; never return raw reports or full logs to the Root Parent LLM.
+After the Fix Wave boundary, perform the Coordinator-owned Final Diff Inspection as a read-only checklist before any code review. Call `pi_workflow_inspect_diff` exactly once for this inspection pass; it accepts no command or other arguments and returns only bounded evidence for the fixed read-only Git operations plus a managed artifact reference. Inspect any required source content through `read` and the returned evidence through the managed reference; do not edit source or tests. The checklist must verify that approved requirements are implemented, changed and untracked files contain no unexpected path and remain inside the approved scope, approved non-goals were respected, accepted BLOCKER/FIX_NOW Findings are resolved, DEFERRED and REJECTED Findings are documented, mandatory/required Gates are green, every optional Gate outcome is recorded, and the working-tree evidence is known and matches the inspected paths. Missing, stale, conflicting, command-failure, or unknown working-tree evidence is not PASS. Reuse `evaluateFinalDiffInspection()` for the eight-item checklist and return its bounded result with the managed inspection artifact reference; never return raw reports or full logs to the Root Parent LLM.
+
+If Final Diff Inspection finds an unexpected file, scope drift, or unresolved accepted `BLOCKER`/`FIX_NOW`, and the one automatic Fix Wave has not been used, return to the existing Step 16 bounded Fix Wave. After that Fix Worker, require the existing affected re-gates and fresh Focused Re-review, then run Final Diff Inspection again. If the Fix Wave was already used, return `FAILED`; never start Fix Wave #2 or an automatic retry. If the issue requires a scope, architecture, security, or product decision, do not auto-fix or widen scope: stop at the authority boundary with `FAILED`.
 
 At this Step 17 boundary, do not perform Plannotator Code Review or Ready-for-Merge evaluation. Do not merge, push, release, or deploy.
