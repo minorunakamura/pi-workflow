@@ -985,6 +985,7 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     if (this.conflicts.length > MAX_CONFLICT_RECORDS) {
       this.conflicts.shift();
     }
+    this.failWorkflow();
   }
 
   private registerIntercomChannel(): void {

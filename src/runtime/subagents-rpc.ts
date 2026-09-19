@@ -254,6 +254,14 @@ function isSuccessReply(
   return value.success;
 }
 
+function replyFingerprint(value: SubagentRpcReplyEnvelope): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return `${value.success}:${value.requestId}:${value.method ?? ""}`;
+  }
+}
+
 function normalizeRunId(value: unknown): RunId | undefined {
   if (typeof value !== "string" || /[\r\n]/u.test(value)) {
     return undefined;
@@ -694,6 +702,7 @@ export class SubagentRpcAdapter {
     return new Promise((resolve, reject) => {
       let settled = false;
       let terminalReply: SubagentRpcReplyEnvelope | undefined;
+      let terminalReplyFingerprint: string | undefined;
       let removeReplyListener = () => {};
       let removeAbortListener = () => {};
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -730,7 +739,7 @@ export class SubagentRpcAdapter {
           return;
         }
         if (terminalReply !== undefined) {
-          if (terminalReply.success !== parsed.reply.success) {
+          if (terminalReplyFingerprint !== replyFingerprint(parsed.reply)) {
             fail(
               new SubagentRpcError(
                 "RPC_CONFLICTING_REPLY",
@@ -742,6 +751,7 @@ export class SubagentRpcAdapter {
           return;
         }
         terminalReply = parsed.reply;
+        terminalReplyFingerprint = replyFingerprint(parsed.reply);
         queueMicrotask(() => {
           if (terminalReply !== undefined) finish(terminalReply);
         });
@@ -937,12 +947,7 @@ export function registerSubagentLifecycleObservation(
   });
   const removeComplete = events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (value) => {
     const record = lifecycleRecord(value, "complete", options.sessionId);
-    if (
-      record === undefined ||
-      options.isRelevantRun?.(record.runId) === false
-    ) {
-      return;
-    }
+    if (record === undefined) return;
     const previous = completedRuns.get(record.runId);
     if (previous !== undefined) {
       if (!sameLifecycleRecord(previous, record)) {
@@ -950,6 +955,7 @@ export function registerSubagentLifecycleObservation(
       }
       return;
     }
+    if (options.isRelevantRun?.(record.runId) === false) return;
     completedRuns.set(record.runId, record);
     options.onComplete?.(record);
   });

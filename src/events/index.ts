@@ -69,6 +69,13 @@ export function registerSubagentLifecycle(
   };
   const isCoordinatorRun = (runId: string): boolean =>
     isPlanningRun(runId) || isImplementationRun(runId);
+  const isKnownCoordinatorRun = (runId: string): boolean => {
+    const state = registry.getState();
+    return (
+      state !== undefined &&
+      (state.planningRunId === runId || state.implementationRunId === runId)
+    );
+  };
   const resultDelivery = registerResultDeliveryObservation(pi.events, {
     sessionId,
     isRelevantRun: isCoordinatorRun,
@@ -85,10 +92,13 @@ export function registerSubagentLifecycle(
   });
   const lifecycle = registerSubagentLifecycleObservation(pi.events, {
     sessionId,
-    isRelevantRun: isPlanningRun,
+    isRelevantRun: isCoordinatorRun,
     onComplete: (record) => {
       const state = registry.getState();
-      if (state?.planningRunId !== record.runId) return;
+      if (state === undefined) return;
+      const planningRun = state.planningRunId === record.runId;
+      const implementationRun = state.implementationRunId === record.runId;
+      if (!planningRun && !implementationRun) return;
       if (
         record.success === false ||
         PLANNING_FAILURE_STATES.has(record.state ?? "")
@@ -97,7 +107,7 @@ export function registerSubagentLifecycle(
       }
     },
     onConflict: (runId) => {
-      if (isPlanningRun(runId)) {
+      if (isKnownCoordinatorRun(runId)) {
         registry.transition("FAILED");
       }
     },
@@ -144,13 +154,16 @@ export function registerSessionLifecycle(
   launchFreshImplementationCoordinator?: (
     state: RootWorkflowState,
   ) => Promise<ImplementationCoordinatorLaunchResult>,
+  stopImplementationCoordinator?: (runId: string) => Promise<unknown>,
 ): void {
   let removeLifecycleObservation: (() => void) | undefined;
+  let shutdownPromise: Promise<void> | undefined;
   let humanDecisionBridge: HumanDecisionRootBridge | undefined;
   let planReviewBridge: PlanReviewRootBridge | undefined;
   let codeReviewBridge: CodeReviewRootBridge | undefined;
 
   pi.on("session_start", (_event, ctx) => {
+    shutdownPromise = undefined;
     removeLifecycleObservation?.();
     removeLifecycleObservation = undefined;
     humanDecisionBridge?.dispose();
@@ -182,7 +195,8 @@ export function registerSessionLifecycle(
           ? {}
           : {
               stopPlanningCoordinator,
-              stopImplementationCoordinator: stopPlanningCoordinator,
+              stopImplementationCoordinator:
+                stopImplementationCoordinator ?? stopPlanningCoordinator,
             }),
       });
       codeReviewBridge = registerCodeReviewRootBridge({
@@ -206,35 +220,54 @@ export function registerSessionLifecycle(
     registry.restore(ctx.sessionManager.getBranch());
   });
 
-  pi.on("session_shutdown", async () => {
-    const current = registry.getState();
-    const planningRunId =
-      registry.hasActiveWorkflow() && current?.planningStatus === "RUNNING"
-        ? current.planningRunId
-        : undefined;
-    humanDecisionBridge?.dispose();
-    humanDecisionBridge = undefined;
-    planReviewBridge?.dispose();
-    planReviewBridge = undefined;
-    codeReviewBridge?.dispose();
-    codeReviewBridge = undefined;
-    if (planningRunId !== undefined && stopPlanningCoordinator !== undefined) {
-      try {
-        await stopPlanningCoordinator(planningRunId);
-      } catch {
-        // Shutdown remains fail-closed when the public stop request fails.
-      }
-    }
+  pi.on("session_shutdown", () => {
+    if (shutdownPromise !== undefined) return shutdownPromise;
+    shutdownPromise = (async () => {
+      const current = registry.getState();
+      const planningRunId =
+        registry.hasActiveWorkflow() &&
+        (current?.phase === "PLANNING" ||
+          (current?.phase === "PLAN_REVIEW" &&
+            current.planningStatus === "RUNNING"))
+          ? current.planningRunId
+          : undefined;
+      const implementationRunId =
+        registry.hasActiveWorkflow() &&
+        (current?.phase === "IMPLEMENTING" || current?.phase === "CODE_REVIEW")
+          ? current.implementationRunId
+          : undefined;
 
-    try {
-      registry.shutdown();
-    } finally {
-      try {
-        removeLifecycleObservation?.();
-      } finally {
-        removeLifecycleObservation = undefined;
-        cleanup?.();
+      humanDecisionBridge?.dispose();
+      humanDecisionBridge = undefined;
+      planReviewBridge?.dispose();
+      planReviewBridge = undefined;
+      codeReviewBridge?.dispose();
+      codeReviewBridge = undefined;
+
+      const stopCoordinator =
+        implementationRunId === undefined
+          ? stopPlanningCoordinator
+          : (stopImplementationCoordinator ?? stopPlanningCoordinator);
+      const runId = implementationRunId ?? planningRunId;
+      if (runId !== undefined && stopCoordinator !== undefined) {
+        try {
+          await stopCoordinator(runId);
+        } catch {
+          // Shutdown remains fail-closed when the public stop request fails.
+        }
       }
-    }
+
+      try {
+        registry.shutdown();
+      } finally {
+        try {
+          removeLifecycleObservation?.();
+        } finally {
+          removeLifecycleObservation = undefined;
+          cleanup?.();
+        }
+      }
+    })();
+    return shutdownPromise;
   });
 }

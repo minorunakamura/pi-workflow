@@ -501,6 +501,10 @@ it("does not re-open duplicate requests and records same-ID conflicts", () => {
     },
   });
 
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
   expect(askCount).toBe(1);
   expect(intercom.rootPublishes).toHaveLength(0);
   expect(root.getConflictRecords()).toEqual([

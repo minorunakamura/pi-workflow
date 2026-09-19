@@ -755,10 +755,12 @@ function updateStateForStep3Transition(
     if (next.implementationStatus === "RUNNING") {
       next.implementationStatus = "FAILED";
     }
+    delete next.pendingInteraction;
     next.finalStatus = "FAILED";
     return next;
   }
 
+  delete next.pendingInteraction;
   if (next.planningStatus === "RUNNING") {
     next.planningStatus = "CANCELLED";
   }
