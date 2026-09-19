@@ -69,7 +69,12 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   expect(source).not.toContain(
     "normalized bounded location/evidence/reason/recommended action",
   );
-  expect(source).toContain("do not perform Final Diff Inspection");
+  expect(source).toContain("Coordinator-owned Final Diff Inspection");
+  expect(source).toContain("approved requirements are implemented");
+  expect(source).toContain("unexpected path");
+  expect(source).toContain("working-tree evidence");
+  expect(source).toContain("do not perform Plannotator Code Review");
+  expect(source).not.toContain("do not perform Final Diff Inspection");
   expect(source).not.toContain('skill: ["ponytail"]');
   expect(source).toContain("Do not merge, push, release, or deploy");
 
