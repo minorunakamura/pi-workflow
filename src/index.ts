@@ -6,6 +6,7 @@ import {
   launchFreshImplementationCoordinator,
   resolveRepositoryGatesFromPackageScripts,
 } from "./runtime/implementation-launch.ts";
+import { createManagedCodeReviewArtifactWriter } from "./runtime/code-review-bridge.ts";
 import { createRootWorkflowRegistry } from "./runtime/root-lifecycle.ts";
 import { SubagentRpcAdapter } from "./runtime/subagents-rpc.ts";
 
@@ -54,5 +55,11 @@ export default function extension(pi: RootExtensionAPI): void {
       if (!launch.started) throw new Error(launch.reason);
       return launch;
     },
+    (events, sessionId) =>
+      createManagedCodeReviewArtifactWriter({
+        rpc,
+        events,
+        sessionId,
+      }),
   );
 }

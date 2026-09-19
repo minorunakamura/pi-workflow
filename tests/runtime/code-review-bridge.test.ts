@@ -1,8 +1,12 @@
-import { expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
 
 import {
   REQUIRED_PLAN_HEADINGS,
   createPlanningHandoff,
+  createRequestId,
   createRunId,
   createWorkflowId,
   hashPlan,
@@ -15,18 +19,28 @@ import {
   PLANNOTATOR_REQUEST_EVENT,
   CodeReviewChildBridge,
   CodeReviewRootBridge,
+  createManagedCodeReviewArtifactWriter,
+  type CodeReviewArtifactWriter,
   type CodeReviewEventBus,
   type IntercomExtensionChannel,
   type IntercomExtensionRegistration,
 } from "../../src/runtime/code-review-bridge.ts";
 import { registerHumanDecisionRootBridge } from "../../src/runtime/human-decision-bridge.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/runtime/subagents-rpc.ts";
 
 const WORKFLOW_UUID = "00000000-0000-4000-8000-000000000021";
 const ROOT_SESSION_ID = "root-session";
 const CHILD_SESSION_ID = "child-session";
 const ROOT_OWNER = { sessionId: ROOT_SESSION_ID, epoch: "root-epoch" };
 const PLAN = `${REQUIRED_PLAN_HEADINGS.join("\n")}\n\nBounded plan.\n`;
+const temporaryRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of temporaryRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 class FakeEventBus implements CodeReviewEventBus {
   private readonly handlers = new Map<string, Set<(value: unknown) => void>>();
@@ -173,11 +187,12 @@ function planningResult(workflowId: WorkflowId) {
   };
 }
 
-function implementationRegistry(): {
+function implementationRegistry(existingRegistry?: RootWorkflowRegistry): {
   registry: RootWorkflowRegistry;
   workflowId: WorkflowId;
 } {
-  const registry = new RootWorkflowRegistry(() => undefined);
+  const registry =
+    existingRegistry ?? new RootWorkflowRegistry(() => undefined);
   const workflowId = createWorkflowId(WORKFLOW_UUID);
   expect(registry.start(workflowId, "feature").started).toBe(true);
   expect(
@@ -221,6 +236,104 @@ async function settle(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+function fakeArtifactWriter() {
+  return {
+    write: ({
+      kind,
+      requestId,
+    }: {
+      kind: "feedback" | "annotations";
+      requestId: string;
+    }) => ({
+      kind: "managed" as const,
+      path: `artifacts/${requestId}-${kind}.txt`,
+      mediaType:
+        kind === "annotations"
+          ? ("application/json" as const)
+          : ("text/plain" as const),
+    }),
+  };
+}
+
+it("persists through the public managed workflow output seam", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-code-review-artifact-"));
+  temporaryRoots.push(root);
+  const outputPath = join(root, "managed-output.txt");
+  writeFileSync(outputPath, "Please fix this exact feedback.\n");
+  const events = new FakeEventBus();
+  const rpcCalls: Array<{ method: string; params?: Record<string, unknown> }> =
+    [];
+  const rpc = {
+    request: async (method: string, params?: Record<string, unknown>) => {
+      rpcCalls.push(params === undefined ? { method } : { method, params });
+      setTimeout(() => {
+        events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+          sessionId: ROOT_SESSION_ID,
+          runId: "managed-artifact-run",
+          state: "complete",
+          success: true,
+          artifactPaths: { outputPath },
+        });
+      }, 0);
+      return {
+        version: 1 as const,
+        requestId: "00000000-0000-4000-8000-000000000023",
+        success: true as const,
+        data: { runId: "managed-artifact-run" },
+      };
+    },
+    stop: async () => ({
+      version: 1 as const,
+      requestId: "00000000-0000-4000-8000-000000000024",
+      success: true as const,
+      data: {},
+    }),
+  };
+  const writer = createManagedCodeReviewArtifactWriter({
+    rpc,
+    events,
+    sessionId: ROOT_SESSION_ID,
+    timeoutMs: 1_000,
+  });
+
+  const reference = await writer.write({
+    kind: "feedback",
+    workflowId: createWorkflowId(WORKFLOW_UUID),
+    requestId: createRequestId("00000000-0000-4000-8000-000000000025"),
+    cwd: root,
+    content: "Please fix this exact feedback.",
+  });
+
+  expect(reference).toEqual({
+    kind: "managed",
+    path: outputPath,
+    mediaType: "text/plain",
+  });
+  expect(rpcCalls[0]).toMatchObject({
+    method: "spawn",
+    params: {
+      context: "fresh",
+      async: true,
+      outputMode: "file-only",
+      artifacts: true,
+      workflowScript: 'return "Please fix this exact feedback.";',
+    },
+  });
+
+  const annotationReference = await writer.write({
+    kind: "annotations",
+    workflowId: createWorkflowId(WORKFLOW_UUID),
+    requestId: createRequestId("00000000-0000-4000-8000-000000000026"),
+    cwd: root,
+    content: '[{"path":"src/example.ts","line":4}]',
+  });
+  expect(annotationReference).toEqual({
+    kind: "managed",
+    path: outputPath,
+    mediaType: "application/json",
+  });
+});
 
 it("uses direct code-review, correlates the response, and keeps plan mode out", async () => {
   const rootEvents = new FakeEventBus();
@@ -279,6 +392,86 @@ it("uses direct code-review, correlates the response, and keeps plan mode out", 
   human.dispose();
 });
 
+it("fails closed when non-empty review evidence cannot become a managed ref", async () => {
+  const cases: Array<{
+    result: {
+      approved: boolean;
+      feedback?: string;
+      annotations?: readonly unknown[];
+    };
+    writer?: CodeReviewArtifactWriter;
+    expectedStatus: "failed" | "rejected";
+    expectedPhase: "FAILED" | "IMPLEMENTING";
+  }> = [
+    {
+      result: { approved: false, feedback: "missing writer", annotations: [] },
+      expectedStatus: "failed",
+      expectedPhase: "FAILED",
+    },
+    {
+      result: { approved: false, feedback: "writer failure", annotations: [] },
+      writer: { write: () => Promise.reject(new Error("save failed")) },
+      expectedStatus: "failed",
+      expectedPhase: "FAILED",
+    },
+    {
+      result: { approved: false, feedback: "invalid ref", annotations: [] },
+      writer: {
+        write: () => ({
+          kind: "managed" as const,
+          path: "../fabricated.txt",
+          mediaType: "text/plain" as const,
+        }),
+      },
+      expectedStatus: "failed",
+      expectedPhase: "FAILED",
+    },
+    {
+      result: {
+        approved: false,
+        feedback: "",
+        annotations: [{ path: "src/example.ts", line: 4 }],
+      },
+      expectedStatus: "failed",
+      expectedPhase: "FAILED",
+    },
+    {
+      result: { approved: false, feedback: "", annotations: [] },
+      expectedStatus: "rejected",
+      expectedPhase: "IMPLEMENTING",
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const rootEvents = new FakeEventBus();
+    const childEvents = new FakeEventBus();
+    connectIntercom(rootEvents, childEvents);
+    const { registry, workflowId } = implementationRegistry();
+    rootEvents.on(PLANNOTATOR_REQUEST_EVENT, (value) => {
+      if (!isRecord(value) || typeof value.respond !== "function") return;
+      value.respond({ status: "handled", result: testCase.result });
+    });
+    const root = new CodeReviewRootBridge({
+      events: rootEvents,
+      registry,
+      sessionId: ROOT_SESSION_ID,
+      ...(testCase.writer === undefined
+        ? {}
+        : { artifactWriter: testCase.writer }),
+      timeoutMs: 1_000,
+    });
+    const child = new CodeReviewChildBridge(childEvents, CHILD_SESSION_ID);
+    child.register();
+
+    const response = await child.request({ workflowId, cwd: "/repo" });
+    expect(response.status).toBe(testCase.expectedStatus);
+    expect(registry.getState()?.phase).toBe(testCase.expectedPhase);
+
+    child.dispose();
+    root.dispose();
+  }
+});
+
 it("allows one same-Coordinator rejection cycle and fails the second rejection", async () => {
   const rootEvents = new FakeEventBus();
   const childEvents = new FakeEventBus();
@@ -301,6 +494,7 @@ it("allows one same-Coordinator rejection cycle and fails the second rejection",
     events: rootEvents,
     registry,
     sessionId: ROOT_SESSION_ID,
+    artifactWriter: fakeArtifactWriter(),
     timeoutMs: 1_000,
   });
   const child = new CodeReviewChildBridge(childEvents, CHILD_SESSION_ID);
