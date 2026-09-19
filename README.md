@@ -2,7 +2,7 @@
 
 Pi packageとして配布する、Root-owned workflowの実装です。
 
-現在はImplementation Specification Section 42のStep 19（Ready-for-Merge evaluator）までを実装しています。fresh read-only Reviewer、Coordinator-ownedのFinding normalization、最大1回のbounded Fix Wave、affected Gate再実行、fresh Focused Re-review、Coordinator-ownedのread-only Final Diff Inspection、Root-ownedのdirect Plannotator Code Review bridge、pure fail-closed Ready-for-Merge evaluatorを提供します。Human DecisionはRoot TUIで、Plan ReviewとCode ReviewはRoot-ownedのPlannotator bridgeで利用します。
+現在はImplementation Specification Section 42のStep 20（Cancellation / failure / idempotency）までを実装しています。fresh read-only Reviewer、Coordinator-ownedのFinding normalization、最大1回のbounded Fix Wave、affected Gate再実行、fresh Focused Re-review、Coordinator-ownedのread-only Final Diff Inspection、Root-ownedのdirect Plannotator Code Review bridge、pure fail-closed Ready-for-Merge evaluatorに加え、固定timeoutのfail-closed処理、reload時のstale failure、coordinator停止、duplicate/conflict/late eventのterminal guardを提供します。Human DecisionはRoot TUIで、Plan ReviewとCode ReviewはRoot-ownedのPlannotator bridgeで利用します。
 
 ## 開発
 

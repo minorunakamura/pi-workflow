@@ -54,5 +54,6 @@ export default function extension(pi: RootExtensionAPI): void {
       if (!launch.started) throw new Error(launch.reason);
       return launch;
     },
+    (runId) => rpc.stop(runId),
   );
 }

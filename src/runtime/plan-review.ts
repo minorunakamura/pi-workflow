@@ -552,7 +552,9 @@ export class PlanReviewRootBridge {
     }
     const fingerprint = reviewFingerprint(parsed.value);
     if (pending.settling) {
-      if (pending.settlingFingerprint !== fingerprint) this.failWorkflow();
+      if (pending.settlingFingerprint !== fingerprint) {
+        this.failPending(pending, "Conflicting Plan Review results");
+      }
       return;
     }
     pending.settling = true;
@@ -730,7 +732,9 @@ export class PlanReviewRootBridge {
     }
     const fingerprint = reviewFingerprint(result.value);
     if (pending.settling) {
-      if (pending.settlingFingerprint !== fingerprint) this.failWorkflow();
+      if (pending.settlingFingerprint !== fingerprint) {
+        this.failPending(pending, "Conflicting Plan Review results");
+      }
       return;
     }
     pending.settling = true;

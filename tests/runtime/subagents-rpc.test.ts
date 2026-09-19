@@ -530,6 +530,28 @@ it("rejects conflicting synchronous replies while ignoring a duplicate after set
   adapter.dispose();
 });
 
+it("rejects duplicate successful replies with conflicting payloads", async () => {
+  const events = new FakeEventBus();
+  const adapter = new SubagentRpcAdapter(events);
+  events.emit(SUBAGENT_RPC_READY_EVENT, ready);
+  events.on(SUBAGENT_RPC_REQUEST_EVENT, (raw) => {
+    const request = requestFrom(raw);
+    events.emit(
+      subagentRpcReplyEvent(request.requestId),
+      successReply(request, { value: "first" }),
+    );
+    events.emit(
+      subagentRpcReplyEvent(request.requestId),
+      successReply(request, { value: "second" }),
+    );
+  });
+
+  await expect(adapter.request("ping")).rejects.toMatchObject({
+    code: "RPC_CONFLICTING_REPLY",
+  });
+  adapter.dispose();
+});
+
 it("observes compact lifecycle identities and ignores duplicate or foreign completion events", () => {
   const events = new FakeEventBus();
   const started: unknown[] = [];
