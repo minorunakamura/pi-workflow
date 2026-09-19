@@ -42,7 +42,7 @@ it("keeps the Final Diff Inspection tool out of the Root entrypoint", () => {
   expect(source).not.toContain("final-diff-inspection.ts");
 });
 
-it("wires production Code Review to managed artifacts", () => {
+it("wires production Code Review as a transient Root bridge", () => {
   const source = readFileSync(
     new URL("../src/index.ts", import.meta.url),
     "utf8",
@@ -52,11 +52,10 @@ it("wires production Code Review to managed artifacts", () => {
     "utf8",
   );
 
-  expect(source).toContain("createManagedCodeReviewArtifactWriter");
-  expect(source).toContain("createManagedCodeReviewArtifactWriter");
-  expect(lifecycle).toContain("artifactWriter");
-  expect(lifecycle).toContain("createCodeReviewArtifactWriter?.");
-  expect(lifecycle).toContain("events,\n        sessionId");
+  expect(source).not.toContain("createManagedCodeReviewArtifactWriter");
+  expect(lifecycle).toContain("registerCodeReviewRootBridge");
+  expect(lifecycle).toContain("intercom: humanDecisionBridge");
+  expect(lifecycle).not.toContain("artifactWriter");
 });
 
 it("wires production Implementation launch to repository Gate resolution", () => {
