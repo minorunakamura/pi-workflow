@@ -1,3 +1,4 @@
+export * from "./final-diff-inspection.ts";
 export * from "./findings.ts";
 export * from "./gates.ts";
 export * from "./implementation.ts";
