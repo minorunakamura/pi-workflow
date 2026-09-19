@@ -2,24 +2,18 @@ import { expect, it, vi } from "vitest";
 
 import {
   evaluateFinalDiffInspection,
+  validateFinalDiffInspectionResult,
   type FinalDiffInspectionInput,
 } from "../../src/core/index.ts";
 import {
-  acceptFinalDiffInspection,
   default as finalDiffInspectionChildExtension,
   evaluateFinalDiffInspectionWithEvidence,
   FINAL_DIFF_INSPECTION_GIT_OPERATIONS,
   inspectRepositoryDiff,
   registerFinalDiffInspectionChildTool,
-  validateFinalDiffInspectionRun,
+  validateFinalDiffInspectionToolDetails,
   type FinalDiffInspectionContext,
 } from "../../src/runtime/final-diff-inspection.ts";
-
-const artifactRef = {
-  kind: "managed" as const,
-  path: "/managed/final-diff-inspection.md",
-  mediaType: "text/markdown" as const,
-};
 
 const context: FinalDiffInspectionContext = {
   requirementsSatisfied: true,
@@ -38,11 +32,6 @@ const input: FinalDiffInspectionInput = {
     status: "known",
     trackedPaths: ["src/feature.ts"],
     untrackedPaths: [],
-    evidenceRef: {
-      kind: "managed",
-      path: "/managed/working-tree.txt",
-      mediaType: "text/plain",
-    },
   },
 };
 
@@ -120,51 +109,48 @@ it("keeps command failure as unknown evidence and never passes the checklist", a
   const evaluated = evaluateFinalDiffInspectionWithEvidence(context, details);
   expect(evaluated.valid).toBe(true);
   if (!evaluated.valid) return;
-  expect(evaluated.value.result.status).toBe("UNKNOWN");
-  expect(evaluated.value.result.passed).toBe(false);
+  expect(evaluated.value.status).toBe("UNKNOWN");
+  expect(evaluated.value.passed).toBe(false);
 });
 
-it("connects tool evidence and its managed artifact to the Final Diff Inspection evaluator", async () => {
-  const details = await inspectRepositoryDiff(fakeExec([]), "/repo");
-  const evaluated = evaluateFinalDiffInspectionWithEvidence(context, details);
+it("maps malformed evidence to an UNKNOWN structured result", () => {
+  const evaluated = evaluateFinalDiffInspectionWithEvidence(context, {
+    evidence: {
+      status: "known",
+      changedPaths: ["src/feature.ts"],
+      trackedPaths: ["src/feature.ts"],
+      untrackedPaths: [],
+      stat: "",
+      commands: [],
+    },
+  });
 
   expect(evaluated.valid).toBe(true);
   if (!evaluated.valid) return;
-  expect(evaluated.value.result.status).toBe("PASS");
-  expect(evaluated.value.artifactRef).toEqual(details.artifactRef);
+  expect(evaluated.value.status).toBe("UNKNOWN");
+  expect(evaluated.value.passed).toBe(false);
 });
 
-it("accepts only a structured Coordinator result with a managed inspection artifact", () => {
-  const result = evaluateFinalDiffInspection(input);
-  const accepted = acceptFinalDiffInspection(result, artifactRef);
+it("connects valid tool evidence to the eight-item Final Diff Inspection result", async () => {
+  const details = await inspectRepositoryDiff(fakeExec([]), "/repo");
+  const evaluated = evaluateFinalDiffInspectionWithEvidence(context, details);
 
-  expect(accepted.valid).toBe(true);
-  if (!accepted.valid) return;
-  expect(accepted.value).toEqual({ result, artifactRef });
-  expect(validateFinalDiffInspectionRun(accepted.value).valid).toBe(true);
+  expect(details).not.toHaveProperty("artifactRef");
+  expect(JSON.stringify(details)).not.toContain("final-diff-inspection.md");
+  expect(validateFinalDiffInspectionToolDetails(details).valid).toBe(true);
+  expect(evaluated.valid).toBe(true);
+  if (!evaluated.valid) return;
+  expect(evaluated.value.status).toBe("PASS");
+  expect(evaluated.value.passed).toBe(true);
+  expect(validateFinalDiffInspectionResult(evaluated.value).valid).toBe(true);
+  expect(evaluated.value.checks).toHaveLength(8);
+  expect(evaluated.value.checks.at(-1)).not.toHaveProperty("evidenceRef");
 });
 
-it("rejects a missing or non-markdown inspection artifact", () => {
+it("allows a valid structured result without a physical inspection artifact", () => {
   const result = evaluateFinalDiffInspection(input);
 
-  expect(
-    validateFinalDiffInspectionRun({ result, artifactRef: undefined }).valid,
-  ).toBe(false);
-  expect(
-    validateFinalDiffInspectionRun({
-      result,
-      artifactRef: { ...artifactRef, mediaType: "text/plain" },
-    }).valid,
-  ).toBe(false);
-});
-
-it("rejects an invalid checklist result instead of trusting Coordinator prose", () => {
-  const result = evaluateFinalDiffInspection(input);
-
-  expect(
-    validateFinalDiffInspectionRun({
-      result: { ...result, passed: true, status: "FAIL" },
-      artifactRef,
-    }).valid,
-  ).toBe(false);
+  expect(result.status).toBe("PASS");
+  expect(result).not.toHaveProperty("artifactRef");
+  expect(validateFinalDiffInspectionResult(result).valid).toBe(true);
 });

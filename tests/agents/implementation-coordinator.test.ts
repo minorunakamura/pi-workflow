@@ -77,6 +77,16 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   expect(source).toContain("approved requirements are implemented");
   expect(source).toContain("unexpected path");
   expect(source).toContain("working-tree evidence");
+  expect(source).toContain(
+    "returns only bounded evidence for the fixed read-only Git operations",
+  );
+  expect(source).toContain(
+    "retain only the bounded structured `FinalDiffInspectionResult`/evidence",
+  );
+  expect(source).toContain(
+    "do not create a dangling or fabricated `ArtifactRef`",
+  );
+  expect(source).not.toContain("plus a managed artifact reference");
   expect(source).toContain("Call `pi_workflow_inspect_diff` exactly once");
   expect(source).toContain("return to the existing Step 16 bounded Fix Wave");
   expect(source).toContain(
