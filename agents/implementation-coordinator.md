@@ -1,7 +1,7 @@
 ---
 name: implementation-coordinator
 package: pi-workflow
-description: Owns the fresh bounded Implementation phase after Root approval.
+description: Owns bounded implementation, trusted gates, review finding disposition, fixes, and readiness.
 tools: read, grep, find, ls, subagent, subagent_supervisor, pi_workflow_code_review, pi_workflow_inspect_diff
 allowNestedSubagents: true
 maxSubagentDepth: 2
@@ -46,4 +46,6 @@ If Final Diff Inspection finds an unexpected file, scope drift, or unresolved ac
 
 After a passing Final Diff Inspection, call `pi_workflow_code_review` exactly once for the current review pass. Use the direct Root-owned Plannotator `code-review` action; do not call `plan-mode status`, `plan-mode enter`, `plan-mode toggle`, or pass `--plan`. The tool request must identify the workflow and current Coordinator run, and it must use the current local repository. Do not send raw diff, raw reports, or full logs through the tool; the Root bridge owns the Plannotator transport.
 
-The code-review response must return to this same Implementation Coordinator run. Treat only `status: approved` with `approved: true` as approval; `rejected` is bounded feedback for this same Coordinator, not approval. A first rejection may start exactly one approved-scope change cycle without a new architecture, product, or security decision. Re-run the required verification, Finding disposition, any required fresh Focused Re-review, Final Diff Inspection, and direct code review within that same cycle. Do not spawn a new Implementation Coordinator, resume Planning, widen scope, or invent a decision. A second rejection, unsafe or scope-out change, missing response, unavailable/timeout result, or new decision requirement is `FAILED`; never retry automatically. At this Step 18 boundary, do not perform Ready-for-Merge evaluation. Do not merge, push, release, or deploy.
+The code-review response must return to this same Implementation Coordinator run. Treat only `status: approved` with `approved: true` as approval; `rejected` is bounded feedback for this same Coordinator, not approval. A first rejection may start exactly one approved-scope change cycle without a new architecture, product, or security decision. Re-run the required verification, Finding disposition, any required fresh Focused Re-review, Final Diff Inspection, and direct code review within that same cycle. Do not spawn a new Implementation Coordinator, resume Planning, widen scope, or invent a decision. A second rejection, unsafe or scope-out change, missing response, unavailable/timeout result, or new decision requirement is `FAILED`; never retry automatically.
+
+After an approved code review, perform the pure `evaluateReadyForMerge` check. It must validate the approved plan identity, implementation completion, every required Gate, every accepted BLOCKER/FIX_NOW Finding, the Fix Wave/fresh Focused Re-review condition, Final Diff Inspection, and `status: approved` with `approved: true` from Code Review. An optional `SKIPPED` Gate alone is not a blocker; a required `FAIL`, `UNKNOWN`, or `SKIPPED` Gate is a blocker. Return all seven structured checks and blocker reasons, not only a boolean. Emit `status: "COMPLETED"` only when `readyForMerge.ready === true`; otherwise fail closed with `status: "FAILED"` and bounded `remainingBlockers`. Do not merge, push, release, or deploy.

@@ -13,8 +13,15 @@ import {
   validateRequiredGatesPreserved,
   type TrustedGate,
 } from "./gates.ts";
-import { hasOnlyKeys, isRecord, type ValidationResult } from "./validation.ts";
-import type { ArtifactRef } from "./workflow.ts";
+import {
+  hasOnlyKeys,
+  invalidResult,
+  isBoundedString,
+  isRecord,
+  validResult,
+  type ValidationResult,
+} from "./validation.ts";
+import { isValidArtifactRef, type ArtifactRef } from "./workflow.ts";
 
 export type ReadinessCheckStatus = "PASS" | "FAIL" | "MISSING" | "UNKNOWN";
 
@@ -26,6 +33,16 @@ export type ReadinessCheckId =
   | "focused-re-review"
   | "final-diff-inspection"
   | "code-review";
+
+export const READINESS_CHECK_IDS: readonly ReadinessCheckId[] = [
+  "approved-plan-identity",
+  "implementation-complete",
+  "required-gates",
+  "accepted-findings",
+  "focused-re-review",
+  "final-diff-inspection",
+  "code-review",
+];
 
 export interface ReadinessCheck {
   id: ReadinessCheckId;
@@ -88,6 +105,36 @@ function check(
   return { id, status, reason };
 }
 
+function isReadinessCheckStatus(value: unknown): value is ReadinessCheckStatus {
+  return (
+    value === "PASS" ||
+    value === "FAIL" ||
+    value === "MISSING" ||
+    value === "UNKNOWN"
+  );
+}
+
+function isReadinessCheckId(value: unknown): value is ReadinessCheckId {
+  return READINESS_CHECK_IDS.some((id) => id === value);
+}
+
+function validateEvidenceRefs(
+  value: unknown,
+): ValidationResult<ArtifactRef[] | undefined> {
+  if (value === undefined) return validResult(undefined);
+  if (!Array.isArray(value) || value.length > 32) {
+    return invalidResult("Readiness evidence references are invalid");
+  }
+  const refs: ArtifactRef[] = [];
+  for (const ref of value) {
+    if (!isValidArtifactRef(ref)) {
+      return invalidResult("Readiness evidence references are invalid");
+    }
+    refs.push({ kind: ref.kind, path: ref.path, mediaType: ref.mediaType });
+  }
+  return validResult(refs);
+}
+
 function gateCheckStatus(
   evaluation: ReturnType<typeof evaluateTrustedGates>,
 ): ReadinessCheckStatus {
@@ -99,7 +146,14 @@ function gateCheckStatus(
   ) {
     return "MISSING";
   }
-  if (evaluation.blockers.some(({ code }) => code === "INVALID_GATE")) {
+  if (
+    evaluation.blockers.some(
+      ({ code }) =>
+        code === "INVALID_GATE" ||
+        code === "INVALID_GATE_INPUT" ||
+        code === "REQUIRED_GATE_UNKNOWN",
+    )
+  ) {
     return "UNKNOWN";
   }
   return "FAIL";
@@ -221,13 +275,19 @@ export function evaluateReadyForMerge(
   );
 
   record(
-    input.implementationComplete
-      ? check("implementation-complete", "PASS", "implementation is complete")
-      : check(
+    typeof input.implementationComplete !== "boolean"
+      ? check(
           "implementation-complete",
           "FAIL",
-          "implementation is incomplete",
-        ),
+          "implementation completion signal is invalid",
+        )
+      : input.implementationComplete
+        ? check("implementation-complete", "PASS", "implementation is complete")
+        : check(
+            "implementation-complete",
+            "FAIL",
+            "implementation is incomplete",
+          ),
   );
 
   const approvedGateBaseline =
@@ -349,4 +409,94 @@ export function evaluateReadyForMerge(
     checks,
     blockers,
   };
+}
+
+export function validateReadyForMergeResult(
+  value: unknown,
+): ValidationResult<ReadyForMergeResult> {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["ready", "status", "checks", "blockers"]) ||
+    typeof value.ready !== "boolean" ||
+    (value.status !== "READY_FOR_MERGE" && value.status !== "BLOCKED") ||
+    !Array.isArray(value.checks) ||
+    !Array.isArray(value.blockers) ||
+    value.checks.length !== READINESS_CHECK_IDS.length
+  ) {
+    return invalidResult("Ready-for-Merge result has an invalid shape");
+  }
+
+  const checks: ReadinessCheck[] = [];
+  const seenChecks = new Set<ReadinessCheckId>();
+  for (const candidate of value.checks) {
+    if (
+      !isRecord(candidate) ||
+      !hasOnlyKeys(candidate, ["id", "status", "reason", "evidenceRefs"]) ||
+      !isReadinessCheckId(candidate.id) ||
+      seenChecks.has(candidate.id) ||
+      !isReadinessCheckStatus(candidate.status) ||
+      !isBoundedString(candidate.reason, 4096, true)
+    ) {
+      return invalidResult("Ready-for-Merge check is invalid");
+    }
+    const evidenceRefs = validateEvidenceRefs(candidate.evidenceRefs);
+    if (!evidenceRefs.valid) return evidenceRefs;
+    seenChecks.add(candidate.id);
+    checks.push({
+      id: candidate.id,
+      status: candidate.status,
+      reason: candidate.reason,
+      ...(evidenceRefs.value === undefined
+        ? {}
+        : { evidenceRefs: evidenceRefs.value }),
+    });
+  }
+  if (seenChecks.size !== READINESS_CHECK_IDS.length) {
+    return invalidResult("Ready-for-Merge checks are incomplete");
+  }
+
+  const blockers: ReadyForMergeResult["blockers"] = [];
+  const seenBlockers = new Set<string>();
+  for (const candidate of value.blockers) {
+    if (
+      !isRecord(candidate) ||
+      !hasOnlyKeys(candidate, ["code", "reason", "evidenceRefs"]) ||
+      !isBoundedString(candidate.code, 4096, true) ||
+      !isBoundedString(candidate.reason, 4096, true) ||
+      seenBlockers.has(candidate.code)
+    ) {
+      return invalidResult("Ready-for-Merge blocker is invalid");
+    }
+    const evidenceRefs = validateEvidenceRefs(candidate.evidenceRefs);
+    if (!evidenceRefs.valid) return evidenceRefs;
+    seenBlockers.add(candidate.code);
+    blockers.push({
+      code: candidate.code,
+      reason: candidate.reason,
+      ...(evidenceRefs.value === undefined
+        ? {}
+        : { evidenceRefs: evidenceRefs.value }),
+    });
+  }
+
+  const failingChecks = checks.filter(({ status }) => status !== "PASS");
+  const failingIds = new Set<string>(failingChecks.map(({ id }) => id));
+  if (
+    blockers.length !== failingChecks.length ||
+    blockers.some(({ code }) => !failingIds.has(code)) ||
+    failingChecks.some(({ id }) => !seenBlockers.has(id)) ||
+    value.ready !== (failingChecks.length === 0 && blockers.length === 0) ||
+    value.status !== (value.ready ? "READY_FOR_MERGE" : "BLOCKED")
+  ) {
+    return invalidResult(
+      "Ready-for-Merge result does not match its checks and blockers",
+    );
+  }
+
+  return validResult({
+    ready: value.ready,
+    status: value.status,
+    checks,
+    blockers,
+  });
 }

@@ -3,8 +3,10 @@ import { expect, it } from "vitest";
 import { beforeTreeNavigation } from "../../src/events/index.ts";
 import {
   createInitialWorkflowState,
+  createPlanningHandoff,
   createRunId,
   createWorkflowId,
+  hashPlan,
   transitionPhase,
   transitionRootWorkflowState,
   validateRootWorkflowState,
@@ -192,6 +194,130 @@ it("rejects condition-blind phase advances in Root state mutation", () => {
   ).toBe(false);
 
   expect(transitionPhase("PLAN_REVIEW", "IMPLEMENTING").valid).toBe(true);
+});
+
+it("records Ready-for-Merge only from a completed approved coordinator result", () => {
+  const registry = new RootWorkflowRegistry(() => undefined);
+  const workflowId = createWorkflowId("00000000-0000-4000-8000-000000000003");
+  const plan = "approved plan";
+  const handoff = createPlanningHandoff({
+    workflowId,
+    planContent: plan,
+    tddMode: "not-applicable",
+    testStrategy: { kind: "unit", required: true, summary: "Run tests." },
+    testSeams: ["readiness"],
+    constraints: [],
+    nonGoals: ["Do not merge."],
+    planningRunId: createRunId("planning-run"),
+  });
+  if (!handoff.valid) throw new Error(handoff.errors.join("; "));
+
+  expect(registry.start(workflowId, "feature").started).toBe(true);
+  expect(
+    registry.bindWorkflowRequest({
+      workflowId,
+      workflowType: "feature",
+      request: "complete the workflow",
+      cwd: "/repo",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+  ).toBe(true);
+  expect(registry.setPlanningRunId("planning-run").transitioned).toBe(true);
+  expect(
+    registry.completePlanning("planning-run", {
+      contractVersion: 1,
+      workflowId,
+      status: "COMPLETED",
+      planArtifactRef: {
+        kind: "managed",
+        path: "run/implementation-plan.md",
+        mediaType: "text/markdown",
+      },
+      planningHandoffRef: {
+        kind: "managed",
+        path: "run/planning-handoff.json",
+        mediaType: "application/json",
+      },
+      selectedCapabilities: [
+        { capability: "scout", reason: "Repository evidence." },
+        {
+          capability: "plan-composition",
+          reason: "A Plan Artifact is required.",
+        },
+      ],
+      skippedCapabilities: [
+        { capability: "researcher", reason: "No external fact." },
+        { capability: "grilling", reason: "No ambiguity." },
+        { capability: "human-decision", reason: "No product decision." },
+        { capability: "targeted-rescout", reason: "No changed evidence." },
+        { capability: "oracle", reason: "No challenge needed." },
+      ],
+      remainingBlockers: [],
+    }).transitioned,
+  ).toBe(true);
+  expect(
+    registry.setPlanReviewPending(
+      "00000000-0000-4000-8000-000000000004",
+      "plan-review",
+    ).transitioned,
+  ).toBe(true);
+  expect(
+    registry.recordPlanApproval(
+      {
+        approvedPlanHash: hashPlan(plan).value,
+        reviewId: "plan-review",
+        approval: true,
+      },
+      hashPlan(plan).value,
+      handoff.value,
+    ).transitioned,
+  ).toBe(true);
+  expect(registry.startImplementation("implementation-run").transitioned).toBe(
+    true,
+  );
+  expect(
+    registry.setCodeReviewPending(
+      "00000000-0000-4000-8000-000000000005",
+      "implementation-run",
+    ).transitioned,
+  ).toBe(true);
+  expect(
+    registry.recordCodeReviewResult({
+      requestId: "00000000-0000-4000-8000-000000000005",
+      status: "approved",
+      approved: true,
+    }).transitioned,
+  ).toBe(true);
+
+  const result = registry.completeImplementation("implementation-run", {
+    contractVersion: 1,
+    workflowId,
+    status: "COMPLETED",
+    workerArtifactRefs: [],
+    reviewerArtifactRefs: [],
+    fixArtifactRefs: [],
+    reReviewArtifactRefs: [],
+    readyForMerge: {
+      ready: true,
+      status: "READY_FOR_MERGE",
+      checks: [
+        "approved-plan-identity",
+        "implementation-complete",
+        "required-gates",
+        "accepted-findings",
+        "focused-re-review",
+        "final-diff-inspection",
+        "code-review",
+      ].map((id) => ({ id, status: "PASS", reason: "passed" })),
+      blockers: [],
+    },
+    remainingBlockers: [],
+  });
+
+  expect(result).toMatchObject({
+    transitioned: true,
+    state: { phase: "READY_FOR_MERGE", finalStatus: "READY_FOR_MERGE" },
+  });
 });
 
 it("blocks tree navigation only while a workflow is active", () => {

@@ -11,6 +11,7 @@ import {
   isValidReviewId,
   validateApprovalIdentity,
   validateCodeReviewResultSummary,
+  validateImplementationCoordinatorResult,
   validatePlanningCoordinatorResult,
   isValidRunId,
   isValidWorkflowId,
@@ -469,6 +470,47 @@ export class RootWorkflowRegistry {
       next.finalStatus = "FAILED";
     }
 
+    try {
+      return { transitioned: true, state: this.commit(next) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public completeImplementation(
+    runId: unknown,
+    result: unknown,
+  ): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    const validation = validateImplementationCoordinatorResult(result);
+    if (
+      !validation.valid ||
+      current.phase !== "CODE_REVIEW" ||
+      current.implementationStatus !== "COMPLETED" ||
+      current.implementationRunId !== runId ||
+      validation.value.workflowId !== current.workflowId ||
+      validation.value.status !== "COMPLETED" ||
+      !validation.value.readyForMerge.ready ||
+      current.codeReviewResult === undefined ||
+      current.codeReviewResult.status !== "approved" ||
+      !current.codeReviewResult.approved
+    ) {
+      return {
+        transitioned: false,
+        reason: validation.valid
+          ? "Implementation readiness does not match the Root state"
+          : validation.errors.join("; "),
+      };
+    }
+
+    const next: RootWorkflowState = {
+      ...current,
+      phase: "READY_FOR_MERGE",
+      finalStatus: "READY_FOR_MERGE",
+    };
     try {
       return { transitioned: true, state: this.commit(next) };
     } catch {

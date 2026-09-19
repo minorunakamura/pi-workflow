@@ -1,5 +1,6 @@
 import {
   IMPLEMENTATION_COORDINATOR_CONTRACT_VERSION,
+  IMPLEMENTATION_COORDINATOR_RESULT_SCHEMA,
   PLANNING_COORDINATOR_CONTRACT_VERSION,
   PLANNING_COORDINATOR_RESULT_SCHEMA,
   TIMEOUTS,
@@ -538,6 +539,7 @@ export class SubagentRpcAdapter {
         async: true,
         output: "implementation-summary.md",
         outputMode: "file-only",
+        outputSchema: IMPLEMENTATION_COORDINATOR_RESULT_SCHEMA,
         artifacts: true,
         timeoutMs: TIMEOUTS.coordinatorTimeoutMs,
       },

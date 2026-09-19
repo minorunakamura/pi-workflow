@@ -6,6 +6,7 @@ import {
   createWorkflowId,
   hashPlan,
   validateImplementationCoordinatorInput,
+  validateImplementationCoordinatorResult,
   type ImplementationCoordinatorInput,
 } from "../../src/core/index.ts";
 
@@ -71,6 +72,44 @@ it("rejects Planning context and non-fresh runtime settings", () => {
       runtime: { ...input().runtime, timeoutMs: 1 },
     }).valid,
   ).toBe(false);
+});
+
+it("validates the final Implementation Coordinator readiness contract", () => {
+  const readyForMerge = {
+    ready: true,
+    status: "READY_FOR_MERGE" as const,
+    checks: [
+      "approved-plan-identity",
+      "implementation-complete",
+      "required-gates",
+      "accepted-findings",
+      "focused-re-review",
+      "final-diff-inspection",
+      "code-review",
+    ].map((id) => ({ id, status: "PASS" as const, reason: "passed" })),
+    blockers: [],
+  };
+  const result = {
+    contractVersion: 1 as const,
+    workflowId: WORKFLOW_ID,
+    status: "COMPLETED" as const,
+    workerArtifactRefs: [],
+    reviewerArtifactRefs: [],
+    fixArtifactRefs: [],
+    reReviewArtifactRefs: [],
+    readyForMerge,
+    remainingBlockers: [],
+  };
+
+  expect(validateImplementationCoordinatorResult(result)).toMatchObject({
+    valid: true,
+  });
+  expect(
+    validateImplementationCoordinatorResult({
+      ...result,
+      readyForMerge: { ...readyForMerge, ready: false, status: "BLOCKED" },
+    }),
+  ).toMatchObject({ valid: false });
 });
 
 it("requires a true approval identity bound to a plan-shaped pair of refs", () => {

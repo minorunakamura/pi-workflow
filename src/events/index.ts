@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { RootWorkflowRegistry } from "../runtime/root-lifecycle.ts";
 import type { RootWorkflowState } from "../core/index.ts";
+import { registerImplementationCompletionObservation } from "../runtime/implementation-completion.ts";
 import { registerPlanningCompletionObservation } from "../runtime/planning-completion.ts";
 import { registerResultDeliveryObservation } from "../runtime/result-delivery.ts";
 import {
@@ -58,16 +59,26 @@ export function registerSubagentLifecycle(
       state.planningRunId === runId
     );
   };
+  const isImplementationRun = (runId: string): boolean => {
+    const state = registry.getState();
+    return (
+      state !== undefined &&
+      (state.phase === "IMPLEMENTING" || state.phase === "CODE_REVIEW") &&
+      state.implementationRunId === runId
+    );
+  };
+  const isCoordinatorRun = (runId: string): boolean =>
+    isPlanningRun(runId) || isImplementationRun(runId);
   const resultDelivery = registerResultDeliveryObservation(pi.events, {
     sessionId,
-    isRelevantRun: isPlanningRun,
+    isRelevantRun: isCoordinatorRun,
     onAckFailure: (runId) => {
-      if (isPlanningRun(runId)) {
+      if (isCoordinatorRun(runId)) {
         registry.transition("FAILED");
       }
     },
     onUntrustedCompletion: (runId) => {
-      if (isPlanningRun(runId)) {
+      if (isCoordinatorRun(runId)) {
         registry.transition("FAILED");
       }
     },
@@ -104,7 +115,14 @@ export function registerSubagentLifecycle(
           },
         },
   );
+  const implementationCompletion = registerImplementationCompletionObservation(
+    pi.events,
+    registry,
+    sessionId,
+    resultDelivery,
+  );
   return () => {
+    implementationCompletion.dispose();
     planningCompletion.dispose();
     lifecycle();
     resultDelivery.dispose();
