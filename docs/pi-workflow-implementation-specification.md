@@ -2307,6 +2307,8 @@ export interface ImplementationCoordinatorResult {
 }
 ```
 
+`finalInspectionRef`はfinal Coordinator result boundaryで、実在するmanaged artifactに対してだけbindする。Step 17のintermediate stateでは、pathだけを合成したdangling `ArtifactRef`を要求せず、bounded structured Final Diff Inspection result/evidenceをcanonicalに扱う。
+
 Raw Worker/Reviewer report body、full diff、full gate logsはRoot Parent contextへ返さない。Rootにはこのsummaryとartifact refsだけを返す。`status:"COMPLETED"`はfinal code review approved後に`readyForMerge.ready === true`となった場合だけ許可する。未成立のreadinessは`FAILED`またはCoordinator内部のnon-terminal continuationとして扱う。
 
 **Traceability**: `[A:22]` `[E:implementation-composition-results.md, full-workflow-composition-results.md]` `[D]`
@@ -2741,7 +2743,7 @@ git diff --stat
 git diff --check
 ```
 
-必要なsource contentは`read`で読む。full diffはRoot/Parent contextへ送らず、managed artifactに保存する。unexpected file、scope drift、unresolved findingは、未使用の一度だけのFix Waveへ戻すか、使用済みなら`FAILED`にする。Fix Wave #2は起動しない。
+必要なsource contentは`read`で読む。`pi_workflow_inspect_diff`のtool resultはbounded structured evidenceとしてCoordinator内で評価する。full diffはRoot/Parent contextへ送らない。Step 17のintermediate stateで独立したphysical managed artifactや`ArtifactRef`を合成することは要求しない。final Coordinator resultで永続参照が必要な場合だけ、実在するmanaged outputに対して`ArtifactRef`をbindする。unexpected file、scope drift、unresolved findingは、未使用の一度だけのFix Waveへ戻すか、使用済みなら`FAILED`にする。Fix Wave #2は起動しない。
 
 **Traceability**: `[A:28]` `[E:implementation-composition-results.md, full-workflow-composition-results.md]` `[D]`
 
@@ -2994,10 +2996,12 @@ v1はtimeoutを含むすべてのfailureにautomatic retryを行わない。expl
 | gate log | managed gate runner | derived verification evidence | gate evidence ref | final readiness evidence |
 | Fix Worker report/diff | Fix Worker | derived change evidence | artifact ref | re-review/final inspection evidence |
 | Focused Re-review | fresh Reviewer | derived validation | artifact ref | readiness evidence |
-| Final Diff Inspection | Implementation Coordinator | derived final validation | artifact ref | code review/readiness evidence |
+| Final Diff Inspection | Implementation Coordinator | derived final validation | Step 17: bounded structured result/evidence。final Coordinator result: 実在するmanaged artifactにbindした`ArtifactRef`のみ | code review/readiness evidence |
 | Plannotator plan/code feedback | Root bridge | external/derived review evidence | feedback/annotation refs | Plannotator/managed owner; Rootはbounded ref |
 | final coordinator summary | Coordinator | derived compact summary | outputReference | `pi-subagents` result lifecycle |
 | Root lifecycle snapshot | Root Extension | canonical lifecycle/identity state | Pi custom entry | Pi session retention; no raw body |
+
+Step 17のFinal Diff InspectionのStep-internal representationはbounded structured result/evidenceである。`final coordinator summary`とはlogical responsibilityを分離するが、Final Diff Inspection専用のphysical file split/pathを新しいinvariantにはしない。最終result boundaryでartifact referenceが必要な場合のexact binding、physical file split、pathは、Architecture invariantを満たす範囲のImplementation Detailとする。
 
 ### 35.3 Retention boundary
 
@@ -3009,7 +3013,7 @@ v1はtimeoutを含むすべてのfailureにautomatic retryを行わない。expl
 
 ### 35.4 Path/content rule
 
-Artifact pathはreferenceであり、request text内のfilename instructionがruntime bindingをoverrideしない。output bindingは`runs.run` itemの`output`/`outputMode`に設定する。
+Artifact pathはreferenceであり、request text内のfilename instructionがruntime bindingをoverrideしない。`output`/`outputMode:"file-only"`は`runs.run` / `runs.all`等のmanaged child output bindingであり、custom Toolがreturned `details`を自動的にmanaged artifactへ変換するmechanismではない。custom Toolがarbitraryな`ArtifactRef`を返しただけではmanaged artifactの存在を証明しない。artifact referenceは実在するmanaged artifactに対してだけ作成し、Step-internal structured evidenceをmanaged artifactがまだ存在しない段階でfake/dangling `ArtifactRef`へ変換しない。exact artifact path、physical file split、final binding mechanismは、Architecture invariantを満たす範囲のImplementation Detailとする。
 
 **Traceability**: `[A:31,37]` `[S:pi-subagents/docs/tool-reference.md#output-mode-details; observability.md#async-run-artifacts]` `[E:phase-a-smoke-results.md, full-workflow-composition-results.md]` `[D]` `[ID]`
 
@@ -3596,7 +3600,7 @@ Legacy `change-workflow-legacy`はreference-onlyであり、cutover、rollback�
 - **Primary responsibilities / likely area**: runtimeのread-only Final Diff Inspection responsibilityとCoordinator prompt。
 - **Dependencies**: Step 16。
 - **Tests**: unexpected files/scope/non-goal/working tree evidence。
-- **Exit criteria**: Coordinator direct source editなし、inspection artifact exists。
+- **Exit criteria**: Coordinator direct source editなし、structured Final Diff Inspection result/evidence exists。
 
 ### Step 18 — Plannotator Code Review
 
