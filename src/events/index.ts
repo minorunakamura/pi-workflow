@@ -14,8 +14,6 @@ import {
 } from "../runtime/plan-review.ts";
 import {
   registerCodeReviewRootBridge,
-  type CodeReviewArtifactWriter,
-  type CodeReviewEventBus,
   type CodeReviewRootBridge,
 } from "../runtime/code-review-bridge.ts";
 import {
@@ -128,10 +126,6 @@ export function registerSessionLifecycle(
   launchFreshImplementationCoordinator?: (
     state: RootWorkflowState,
   ) => Promise<ImplementationCoordinatorLaunchResult>,
-  createCodeReviewArtifactWriter?: (
-    events: CodeReviewEventBus,
-    sessionId: string,
-  ) => CodeReviewArtifactWriter,
 ): void {
   let removeLifecycleObservation: (() => void) | undefined;
   let humanDecisionBridge: HumanDecisionRootBridge | undefined;
@@ -173,16 +167,11 @@ export function registerSessionLifecycle(
               stopImplementationCoordinator: stopPlanningCoordinator,
             }),
       });
-      const artifactWriter = createCodeReviewArtifactWriter?.(
-        events,
-        sessionId,
-      );
       codeReviewBridge = registerCodeReviewRootBridge({
         events,
         registry,
         sessionId,
         intercom: humanDecisionBridge,
-        ...(artifactWriter === undefined ? {} : { artifactWriter }),
       });
       removeLifecycleObservation = registerSubagentLifecycle(
         { events },

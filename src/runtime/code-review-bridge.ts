@@ -1,6 +1,3 @@
-import { stat } from "node:fs/promises";
-import { resolve as resolvePath } from "node:path";
-
 import type {
   ExtensionAPI,
   ToolDefinition,
@@ -46,12 +43,6 @@ export type {
   IntercomExtensionRegistration,
 } from "./human-decision-bridge.ts";
 import type { RegistryTransitionResult } from "./root-lifecycle.ts";
-import {
-  SUBAGENT_ASYNC_COMPLETE_EVENT,
-  runIdFromSpawnData,
-  type SubagentRpcAdapter,
-  type SubagentRpcReplyEnvelope,
-} from "./subagents-rpc.ts";
 
 export { INTERCOM_EXTENSION_REGISTER_EVENT } from "./human-decision-bridge.ts";
 
@@ -96,6 +87,8 @@ export interface CodeReviewBridgeResponse {
   recipientSessionId: string;
   status: CodeReviewStatus;
   approved: boolean;
+  feedback?: string;
+  annotations?: readonly unknown[];
   feedbackRef?: ArtifactRef;
   annotationsRef?: ArtifactRef;
   error?: { code: string; message: string };
@@ -135,23 +128,6 @@ export interface CodeReviewRegistry {
   transition(to: "FAILED"): RegistryTransitionResult;
 }
 
-export interface CodeReviewArtifactWriter {
-  write(input: {
-    kind: "feedback" | "annotations";
-    workflowId: WorkflowId;
-    requestId: RequestId;
-    cwd: string;
-    content: string;
-  }): Promise<ArtifactRef> | ArtifactRef;
-}
-
-export interface ManagedCodeReviewArtifactWriterOptions {
-  rpc: Pick<SubagentRpcAdapter, "request" | "stop">;
-  events: CodeReviewEventBus;
-  sessionId: string;
-  timeoutMs?: number;
-}
-
 export interface CodeReviewIntercomHost {
   getIntercomChannel(): IntercomExtensionChannel | undefined;
   addIntercomEventHandler(
@@ -164,7 +140,6 @@ export interface CodeReviewRootBridgeOptions {
   registry: CodeReviewRegistry;
   sessionId: string;
   timeoutMs?: number;
-  artifactWriter?: CodeReviewArtifactWriter;
   intercom?: CodeReviewIntercomHost;
 }
 
@@ -409,6 +384,8 @@ export function validateCodeReviewBridgeResponse(
       "recipientSessionId",
       "status",
       "approved",
+      "feedback",
+      "annotations",
       "feedbackRef",
       "annotationsRef",
       "error",
@@ -422,6 +399,8 @@ export function validateCodeReviewBridgeResponse(
     typeof value.approved !== "boolean" ||
     (value.status === "approved" && !value.approved) ||
     (value.status !== "approved" && value.approved) ||
+    ("feedback" in value && !isBoundedString(value.feedback, MAX_TEXT_BYTES)) ||
+    ("annotations" in value && !validateAnnotations(value.annotations).valid) ||
     ("feedbackRef" in value && !isValidArtifactRef(value.feedbackRef)) ||
     ("annotationsRef" in value && !isValidArtifactRef(value.annotationsRef)) ||
     ("error" in value && !validateError(value.error).valid)
@@ -446,6 +425,11 @@ export function validateCodeReviewBridgeResponse(
   ) {
     return invalidResult("Code Review response recipient does not match");
   }
+  const feedback =
+    typeof value.feedback === "string" ? value.feedback : undefined;
+  const annotations = Array.isArray(value.annotations)
+    ? value.annotations
+    : undefined;
   const feedbackRef = isValidArtifactRef(value.feedbackRef)
     ? value.feedbackRef
     : undefined;
@@ -461,6 +445,8 @@ export function validateCodeReviewBridgeResponse(
     recipientSessionId: value.recipientSessionId,
     status: value.status,
     approved: value.approved,
+    ...(feedback === undefined ? {} : { feedback }),
+    ...(annotations === undefined ? {} : { annotations }),
     ...(feedbackRef === undefined ? {} : { feedbackRef }),
     ...(annotationsRef === undefined ? {} : { annotationsRef }),
     ...(error === undefined || !error.valid ? {} : { error: error.value }),
@@ -588,6 +574,25 @@ function boundedMessage(value: unknown, fallback: string): string {
   return isBoundedString(trimmed, MAX_TEXT_BYTES, true) ? trimmed : fallback;
 }
 
+function validateAnnotations(
+  value: unknown,
+): ValidationResult<readonly unknown[]> {
+  if (!Array.isArray(value) || value.length > MAX_ANNOTATIONS) {
+    return invalidResult("Plannotator Code Review annotations are invalid");
+  }
+  try {
+    if (
+      new TextEncoder().encode(JSON.stringify(value)).byteLength >
+      MAX_PAYLOAD_BYTES
+    ) {
+      return invalidResult("Plannotator Code Review annotations are too large");
+    }
+  } catch {
+    return invalidResult("Plannotator Code Review annotations are invalid");
+  }
+  return validResult(value);
+}
+
 function validatePlannotatorResult(
   value: unknown,
 ): ValidationResult<PlannotatorCodeReviewResult> {
@@ -610,24 +615,8 @@ function validatePlannotatorResult(
     return invalidResult("Plannotator Code Review feedback is invalid");
   }
   if (value.annotations !== undefined) {
-    if (
-      !Array.isArray(value.annotations) ||
-      value.annotations.length > MAX_ANNOTATIONS
-    ) {
-      return invalidResult("Plannotator Code Review annotations are invalid");
-    }
-    try {
-      if (
-        new TextEncoder().encode(JSON.stringify(value.annotations)).byteLength >
-        MAX_PAYLOAD_BYTES
-      ) {
-        return invalidResult(
-          "Plannotator Code Review annotations are too large",
-        );
-      }
-    } catch {
-      return invalidResult("Plannotator Code Review annotations are invalid");
-    }
+    const annotations = validateAnnotations(value.annotations);
+    if (!annotations.valid) return annotations;
   }
   if (
     value.agentSwitch !== undefined &&
@@ -635,12 +624,13 @@ function validatePlannotatorResult(
   ) {
     return invalidResult("Plannotator Code Review agent switch is invalid");
   }
+  const annotations = Array.isArray(value.annotations)
+    ? value.annotations
+    : undefined;
   return validResult({
     approved: value.approved,
     ...(value.feedback === undefined ? {} : { feedback: value.feedback }),
-    ...(value.annotations === undefined
-      ? {}
-      : { annotations: value.annotations }),
+    ...(annotations === undefined ? {} : { annotations }),
   });
 }
 
@@ -677,212 +667,6 @@ function parsePlannotatorResponse(
   return result.valid
     ? validResult({ kind: "result", result: result.value })
     : invalidResult(...result.errors);
-}
-
-function isSuccessfulRpcReply(
-  value: SubagentRpcReplyEnvelope,
-): value is Extract<SubagentRpcReplyEnvelope, { success: true }> {
-  return value.success;
-}
-
-function outputPathFromValue(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return isBoundedString(value, 4096, true) && !/[\0\r\n]/u.test(value)
-      ? value
-      : undefined;
-  }
-  if (!isRecord(value)) return undefined;
-  return outputPathFromValue(value.path);
-}
-
-function managedOutputCandidates(value: unknown): string[] {
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-  const add = (candidate: unknown): void => {
-    const path = outputPathFromValue(candidate);
-    if (path !== undefined && !seen.has(path)) {
-      seen.add(path);
-      candidates.push(path);
-    }
-  };
-  const visit = (candidate: unknown, depth: number): void => {
-    if (depth > 4 || !isRecord(candidate)) return;
-    add(candidate.outputReference);
-    add(candidate.savedOutputPath);
-    add(candidate.outputFile);
-    add(candidate.outputPath);
-    add(candidate.artifactPath);
-    if (isRecord(candidate.outputPathMapping)) {
-      add(candidate.outputPathMapping.savedPath);
-    }
-    if (isRecord(candidate.artifactPaths)) {
-      add(candidate.artifactPaths.outputPath);
-    }
-    visit(candidate.data, depth + 1);
-    visit(candidate.details, depth + 1);
-    if (Array.isArray(candidate.results)) {
-      for (const result of candidate.results) visit(result, depth + 1);
-    }
-  };
-  visit(value, 0);
-  return candidates;
-}
-
-async function managedOutputReference(
-  completion: unknown,
-  cwd: string,
-  mediaType: ArtifactRef["mediaType"],
-): Promise<ArtifactRef> {
-  for (const path of managedOutputCandidates(completion)) {
-    const diskPath = resolvePath(cwd, path);
-    try {
-      if (!(await stat(diskPath)).isFile()) continue;
-    } catch {
-      continue;
-    }
-    const reference: ArtifactRef = { kind: "managed", path, mediaType };
-    if (isValidArtifactRef(reference)) return reference;
-  }
-  throw new Error("Managed Code Review output reference is missing or invalid");
-}
-
-function setUnrefTimer(timer: ReturnType<typeof setTimeout>): void {
-  if (typeof timer === "object" && timer !== null && "unref" in timer) {
-    (timer as { unref?: () => void }).unref?.();
-  }
-}
-
-export class ManagedCodeReviewArtifactWriter
-  implements CodeReviewArtifactWriter
-{
-  private readonly timeoutMs: number;
-
-  public constructor(
-    private readonly options: ManagedCodeReviewArtifactWriterOptions,
-  ) {
-    const timeout = options.timeoutMs ?? TIMEOUTS.codeReviewTimeoutMs;
-    if (!Number.isInteger(timeout) || timeout <= 0) {
-      throw new RangeError(
-        "Managed Code Review artifact timeout must be a positive integer",
-      );
-    }
-    this.timeoutMs = timeout;
-  }
-
-  public async write(input: {
-    kind: "feedback" | "annotations";
-    workflowId: WorkflowId;
-    requestId: RequestId;
-    cwd: string;
-    content: string;
-  }): Promise<ArtifactRef> {
-    const mediaType =
-      input.kind === "annotations" ? "application/json" : "text/plain";
-    const workflowScript = `return ${JSON.stringify(input.content)};`;
-    const output = `pi-workflow-code-review-${input.requestId}-${input.kind}.txt`;
-    let runId: RunId | undefined;
-    let terminal = false;
-    try {
-      const reply = await this.options.rpc.request("spawn", {
-        workflowScript,
-        context: "fresh",
-        cwd: input.cwd,
-        async: true,
-        output,
-        outputMode: "file-only",
-        artifacts: true,
-        timeoutMs: this.timeoutMs,
-      });
-      if (!isSuccessfulRpcReply(reply)) {
-        throw new Error(
-          `Managed artifact workflow failed: ${reply.error.message}`,
-        );
-      }
-      runId = runIdFromSpawnData(reply.data);
-      if (runId === undefined) {
-        throw new Error("Managed artifact workflow returned no run ID");
-      }
-      const completion = await this.waitForCompletion(runId);
-      terminal = true;
-      if (!isRecord(completion) || completion.state !== "complete") {
-        throw new Error("Managed artifact workflow did not complete");
-      }
-      return await managedOutputReference(completion, input.cwd, mediaType);
-    } finally {
-      if (runId !== undefined && !terminal) {
-        try {
-          await this.options.rpc.stop(runId);
-        } catch {
-          // The write remains failed closed when an orphan stop cannot complete.
-        }
-      }
-    }
-  }
-
-  private waitForCompletion(runId: RunId): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const remove = this.options.events.on(
-        SUBAGENT_ASYNC_COMPLETE_EVENT,
-        (value) => {
-          if (
-            settled ||
-            !isRecord(value) ||
-            value.sessionId !== this.options.sessionId ||
-            value.runId !== runId ||
-            typeof value.state !== "string"
-          ) {
-            return;
-          }
-          settled = true;
-          if (timer !== undefined) clearTimeout(timer);
-          remove();
-          if (value.state === "complete" && value.success === true) {
-            resolve(value);
-          } else {
-            reject(new Error("Managed artifact workflow failed"));
-          }
-        },
-      );
-      timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        remove();
-        reject(new Error("Managed artifact workflow timed out"));
-      }, this.timeoutMs);
-      setUnrefTimer(timer);
-    });
-  }
-}
-
-export function createManagedCodeReviewArtifactWriter(
-  options: ManagedCodeReviewArtifactWriterOptions,
-): CodeReviewArtifactWriter {
-  return new ManagedCodeReviewArtifactWriter(options);
-}
-
-async function writeReviewArtifact(
-  writer: CodeReviewArtifactWriter | undefined,
-  kind: "feedback" | "annotations",
-  request: CodeReviewBridgeRequest,
-  content: string,
-): Promise<ArtifactRef | undefined> {
-  if (content.length === 0) return undefined;
-  if (writer === undefined) {
-    throw new Error("Code Review managed artifact writer is unavailable");
-  }
-  const reference = await writer.write({
-    kind,
-    workflowId: request.workflowId,
-    requestId: request.requestId,
-    cwd: request.cwd,
-    content,
-  });
-  if (!isValidArtifactRef(reference)) {
-    throw new Error("Code Review managed artifact reference is invalid");
-  }
-  return reference;
 }
 
 export class CodeReviewRootBridge {
@@ -1174,7 +958,7 @@ export class CodeReviewRootBridge {
       );
       return;
     }
-    void this.settleResult(pending, parsed.value.result);
+    this.settleResult(pending, parsed.value.result);
   }
 
   private onTimeout(pending: PendingRootReview): void {
@@ -1191,10 +975,10 @@ export class CodeReviewRootBridge {
     this.settleFailure(pending, "timeout", "timeout", "Code Review timed out");
   }
 
-  private async settleResult(
+  private settleResult(
     pending: PendingRootReview,
     result: PlannotatorCodeReviewResult | undefined,
-  ): Promise<void> {
+  ): void {
     if (result === undefined) {
       this.settleFailure(
         pending,
@@ -1207,41 +991,10 @@ export class CodeReviewRootBridge {
     const status: "approved" | "rejected" = result.approved
       ? "approved"
       : "rejected";
-    let feedbackRef: ArtifactRef | undefined;
-    let annotationsRef: ArtifactRef | undefined;
-    try {
-      if (result.feedback?.trim()) {
-        feedbackRef = await writeReviewArtifact(
-          this.options.artifactWriter,
-          "feedback",
-          pending.request,
-          result.feedback,
-        );
-      }
-      if (result.annotations !== undefined && result.annotations.length > 0) {
-        annotationsRef = await writeReviewArtifact(
-          this.options.artifactWriter,
-          "annotations",
-          pending.request,
-          JSON.stringify(result.annotations),
-        );
-      }
-    } catch (error) {
-      this.settleFailure(
-        pending,
-        "failed",
-        "artifact-write-failed",
-        boundedMessage(error, "Code Review artifact could not be saved"),
-      );
-      return;
-    }
-
     const summary: CodeReviewResultSummary = {
       requestId: pending.request.requestId,
       status,
       approved: result.approved,
-      ...(feedbackRef === undefined ? {} : { feedbackRef }),
-      ...(annotationsRef === undefined ? {} : { annotationsRef }),
     };
     const transition = this.options.registry.recordCodeReviewResult(summary);
     if (!transition.transitioned) {
@@ -1261,8 +1014,10 @@ export class CodeReviewRootBridge {
       recipientSessionId: pending.request.originSessionId,
       status,
       approved: result.approved,
-      ...(feedbackRef === undefined ? {} : { feedbackRef }),
-      ...(annotationsRef === undefined ? {} : { annotationsRef }),
+      ...(result.feedback === undefined ? {} : { feedback: result.feedback }),
+      ...(result.annotations === undefined
+        ? {}
+        : { annotations: result.annotations }),
     });
   }
 
@@ -1742,6 +1497,10 @@ function toolText(response: CodeReviewBridgeResponse): string {
   return JSON.stringify({
     status: response.status,
     approved: response.approved,
+    ...(response.feedback === undefined ? {} : { feedback: response.feedback }),
+    ...(response.annotations === undefined
+      ? {}
+      : { annotations: response.annotations }),
     ...(response.feedbackRef === undefined
       ? {}
       : { feedbackRef: response.feedbackRef }),
