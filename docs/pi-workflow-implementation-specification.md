@@ -795,7 +795,7 @@ export interface RootWorkflowState {
 
 - `planningHandoffRef`はHandoff fileへのreferenceだけ。Plan Artifact ref、Handoff body、plan bodyは保存しない。
 - `approvalFeedback`はRoot-ownedのsmall feedbackに限定し、最大16 KiB。超過するfeedbackはmanaged artifact refへ保存し、Root stateへbodyを入れない。初期実装で必要になる場合だけ`approvalFeedbackRef`を追加する。現時点ではbounded stringで十分とする。
-- `codeReviewResult`はapproved/statusとfeedback/annotationsのartifact refsだけ。raw annotation arrayをstateへ入れない。
+- `codeReviewResult`はapproved/statusと、実在するmanaged artifactにbindできたfeedback/annotations refsだけを保持する。raw feedback/annotationsはstateへ入れない。
 - `pendingInteraction`はwaiting observable substatusとlate reply rejectionに必要なcorrelationだけを持つ。
 - `finalStatus`はterminal resultのcompact projectionであり、Ready理由全体はCoordinator artifactに保存する。
 - `phase`、`planningStatus`、`implementationStatus`の矛盾はstate validation failure。
@@ -2817,19 +2817,21 @@ interface CodeReviewBridgeResponse {
   recipientSessionId: string;
   status: "approved" | "rejected" | "unavailable" | "timeout" | "failed";
   approved: boolean;
+  feedback?: string;
+  annotations?: unknown[];
   feedbackRef?: ArtifactRef;
   annotationsRef?: ArtifactRef;
   error?: { code: string; message: string };
 }
 ```
 
-feedback/annotations raw contentはmanaged artifactへ保存し、Root stateはrefsとapproved/statusだけ保持する。
+`feedback` / `annotations`は、Plannotatorが返したboundedなreview resultをactive same-sessionのsame Coordinatorへ渡すRoot-owned transient transport payloadである。public managed artifact mechanismから実在するauthoritative refを取得できる場合だけ`feedbackRef` / `annotationsRef`を付与する。Root stateはapproved/statusと実在するrefsだけを保持し、raw feedback/annotationsをRoot lifecycle snapshotやRoot Parent LLM contextへ複製しない。fabricated/dangling `ArtifactRef`は作成しない。
 
 ### 32.5 Same Coordinator continuation
 
-Code review responseはsame `implementationRunId`のsame Coordinator sessionへpi-intercom channelで戻す。新Implementation Coordinatorをspawnしない。
+Code review responseはsame `implementationRunId`のsame Coordinator sessionへpi-intercom channelで戻す。`feedback` / `annotations`はこのactive same-session continuationのtransient payloadとしてCoordinatorの次の判断へ渡し、新Implementation Coordinatorをspawnしない。Root Extensionはtransport ownerであり、review decision ownerではない。
 
-v1では`maxCodeReviewChangeCycles = 1`とする。initial code reviewはcountしない。初回rejection後に限り、same Implementation Coordinatorがapproved scope内で、かつ新しいarchitecture/product/security decisionなしに、一度だけbounded change cycleを実行できる。そのcycleではrequired verification、finding処理、Fix Waveがあればfresh Focused Re-review、Final Diff Inspection、code reviewを再成立させる。二度目のrejection、scope escape、または新しいdecisionが必要な場合は`FAILED`/blockとし、自動re-planning loopを作らない。approvedならCoordinatorがreadiness evaluatorを呼ぶ。safe fixがない場合もFAILEDとする。
+v1では`maxCodeReviewChangeCycles = 1`とする。initial code reviewはcountしない。初回rejection後に限り、same Implementation Coordinatorがapproved scope内で、かつ新しいarchitecture/product/security decisionなしに、一度だけbounded change cycleを実行できる。そのcycleではrequired verification、finding処理、Fix Waveがあればfresh Focused Re-review、Final Diff Inspection、code reviewを再成立させる。二度目のrejection、scope escape、または新しいdecisionが必要な場合は`FAILED`/blockとし、自動re-planning loopを作らない。approvedならCoordinatorがreadiness evaluatorを呼ぶ。safe fixがない場合もFAILEDとする。transient payloadはreload/restartを跨いで保持・復旧せず、既存の§36 fail-closed policyに従う。
 
 **Evidence**: `[E:plannotator-direct-api-results.md, implementation-composition-results.md, full-workflow-composition-results.md]` `[S:@plannotator/pi-extension/plannotator-events.ts]` `[D]`
 
@@ -2997,7 +2999,7 @@ v1はtimeoutを含むすべてのfailureにautomatic retryを行わない。expl
 | Fix Worker report/diff | Fix Worker | derived change evidence | artifact ref | re-review/final inspection evidence |
 | Focused Re-review | fresh Reviewer | derived validation | artifact ref | readiness evidence |
 | Final Diff Inspection | Implementation Coordinator | derived final validation | Step 17: bounded structured result/evidence。final Coordinator result: 実在するmanaged artifactにbindした`ArtifactRef`のみ | code review/readiness evidence |
-| Plannotator plan/code feedback | Root bridge | external/derived review evidence | feedback/annotation refs | Plannotator/managed owner; Rootはbounded ref |
+| Plannotator plan/code feedback | Root bridge | external/derived review evidence | Plan Reviewは既存のbounded approval feedback。Code Reviewはactive same-sessionのtransient feedback/annotationsと、利用可能な場合だけ実在するfeedback/annotation refs | Plan Reviewのfeedbackは既存Root state policy。Code Reviewのtransient payloadはcontinuation中だけ保持し、reload/restart recoveryなし |
 | final coordinator summary | Coordinator | derived compact summary | outputReference | `pi-subagents` result lifecycle |
 | Root lifecycle snapshot | Root Extension | canonical lifecycle/identity state | Pi custom entry | Pi session retention; no raw body |
 
@@ -3013,7 +3015,7 @@ Step 17のFinal Diff InspectionのStep-internal representationはbounded structu
 
 ### 35.4 Path/content rule
 
-Artifact pathはreferenceであり、request text内のfilename instructionがruntime bindingをoverrideしない。`output`/`outputMode:"file-only"`は`runs.run` / `runs.all`等のmanaged child output bindingであり、custom Toolがreturned `details`を自動的にmanaged artifactへ変換するmechanismではない。custom Toolがarbitraryな`ArtifactRef`を返しただけではmanaged artifactの存在を証明しない。artifact referenceは実在するmanaged artifactに対してだけ作成し、Step-internal structured evidenceをmanaged artifactがまだ存在しない段階でfake/dangling `ArtifactRef`へ変換しない。exact artifact path、physical file split、final binding mechanismは、Architecture invariantを満たす範囲のImplementation Detailとする。
+Artifact pathはreferenceであり、request text内のfilename instructionがruntime bindingをoverrideしない。`output`/`outputMode:"file-only"`は`runs.run` / `runs.all`等のmanaged child output bindingであり、custom Toolがreturned `details`を自動的にmanaged artifactへ変換するmechanismではない。custom Toolがarbitraryな`ArtifactRef`を返しただけではmanaged artifactの存在を証明しない。artifact referenceは実在するmanaged artifactに対してだけ作成する。public dependencyがarbitrary raw bridge payloadのmanaged persistenceを提供しない場合、Root-owned transient transportをfabricated/dangling `ArtifactRef`へ置き換えない。transient bridge payloadはmanaged artifact storeの代替ではなく、active same-session continuationのtransport mechanismであり、Root lifecycle snapshotやRoot Parent contextへ複製しない。reload/restartを跨ぐdurable recoveryは新規実装せず、active workflow reloadは§36 policyに従う。exact artifact path、physical file split、final binding mechanismは、Architecture invariantを満たす範囲のImplementation Detailとする。
 
 **Traceability**: `[A:31,37]` `[S:pi-subagents/docs/tool-reference.md#output-mode-details; observability.md#async-run-artifacts]` `[E:phase-a-smoke-results.md, full-workflow-composition-results.md]` `[D]` `[ID]`
 
@@ -3196,6 +3198,7 @@ second Plan rejection fails
 approval remains valid across time when plan content/hash is unchanged
 code review direct action and no plan-mode requests
 code-review response uses local request correlation
+bounded transient feedback/annotations return to the same Coordinator; actual refs are optional and authoritative only when available
 same Coordinator continuation
 one bounded code-review change cycle; second rejection fails
 late response rejection
