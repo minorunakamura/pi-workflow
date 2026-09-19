@@ -16,6 +16,7 @@ import {
   PlanReviewRootBridge,
   isPlanReviewRequest,
 } from "../../src/runtime/plan-review.ts";
+import { RootCancellationController } from "../../src/runtime/cancellation.ts";
 import { registerPlanningCompletionObservation } from "../../src/runtime/planning-completion.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/runtime/subagents-rpc.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
@@ -184,6 +185,49 @@ it("opens direct plan-review, records Root approval, and never uses plan mode", 
 
   await new Promise<void>((resolve) => setTimeout(resolve, 20));
   expect(registry.getState()).toMatchObject({ approval: true });
+  bridge.dispose();
+});
+
+it("terminalizes a pending Plan Review through Root cancellation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-plan-cancel-"));
+  roots.push(root);
+  const artifacts = writeArtifacts(root, PLAN);
+  const registry = readyRegistry(artifacts);
+  const events = new FakeEventBus();
+  events.on(PLANNOTATOR_REQUEST_EVENT, (value) => {
+    if (!isPlanReviewRequest(value) || value.action !== "plan-review") return;
+    value.respond({
+      status: "handled",
+      result: { status: "pending", reviewId: "review-cancel" },
+    });
+  });
+  const bridge = new PlanReviewRootBridge({
+    events,
+    registry,
+    timeoutMs: 1_000,
+  });
+  expect((await bridge.start()).started).toBe(true);
+  const controller = new RootCancellationController({
+    registry,
+    getBridges: () => [bridge],
+    stopCoordinator: async () => ({ success: true }),
+  });
+
+  const result = await controller.requestWorkflowCancellation(WORKFLOW_ID);
+  expect(result).toMatchObject({
+    accepted: true,
+    state: { phase: "CANCELLED", finalStatus: "CANCELLED" },
+  });
+  expect(bridge.hasPendingReview()).toBe(false);
+  events.emit(PLANNOTATOR_REVIEW_RESULT_EVENT, {
+    reviewId: "review-cancel",
+    approved: true,
+  });
+  await settle();
+  expect(registry.getState()).toMatchObject({
+    phase: "CANCELLED",
+    finalStatus: "CANCELLED",
+  });
   bridge.dispose();
 });
 
