@@ -221,6 +221,30 @@ async function settle(): Promise<void> {
   await Promise.resolve();
 }
 
+async function runReviewResult(result: unknown) {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  connectIntercom(rootEvents, childEvents);
+  const { registry, workflowId } = implementationRegistry();
+  rootEvents.on(PLANNOTATOR_REQUEST_EVENT, (value) => {
+    if (!isRecord(value) || typeof value.respond !== "function") return;
+    value.respond({ status: "handled", result });
+  });
+  const root = new CodeReviewRootBridge({
+    events: rootEvents,
+    registry,
+    sessionId: ROOT_SESSION_ID,
+    timeoutMs: 1_000,
+  });
+  const child = new CodeReviewChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+  const response = await child.request({ workflowId, cwd: "/repo" });
+  const state = registry.getState();
+  child.dispose();
+  root.dispose();
+  return { response, state };
+}
+
 it("uses direct code-review, correlates the response, and keeps plan mode out", async () => {
   const rootEvents = new FakeEventBus();
   const childEvents = new FakeEventBus();
@@ -319,6 +343,48 @@ it("returns transient review evidence without requiring managed refs", async () 
 
   child.dispose();
   root.dispose();
+});
+
+it("fails closed when the response envelope exceeds 16 KiB", async () => {
+  const oversizedFeedback = "x".repeat(16 * 1024 - 32);
+  const { response, state } = await runReviewResult({
+    approved: false,
+    feedback: oversizedFeedback,
+    annotations: [],
+  });
+
+  expect(response.status).toBe("failed");
+  expect(response.error?.code).toBe("response-too-large");
+  expect(JSON.stringify(response).length).toBeLessThanOrEqual(16 * 1024);
+  expect(state?.phase).toBe("FAILED");
+});
+
+it("fails closed when individually valid feedback and annotations overflow together", async () => {
+  const { response, state } = await runReviewResult({
+    approved: false,
+    feedback: "f".repeat(9_000),
+    annotations: ["a".repeat(8_000)],
+  });
+
+  expect(response.status).toBe("failed");
+  expect(response.error?.code).toBe("response-too-large");
+  expect(JSON.stringify(response).length).toBeLessThanOrEqual(16 * 1024);
+  expect(state?.phase).toBe("FAILED");
+});
+
+it("delivers a near-boundary rejection without changing its content", async () => {
+  const feedback = "f".repeat(14_000);
+  const annotations = [{ path: "src/example.ts", line: 4 }];
+  const { response, state } = await runReviewResult({
+    approved: false,
+    feedback,
+    annotations,
+  });
+
+  expect(response.status).toBe("rejected");
+  expect(response.feedback).toBe(feedback);
+  expect(response.annotations).toEqual(annotations);
+  expect(state?.phase).toBe("IMPLEMENTING");
 });
 
 it("fails closed on malformed or unbounded review evidence", async () => {
