@@ -467,7 +467,7 @@ it("cancels the questionnaire before returning a timeout failure", async () => {
   }
 });
 
-it("does not re-open duplicate requests and records same-ID conflicts", () => {
+it("terminalizes a pending waiter on same-ID conflicts", () => {
   const rootEvents = new FakeEventBus();
   const childEvents = new FakeEventBus();
   const intercom = connectIntercom(rootEvents, childEvents);
@@ -504,9 +504,19 @@ it("does not re-open duplicate requests and records same-ID conflicts", () => {
   expect(registry.getState()).toMatchObject({
     phase: "FAILED",
     finalStatus: "FAILED",
+    diagnostics: [
+      expect.objectContaining({
+        kind: "conflict",
+        code: "HUMAN_REQUEST_CONFLICT",
+      }),
+    ],
   });
   expect(askCount).toBe(1);
-  expect(intercom.rootPublishes).toHaveLength(0);
+  expect(intercom.rootPublishes).toHaveLength(1);
+  expect(responseFromPublished(intercom.rootPublishes[0])).toMatchObject({
+    status: "failure",
+    error: { code: "response-conflict" },
+  });
   expect(root.getConflictRecords()).toEqual([
     {
       requestId: REQUEST_UUID,
@@ -521,34 +531,61 @@ it("does not re-open duplicate requests and records same-ID conflicts", () => {
     askSuccess(request.requestId, askResult("answered", { answer: "SAFE" })),
   );
   expect(intercom.rootPublishes).toHaveLength(1);
+  root.dispose();
+});
 
-  registration.onEvent(message);
-  expect(intercom.rootPublishes).toHaveLength(2);
-  expect(responseFromPublished(intercom.rootPublishes[1])).toEqual(
-    responseFromPublished(intercom.rootPublishes[0]),
-  );
-  registration.onEvent({
-    ...message,
+it("resolves the child waiter on a conflicting pending request and ignores the late answer", async () => {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  const intercom = connectIntercom(rootEvents, childEvents);
+  const { registry, workflowId } = startedRegistry();
+  const root = registerHumanDecisionRootBridge({
+    events: rootEvents,
+    registry,
+    sessionId: ROOT_SESSION_ID,
+    mode: "tui",
+    timeoutMs: 100,
+  });
+  const child = new HumanDecisionChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+  rootEvents.on(ASK_USER_QUESTION_REQUEST_EVENT, () => {});
+
+  const pending = child.request({
+    workflowId,
+    coordinatorRunId: "planning-run",
+    questions: [question()],
+  });
+  await Promise.resolve();
+  const original = intercom.childPublishes[0];
+  if (!isRecord(original)) throw new Error("Missing Human Decision request");
+  intercom.getRootRegistration().onEvent({
+    type: "message",
+    fromSessionId: CHILD_SESSION_ID,
     payload: {
-      ...request,
-      questions: [{ ...question(), question: "A completed conflict?" }],
+      ...original,
+      questions: [{ ...question(), question: "A conflicting question?" }],
     },
   });
-  expect(intercom.rootPublishes).toHaveLength(2);
-  expect(root.getConflictRecords()).toEqual([
-    {
-      requestId: REQUEST_UUID,
-      workflowId,
-      phase: "pending",
-      reason: "fingerprint-mismatch",
-    },
-    {
-      requestId: REQUEST_UUID,
-      workflowId,
-      phase: "completed",
-      reason: "fingerprint-mismatch",
-    },
-  ]);
+
+  await expect(pending).resolves.toMatchObject({
+    status: "failure",
+    error: { code: "response-conflict" },
+  });
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+  const publishesAfterConflict = intercom.rootPublishes.length;
+  rootEvents.emit(
+    getAskUserQuestionReplyEvent(requestIdFrom(original)),
+    askSuccess(
+      requestIdFrom(original),
+      askResult("answered", { answer: "LATE" }),
+    ),
+  );
+  expect(intercom.rootPublishes).toHaveLength(publishesAfterConflict);
+
+  child.dispose();
   root.dispose();
 });
 

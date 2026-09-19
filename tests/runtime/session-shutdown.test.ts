@@ -1,8 +1,24 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
 
-import { createRunId, createWorkflowId } from "../../src/core/index.ts";
+import {
+  createPlanningHandoff,
+  createRequestId,
+  createReviewId,
+  createRunId,
+  createWorkflowId,
+  hashPlan,
+  isRecord,
+  type WorkflowId,
+} from "../../src/core/index.ts";
 import { registerSessionLifecycle } from "../../src/events/index.ts";
+import {
+  CODE_REVIEW_NAMESPACE,
+  INTERCOM_EXTENSION_REGISTER_EVENT,
+  CodeReviewChildBridge,
+  type IntercomExtensionChannel,
+  type IntercomExtensionRegistration,
+} from "../../src/runtime/code-review-bridge.ts";
 import {
   SUBAGENT_ASYNC_COMPLETE_EVENT,
   SUBAGENT_RPC_READY_EVENT,
@@ -15,6 +31,9 @@ import {
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
 
 const UUID = "00000000-0000-4000-8000-000000000001";
+const ROOT_SESSION_ID = "root-session";
+const CHILD_SESSION_ID = "child-session";
+const ROOT_OWNER = { sessionId: ROOT_SESSION_ID, epoch: "root-epoch" };
 
 type Handler = (data: unknown) => void;
 
@@ -39,6 +58,144 @@ class FakeEventBus implements SubagentRpcEventBus {
 
   public listenerCount(event: string): number {
     return this.handlers.get(event)?.size ?? 0;
+  }
+}
+
+function isRegistration(
+  value: unknown,
+): value is IntercomExtensionRegistration {
+  return (
+    isRecord(value) &&
+    typeof value.namespace === "string" &&
+    typeof value.ownerEligible === "boolean" &&
+    typeof value.onEvent === "function" &&
+    typeof value.onReady === "function"
+  );
+}
+
+function connectCodeReviewIntercom(
+  rootEvents: FakeEventBus,
+  childEvents: FakeEventBus,
+): void {
+  let rootRegistration: IntercomExtensionRegistration | undefined;
+  let childRegistration: IntercomExtensionRegistration | undefined;
+  const channel = (side: "root" | "child"): IntercomExtensionChannel => ({
+    namespace: CODE_REVIEW_NAMESPACE,
+    snapshot: () => ({
+      connected: true,
+      supported: true,
+      owner: ROOT_OWNER,
+    }),
+    publish(payload, options = {}) {
+      if (side === "root") {
+        if (options.audience === "capable") {
+          childRegistration?.onEvent({
+            type: "message",
+            fromSessionId: ROOT_SESSION_ID,
+            owner: ROOT_OWNER,
+            payload,
+          });
+        }
+        return;
+      }
+      if (options.audience === "owner") {
+        rootRegistration?.onEvent({
+          type: "message",
+          fromSessionId: CHILD_SESSION_ID,
+          owner: ROOT_OWNER,
+          payload,
+        });
+      }
+    },
+  });
+  rootEvents.on(INTERCOM_EXTENSION_REGISTER_EVENT, (value) => {
+    if (!isRegistration(value)) return;
+    rootRegistration = value;
+    rootRegistration.onReady(channel("root"));
+  });
+  childEvents.on(INTERCOM_EXTENSION_REGISTER_EVENT, (value) => {
+    if (!isRegistration(value)) return;
+    childRegistration = value;
+    childRegistration.onReady(channel("child"));
+  });
+}
+
+function prepareImplementationRegistry(
+  registry: RootWorkflowRegistry,
+  workflowId: WorkflowId,
+): void {
+  const plan = "approved plan";
+  const handoff = createPlanningHandoff({
+    workflowId,
+    planContent: plan,
+    tddMode: "not-applicable",
+    testStrategy: { kind: "unit", required: true, summary: "Run tests." },
+    testSeams: ["shutdown"],
+    constraints: [],
+    nonGoals: ["Do not merge."],
+    planningRunId: createRunId("planning-run"),
+  });
+  if (!handoff.valid) throw new Error(handoff.errors.join("; "));
+  if (!registry.start(workflowId, "feature").started) {
+    throw new Error("Could not start test workflow");
+  }
+  if (
+    !registry.bindWorkflowRequest({
+      workflowId,
+      workflowType: "feature",
+      request: "review the implementation",
+      cwd: "/repo",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }) ||
+    !registry.setPlanningRunId("planning-run").transitioned
+  ) {
+    throw new Error("Could not bind test workflow");
+  }
+  if (
+    !registry.completePlanning("planning-run", {
+      contractVersion: 1,
+      workflowId,
+      status: "COMPLETED",
+      planArtifactRef: {
+        kind: "managed",
+        path: "run/implementation-plan.md",
+        mediaType: "text/markdown",
+      },
+      planningHandoffRef: {
+        kind: "managed",
+        path: "run/planning-handoff.json",
+        mediaType: "application/json",
+      },
+      selectedCapabilities: [
+        { capability: "scout", reason: "Repository evidence." },
+        { capability: "plan-composition", reason: "A plan is required." },
+      ],
+      skippedCapabilities: [
+        { capability: "researcher", reason: "No external fact." },
+        { capability: "grilling", reason: "No ambiguity." },
+        { capability: "human-decision", reason: "No product decision." },
+        { capability: "targeted-rescout", reason: "No changed evidence." },
+        { capability: "oracle", reason: "No challenge needed." },
+      ],
+      remainingBlockers: [],
+    }).transitioned
+  ) {
+    throw new Error("Could not complete test planning");
+  }
+  const reviewId = createReviewId("plan-review");
+  if (
+    !registry.setPlanReviewPending(
+      createRequestId("00000000-0000-4000-8000-000000000094"),
+      reviewId,
+    ).transitioned ||
+    !registry.recordPlanApproval(
+      { approvedPlanHash: hashPlan(plan).value, reviewId, approval: true },
+      hashPlan(plan).value,
+      handoff.value,
+    ).transitioned ||
+    !registry.startImplementation("implementation-run").transitioned
+  ) {
+    throw new Error("Could not prepare implementation state");
   }
 }
 
@@ -243,4 +400,72 @@ it("does not stop a workflow with no live planning run or a terminal workflow", 
     );
     expect(stopCalls).toBe(0);
   }
+});
+
+it("cleans a pending Code Review waiter before stopping and persisting stale failure", async () => {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  connectCodeReviewIntercom(rootEvents, childEvents);
+  const order: string[] = [];
+  const registry = new RootWorkflowRegistry(() => order.push("persist"));
+  const handlers = new Map<string, unknown>();
+  let releaseStop: (() => void) | undefined;
+  const stop = () => {
+    order.push("stop");
+    return new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+  };
+  const pi: Pick<ExtensionAPI, "on" | "events"> = {
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
+    events: rootEvents,
+  };
+  registerSessionLifecycle(pi, registry, () => order.push("cleanup"), stop);
+
+  const context = {
+    mode: "tui",
+    sessionManager: {
+      getBranch: () => [],
+      getSessionFile: () => "/sessions/current.jsonl",
+      getSessionId: () => ROOT_SESSION_ID,
+    },
+  };
+  const sessionStart = handlers.get("session_start");
+  if (typeof sessionStart !== "function") {
+    throw new Error("Missing session_start handler");
+  }
+  Reflect.apply(sessionStart, undefined, [undefined, context]);
+  const workflowId = createWorkflowId("00000000-0000-4000-8000-000000000095");
+  prepareImplementationRegistry(registry, workflowId);
+
+  const child = new CodeReviewChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+  const pending = child.request({
+    workflowId,
+    cwd: "/repo",
+    coordinatorRunId: "implementation-run",
+  });
+  await Promise.resolve();
+  order.length = 0;
+  const shutdown = handlers.get("session_shutdown");
+  if (typeof shutdown !== "function") {
+    throw new Error("Missing session_shutdown handler");
+  }
+  const first = Reflect.apply(shutdown, undefined, [undefined, context]);
+  const second = Reflect.apply(shutdown, undefined, [undefined, context]);
+  await expect(pending).resolves.toMatchObject({
+    status: "failed",
+    error: { code: "shutdown" },
+  });
+  await Promise.resolve();
+  expect(order).toEqual(["stop"]);
+  expect(registry.getState()).toMatchObject({ phase: "CODE_REVIEW" });
+
+  releaseStop?.();
+  await Promise.all([first, second]);
+  expect(order).toEqual(["stop", "persist", "cleanup"]);
+  expect(registry.getState()).toBeUndefined();
+  child.dispose();
 });

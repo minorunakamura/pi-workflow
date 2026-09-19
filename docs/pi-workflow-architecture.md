@@ -458,6 +458,7 @@ approved plan identity
 resultDelivery acknowledgement
 small lifecycle / identity state
 top-level cancellation / control
+explicit Root-owned cancellation request by `workflowId`
 ```
 
 ### 11.2 Not owned by Root Parent LLM
@@ -1448,6 +1449,8 @@ approvalFeedback
 implementationRunId
 implementationStatus
 codeReviewResult
+cancellationOutcome
+bounded diagnostics
 finalStatus
 ```
 
@@ -1464,7 +1467,9 @@ Implementation transcript
 hidden model context
 ```
 
-Exact field setは、実装で不要なfieldを追加しないよう最小化する。
+Exact field setは、実装で不要なfieldを追加しないよう最小化する。`cancellationOutcome`とbounded diagnosticsは、managed artifact APIでRootがauthoritativeなsummary/diagnostic refを取得できない場合のRoot-owned canonical representationである。これらはstop outcome、correlation、bounded codeだけを持ち、raw log/report/full payloadを持たない。
+
+Explicit cancellation invocation surfaceは、Pi 0.85.1 public `session_shutdown` eventの`event.reason === "quit"`からRoot runtimeの`requestWorkflowCancellation(workflowId)` use-caseを呼ぶ経路とする。`reload` / `new` / `resume` / `fork`のshutdownはこのuse-caseを呼ばず、既存どおりstale `FAILED`を記録する。v1では`/wf-cancel`、keyboard shortcut、LLM-facing cancel tool、private Pi APIを追加しない。
 
 ---
 
@@ -1528,7 +1533,9 @@ owner coordinator run ID
 | `CODE_REVIEW` | `IMPLEMENTING` | code review feedbackに対してapproved scope内のchange cycleへ戻る場合。exact recovery policyはTBD。 |
 | `CODE_REVIEW` | `READY_FOR_MERGE` | code review approvedかつ全Ready条件を満たす。 |
 | active state | `FAILED` | child/coordinator/bridge/gate/approval/integrity failure。 |
-| active state | `CANCELLED` | Rootがuser cancellationを受理し、top-level controlを停止。 |
+| active state | `CANCELLED` | Root-owned `requestWorkflowCancellation(workflowId)`がmatching active workflowを受理し、terminal guardをpersistしてtop-level controlを停止。 |
+
+`requestWorkflowCancellation(workflowId)`は、`session_shutdown`の`reason: "quit"`から呼ばれるRoot-owned explicit cancellation use-caseである。成功時は同じworkflowのduplicate requestに同じterminal resultを返し、second stopを送らない。その他の`session_shutdown` reasonsはこのsurfaceとは別のreload/stale-failure pathである。
 
 表のstate namesはarchitecture-levelのconceptual namesであり、exact enumやpersistence schemaではない。
 
@@ -1542,9 +1549,11 @@ Full Smokeのsequenceは上記lifecycleを1回通過したcomposition evidence�
 
 本sectionは安全側のoutcomeを定義する。retry、resume、backoff、timeoutの詳細はOperational Policy / Implementation Specificationで決める。
 
+Cancellationのexact production invocationは、Pi 0.85.1 public `session_shutdown` eventの`reason: "quit"`からRoot runtimeの`requestWorkflowCancellation(workflowId)`を呼ぶ経路である。Piのgeneric workflow-cancel event、new command、keyboard shortcut、LLM-facing tool、private APIは導入しない。`reason: "reload" | "new" | "resume" | "fork"`はreload/stale `FAILED` pathとして別扱いにする。
+
 | Failure / event | Immediate architecture outcome | Owner | Recovery detail |
 | --- | --- | --- | --- |
-| User cancellation | 新phaseへ進めず`CANCELLED`候補としてRootがcontrolを停止。 | Root Control Plane | exact stop ordering / cleanupはTBD。 |
+| User cancellation | `requestWorkflowCancellation(workflowId)`がmatching active workflowを`CANCELLED`へterminalizeし、pending Root bridgesをterminal化してからtop-level controlを停止。 | Root Control Plane | Implementation Specification §34.1のnumbered ordering。duplicateは同じterminal resultを返し、second stopを送らない。managed artifactでauthoritativeなsummary/diagnostic refを取得できない場合は、bounded Root lifecycle metadataをcanonical representationとする。 |
 | Planning child failure | Planをvalid completionとみなさず、Implementationを起動しない。 | Planning Coordinator → Root | retry/resume policyはTBD。 |
 | Coordinator failure | current phaseをfailedとして保持し、Parent LLMへfallbackしない。 | Root Control Plane | same-protocol recovery policyはTBD。 |
 | Human interaction unavailable / timeout | answerなし、approvalなし。 | Root Human Decision Bridge | retry window / user notificationはTBD。 |

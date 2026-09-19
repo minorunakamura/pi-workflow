@@ -7,8 +7,10 @@ import {
   createRunId,
   createWorkflowId,
   hashPlan,
+  isRecord,
 } from "../../src/core/index.ts";
 import { registerSessionLifecycle } from "../../src/events/index.ts";
+import { RootCancellationController } from "../../src/runtime/cancellation.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
 import type { SubagentRpcEventBus } from "../../src/runtime/subagents-rpc.ts";
 
@@ -60,6 +62,156 @@ it("clears pending interaction on cancellation and keeps the terminal guard", ()
   expect(registry.transition("CANCELLED").transitioned).toBe(false);
   expect(registry.transition("PLANNING").transitioned).toBe(false);
   expect(entries).toHaveLength(4);
+});
+
+it("persists CANCELLED before terminalizing bridges, stops once, and replays the terminal result", async () => {
+  const entries: unknown[] = [];
+  const calls: string[] = [];
+  const registry = new RootWorkflowRegistry((_type, data) => {
+    entries.push(data);
+  });
+  const workflowId = createWorkflowId(WORKFLOW_UUID);
+  expect(registry.start(workflowId, "feature").started).toBe(true);
+  expect(registry.setPlanningRunId("planning-run").transitioned).toBe(true);
+
+  const controller = new RootCancellationController({
+    registry,
+    getBridges: () => [
+      {
+        dispose: (options) => {
+          calls.push(`bridge:${String(options?.preserveRootState)}`);
+        },
+      },
+      {
+        dispose: (options) => {
+          calls.push(`plan:${String(options?.preserveRootState)}`);
+        },
+      },
+      {
+        dispose: (options) => {
+          calls.push(`code:${String(options?.preserveRootState)}`);
+        },
+      },
+    ],
+    stopCoordinator: async () => {
+      calls.push("stop");
+      return { success: false, error: { code: "unknown", message: "stop" } };
+    },
+  });
+
+  const first = await controller.requestWorkflowCancellation(workflowId);
+  expect(first).toMatchObject({
+    accepted: true,
+    duplicate: false,
+    state: {
+      phase: "CANCELLED",
+      finalStatus: "CANCELLED",
+      cancellationOutcome: {
+        coordinatorRunId: "planning-run",
+        stop: "failed",
+      },
+      diagnostics: [
+        expect.objectContaining({
+          kind: "cancellation",
+          code: "COORDINATOR_STOP_FAILED",
+          runId: "planning-run",
+        }),
+      ],
+    },
+  });
+  expect(calls).toEqual(["bridge:true", "plan:true", "code:true", "stop"]);
+  const persistedStates = entries.filter(
+    (entry): entry is Record<string, unknown> =>
+      typeof entry === "object" && entry !== null,
+  );
+  const cancelledIndex = persistedStates.findIndex(
+    (entry) => entry.phase === "CANCELLED",
+  );
+  const outcomeIndex = persistedStates.findIndex(
+    (entry) => typeof entry.cancellationOutcome === "object",
+  );
+  expect(cancelledIndex).toBeGreaterThanOrEqual(0);
+  expect(outcomeIndex).toBeGreaterThan(cancelledIndex);
+
+  const duplicate = await controller.requestWorkflowCancellation(workflowId);
+  expect(duplicate).toMatchObject({
+    accepted: true,
+    duplicate: true,
+    stopStatus: "failed",
+  });
+  expect(calls).toEqual(["bridge:true", "plan:true", "code:true", "stop"]);
+  expect(registry.transition("PLANNING").transitioned).toBe(false);
+});
+
+it("keeps CANCELLED when the stop outcome is unavailable", async () => {
+  const registry = new RootWorkflowRegistry(() => undefined);
+  const workflowId = createWorkflowId("00000000-0000-4000-8000-000000000093");
+  expect(registry.start(workflowId, "bug").started).toBe(true);
+  expect(registry.setPlanningRunId("planning-run").transitioned).toBe(true);
+  const controller = new RootCancellationController({
+    registry,
+    getBridges: () => [],
+  });
+
+  const result = await controller.requestWorkflowCancellation(workflowId);
+  expect(result).toMatchObject({
+    accepted: true,
+    state: { phase: "CANCELLED", finalStatus: "CANCELLED" },
+    stopStatus: "unknown",
+  });
+});
+
+it("binds Pi quit shutdown to the Root cancellation use-case", async () => {
+  const events = new FakeEventBus();
+  const entries: unknown[] = [];
+  const calls: string[] = [];
+  const registry = new RootWorkflowRegistry((_type, data) => {
+    entries.push(data);
+  });
+  const handlers = new Map<string, Handler>();
+  registerSessionLifecycle(
+    {
+      on(event, handler) {
+        handlers.set(event, (eventValue, context) =>
+          Reflect.apply(handler, undefined, [eventValue, context]),
+        );
+      },
+      events,
+    },
+    registry,
+    () => calls.push("cleanup"),
+    async () => {
+      calls.push("stop");
+      return { success: true };
+    },
+  );
+  const context = {
+    mode: "tui",
+    sessionManager: {
+      getBranch: () => [],
+      getSessionFile: () => "/sessions/current.jsonl",
+      getSessionId: () => "session-current",
+    },
+  };
+  const sessionStart = handlers.get("session_start");
+  if (sessionStart === undefined) throw new Error("Missing session_start");
+  Reflect.apply(sessionStart, undefined, [undefined, context]);
+  const workflowId = createWorkflowId("00000000-0000-4000-8000-000000000096");
+  expect(registry.start(workflowId, "feature").started).toBe(true);
+  expect(registry.setPlanningRunId("planning-run").transitioned).toBe(true);
+
+  const shutdown = handlers.get("session_shutdown");
+  if (shutdown === undefined) throw new Error("Missing session_shutdown");
+  await Reflect.apply(shutdown, undefined, [{ reason: "quit" }, context]);
+
+  expect(calls).toEqual(["stop", "cleanup"]);
+  expect(registry.getState()).toBeUndefined();
+  expect(
+    entries.some((entry) => {
+      if (!isRecord(entry)) return false;
+      return entry.phase === "CANCELLED" && entry.finalStatus === "CANCELLED";
+    }),
+  ).toBe(true);
 });
 
 it("stops an active Implementation Coordinator once before stale failure persistence", async () => {

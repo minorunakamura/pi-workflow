@@ -5,6 +5,8 @@ import {
   canStartCodeReviewChangeCycle,
   canStartWorkflow,
   createInitialWorkflowState,
+  validateCancellationOutcome,
+  validateRootDiagnostic,
   isActivePhase,
   isValidPlanHashValue,
   isValidRequestId,
@@ -18,7 +20,9 @@ import {
   isWorkflowType,
   transitionRootWorkflowState,
   validateRootWorkflowState,
+  type CancellationTransitionResult,
   type PendingInteraction,
+  type RootDiagnostic,
   type RootWorkflowState,
   type WorkflowPhase,
   type WorkflowRequest,
@@ -217,6 +221,103 @@ export class RootWorkflowRegistry {
     }
     try {
       return { transitioned: true, state: this.commit(transition.state) };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public requestCancellation(
+    workflowId: unknown,
+  ): CancellationTransitionResult {
+    const current = this.state;
+    if (!isValidWorkflowId(workflowId)) {
+      return { cancelled: false, reason: "Workflow identity is invalid" };
+    }
+    if (current === undefined || current.workflowId !== workflowId) {
+      return {
+        cancelled: false,
+        reason: "Workflow does not match the Root state",
+      };
+    }
+    if (current.phase === "CANCELLED") {
+      return { cancelled: true, duplicate: true, state: cloneState(current) };
+    }
+    if (!isActivePhase(current.phase)) {
+      return { cancelled: false, reason: "Workflow is not active" };
+    }
+    const transition = transitionRootWorkflowState(current, "CANCELLED");
+    if (!transition.valid) {
+      return { cancelled: false, reason: transition.reason };
+    }
+    try {
+      return {
+        cancelled: true,
+        duplicate: false,
+        state: this.commit(transition.state),
+      };
+    } catch {
+      return { cancelled: false, reason: "Persistence failed" };
+    }
+  }
+
+  public recordCancellationOutcome(outcome: unknown): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    if (current.phase !== "CANCELLED") {
+      return {
+        transitioned: false,
+        reason: "Cancellation outcome requires CANCELLED state",
+      };
+    }
+    const validation = validateCancellationOutcome(outcome);
+    if (!validation.valid) {
+      return { transitioned: false, reason: validation.errors.join("; ") };
+    }
+    if (current.cancellationOutcome !== undefined) {
+      return JSON.stringify(current.cancellationOutcome) ===
+        JSON.stringify(validation.value)
+        ? { transitioned: true, state: cloneState(current) }
+        : {
+            transitioned: false,
+            reason: "Cancellation outcome conflicts with the terminal result",
+          };
+    }
+    try {
+      return {
+        transitioned: true,
+        state: this.commit({
+          ...current,
+          cancellationOutcome: validation.value,
+        }),
+      };
+    } catch {
+      return { transitioned: false, reason: "Persistence failed" };
+    }
+  }
+
+  public recordDiagnostic(diagnostic: unknown): RegistryTransitionResult {
+    const current = this.state;
+    if (current === undefined) {
+      return { transitioned: false, reason: "No Root workflow exists" };
+    }
+    const validation = validateRootDiagnostic(diagnostic);
+    if (!validation.valid) {
+      return { transitioned: false, reason: validation.errors.join("; ") };
+    }
+    const previous = current.diagnostics ?? [];
+    const duplicate = previous.some(
+      (item) => JSON.stringify(item) === JSON.stringify(validation.value),
+    );
+    if (duplicate) return { transitioned: true, state: cloneState(current) };
+    const diagnostics: RootDiagnostic[] = [...previous, validation.value];
+    while (diagnostics.length > 8) diagnostics.shift();
+    try {
+      return {
+        transitioned: true,
+        state: this.commit({ ...current, diagnostics }),
+      };
     } catch {
       return { transitioned: false, reason: "Persistence failed" };
     }

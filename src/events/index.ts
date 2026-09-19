@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { RootWorkflowRegistry } from "../runtime/root-lifecycle.ts";
 import type { RootWorkflowState } from "../core/index.ts";
+import { RootCancellationController } from "../runtime/cancellation.ts";
 import { registerImplementationCompletionObservation } from "../runtime/implementation-completion.ts";
 import { registerPlanningCompletionObservation } from "../runtime/planning-completion.ts";
 import { registerResultDeliveryObservation } from "../runtime/result-delivery.ts";
@@ -79,13 +80,25 @@ export function registerSubagentLifecycle(
   const resultDelivery = registerResultDeliveryObservation(pi.events, {
     sessionId,
     isRelevantRun: isCoordinatorRun,
-    onAckFailure: (runId) => {
+    onAckFailure: (runId, status) => {
       if (isCoordinatorRun(runId)) {
+        registry.recordDiagnostic({
+          kind: "conflict",
+          code: `RESULT_DELIVERY_${status.toUpperCase()}`,
+          runId,
+        });
         registry.transition("FAILED");
       }
     },
-    onUntrustedCompletion: (runId) => {
+    onUntrustedCompletion: (runId, status) => {
       if (isCoordinatorRun(runId)) {
+        if (status === "conflict") {
+          registry.recordDiagnostic({
+            kind: "conflict",
+            code: "RESULT_DELIVERY_CONFLICT",
+            runId,
+          });
+        }
         registry.transition("FAILED");
       }
     },
@@ -108,6 +121,11 @@ export function registerSubagentLifecycle(
     },
     onConflict: (runId) => {
       if (isKnownCoordinatorRun(runId)) {
+        registry.recordDiagnostic({
+          kind: "conflict",
+          code: "COORDINATOR_COMPLETION_CONFLICT",
+          runId,
+        });
         registry.transition("FAILED");
       }
     },
@@ -155,22 +173,32 @@ export function registerSessionLifecycle(
     state: RootWorkflowState,
   ) => Promise<ImplementationCoordinatorLaunchResult>,
   stopImplementationCoordinator?: (runId: string) => Promise<unknown>,
-): void {
+): RootCancellationController {
   let removeLifecycleObservation: (() => void) | undefined;
   let shutdownPromise: Promise<void> | undefined;
   let humanDecisionBridge: HumanDecisionRootBridge | undefined;
   let planReviewBridge: PlanReviewRootBridge | undefined;
   let codeReviewBridge: CodeReviewRootBridge | undefined;
+  const cancellation = new RootCancellationController({
+    registry,
+    getBridges: () => [humanDecisionBridge, planReviewBridge, codeReviewBridge],
+    ...(stopPlanningCoordinator === undefined
+      ? {}
+      : { stopPlanningCoordinator }),
+    ...(stopImplementationCoordinator === undefined
+      ? {}
+      : { stopImplementationCoordinator }),
+  });
 
   pi.on("session_start", (_event, ctx) => {
     shutdownPromise = undefined;
     removeLifecycleObservation?.();
     removeLifecycleObservation = undefined;
-    humanDecisionBridge?.dispose();
+    humanDecisionBridge?.dispose({ preserveRootState: true });
     humanDecisionBridge = undefined;
-    planReviewBridge?.dispose();
+    planReviewBridge?.dispose({ preserveRootState: true });
     planReviewBridge = undefined;
-    codeReviewBridge?.dispose();
+    codeReviewBridge?.dispose({ preserveRootState: true });
     codeReviewBridge = undefined;
     registry.restore(ctx.sessionManager.getBranch());
     const events = pi.events;
@@ -220,10 +248,33 @@ export function registerSessionLifecycle(
     registry.restore(ctx.sessionManager.getBranch());
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", (event) => {
     if (shutdownPromise !== undefined) return shutdownPromise;
     shutdownPromise = (async () => {
       const current = registry.getState();
+      if (
+        event?.reason === "quit" &&
+        current !== undefined &&
+        registry.hasActiveWorkflow()
+      ) {
+        removeLifecycleObservation?.();
+        removeLifecycleObservation = undefined;
+        try {
+          await cancellation.requestWorkflowCancellation(current.workflowId);
+        } catch {
+          // Cancellation remains fail-closed if the Root request cannot complete.
+        }
+        humanDecisionBridge = undefined;
+        planReviewBridge = undefined;
+        codeReviewBridge = undefined;
+        try {
+          registry.shutdown();
+        } finally {
+          cleanup?.();
+        }
+        return;
+      }
+
       const planningRunId =
         registry.hasActiveWorkflow() &&
         (current?.phase === "PLANNING" ||
@@ -237,21 +288,23 @@ export function registerSessionLifecycle(
           ? current.implementationRunId
           : undefined;
 
-      humanDecisionBridge?.dispose();
+      removeLifecycleObservation?.();
+      removeLifecycleObservation = undefined;
+      humanDecisionBridge?.dispose({ preserveRootState: true });
       humanDecisionBridge = undefined;
-      planReviewBridge?.dispose();
+      planReviewBridge?.dispose({ preserveRootState: true });
       planReviewBridge = undefined;
-      codeReviewBridge?.dispose();
+      codeReviewBridge?.dispose({ preserveRootState: true });
       codeReviewBridge = undefined;
 
-      const stopCoordinator =
+      const shutdownStopCoordinator =
         implementationRunId === undefined
           ? stopPlanningCoordinator
           : (stopImplementationCoordinator ?? stopPlanningCoordinator);
       const runId = implementationRunId ?? planningRunId;
-      if (runId !== undefined && stopCoordinator !== undefined) {
+      if (runId !== undefined && shutdownStopCoordinator !== undefined) {
         try {
-          await stopCoordinator(runId);
+          await shutdownStopCoordinator(runId);
         } catch {
           // Shutdown remains fail-closed when the public stop request fails.
         }
@@ -261,13 +314,14 @@ export function registerSessionLifecycle(
         registry.shutdown();
       } finally {
         try {
-          removeLifecycleObservation?.();
-        } finally {
           removeLifecycleObservation = undefined;
+        } finally {
           cleanup?.();
         }
       }
     })();
     return shutdownPromise;
   });
+
+  return cancellation;
 }

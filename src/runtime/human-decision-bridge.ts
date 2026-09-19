@@ -209,7 +209,12 @@ export type HumanDecisionRegistry = Pick<
   | "setPendingInteraction"
   | "clearPendingInteraction"
   | "transition"
->;
+> & {
+  recordDiagnostic?: (diagnostic: unknown) => {
+    transitioned: boolean;
+    reason?: string;
+  };
+};
 
 export interface HumanDecisionRootBridgeOptions {
   events: HumanDecisionEventBus;
@@ -220,7 +225,7 @@ export interface HumanDecisionRootBridgeOptions {
 }
 
 export interface HumanDecisionRootBridge {
-  dispose(): void;
+  dispose(options?: { preserveRootState?: boolean }): void;
   getConflictRecords(): readonly HumanDecisionConflictRecord[];
   hasPendingInteraction(): boolean;
   getIntercomChannel(): IntercomExtensionChannel | undefined;
@@ -906,6 +911,7 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     (event: IntercomExtensionEvent) => void
   >();
   private disposed = false;
+  private preserveRootStateDuringDispose = false;
   private readonly timeoutMs: number;
 
   public constructor(private readonly options: HumanDecisionRootBridgeOptions) {
@@ -939,10 +945,12 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     };
   }
 
-  public dispose(): void {
+  public dispose(options: { preserveRootState?: boolean } = {}): void {
     if (this.disposed) return;
     const pending = this.pending;
     if (pending !== undefined && !pending.settled) {
+      const preserveRootState = options.preserveRootState === true;
+      this.preserveRootStateDuringDispose = preserveRootState;
       pending.settling = true;
       try {
         this.options.events.emit(ASK_USER_QUESTION_CANCEL_EVENT, {
@@ -963,7 +971,9 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
           status: "shutdown",
         },
         false,
+        preserveRootState,
       );
+      this.preserveRootStateDuringDispose = false;
     }
     this.disposed = true;
     this.channel = undefined;
@@ -984,6 +994,33 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     });
     if (this.conflicts.length > MAX_CONFLICT_RECORDS) {
       this.conflicts.shift();
+    }
+    this.options.registry.recordDiagnostic?.({
+      kind: "conflict",
+      code: "HUMAN_REQUEST_CONFLICT",
+      requestId: request.requestId,
+    });
+
+    const pending = this.pending;
+    if (phase === "pending" && pending !== undefined && !pending.settled) {
+      pending.settling = true;
+      try {
+        this.options.events.emit(ASK_USER_QUESTION_CANCEL_EVENT, {
+          version: 1,
+          requestId: pending.request.requestId,
+        });
+      } catch {
+        // The terminal failure must not depend on questionnaire cancellation delivery.
+      }
+      this.settle(
+        pending,
+        failureResponse(
+          pending.request,
+          "response-conflict",
+          "Conflicting Human Decision request was rejected",
+        ),
+        false,
+      );
     }
     this.failWorkflow();
   }
@@ -1309,6 +1346,7 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     pending: PendingRootInteraction,
     response: HumanDecisionBridgeResponse,
     remember = true,
+    preserveRootState = false,
   ): void {
     if (this.pending !== pending || pending.settled) return;
     pending.settling = true;
@@ -1318,17 +1356,19 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
     this.pending = undefined;
 
     let finalResponse = response;
-    const cleared = this.options.registry.clearPendingInteraction(
-      pending.request.requestId,
-    );
-    if (!cleared.transitioned) {
-      this.failWorkflow();
-      finalResponse = failureResponse(
-        pending.request,
-        "state-persistence-failed",
-        cleared.reason,
+    if (!preserveRootState) {
+      const cleared = this.options.registry.clearPendingInteraction(
+        pending.request.requestId,
       );
-      remember = false;
+      if (!cleared.transitioned) {
+        this.failWorkflow();
+        finalResponse = failureResponse(
+          pending.request,
+          "state-persistence-failed",
+          cleared.reason,
+        );
+        remember = false;
+      }
     }
 
     if (!this.publishResponse(finalResponse)) return;
@@ -1349,14 +1389,14 @@ class RootHumanDecisionBridge implements HumanDecisionRootBridge {
 
   private publishIntercom(payload: unknown): boolean {
     if (this.channel === undefined || !channelIsUsable(this.channel)) {
-      this.failWorkflow();
+      if (!this.preserveRootStateDuringDispose) this.failWorkflow();
       return false;
     }
     try {
       this.channel.publish(payload, { audience: "capable" });
       return true;
     } catch {
-      this.failWorkflow();
+      if (!this.preserveRootStateDuringDispose) this.failWorkflow();
       return false;
     }
   }

@@ -196,6 +196,8 @@ policy source = pi-workflow package built-in; project/operator override unsuppor
 Coordinator maxSubagentDepth = 2 fixed safety ceiling
 unbounded nesting / arbitrary multi-agent topology unsupported
 coordinator timeout = wall-clock outer safety cap; no pause while waiting
+explicit cancellation invocation = public `session_shutdown` reason `"quit"` → Root runtime `requestWorkflowCancellation(workflowId)`
+`session_shutdown` reasons `reload/new/resume/fork` = stale-FAILED cleanup
 ```
 
 ### 3.1 Authority rules
@@ -785,6 +787,17 @@ export interface RootWorkflowState {
 
   pendingInteraction?: PendingInteraction;
   codeReviewResult?: CodeReviewResultSummary;
+  cancellationOutcome?: {
+    coordinatorRunId?: RunId;
+    stop: "not-requested" | "requested" | "failed" | "unknown";
+  };
+  diagnostics?: Array<{
+    kind: "conflict" | "cancellation" | "late-event";
+    code: string;
+    requestId?: RequestId;
+    runId?: RunId;
+    reviewId?: ReviewId;
+  }>;
   finalStatus: "NONE" | "READY_FOR_MERGE" | "FAILED" | "CANCELLED";
 }
 ```
@@ -798,6 +811,8 @@ export interface RootWorkflowState {
 - `codeReviewResult`はapproved/statusと、実在するmanaged artifactにbindできたfeedback/annotations refsだけを保持する。raw feedback/annotationsはstateへ入れない。
 - `pendingInteraction`はwaiting observable substatusとlate reply rejectionに必要なcorrelationだけを持つ。
 - `finalStatus`はterminal resultのcompact projectionであり、Ready理由全体はCoordinator artifactに保存する。
+- `cancellationOutcome`は、explicit cancellation後のtop-level Coordinator run identityとstop outcome（`not-requested` / `requested` / `failed` / `unknown`）だけを持つsmall Root-owned metadataである。
+- `diagnostics`は最大8件のbounded Root-owned metadataであり、conflict/cancellation codeとcorrelation identityだけを持つ。raw payload、log、report、full error messageは保存しない。
 - `phase`、`planningStatus`、`implementationStatus`の矛盾はstate validation failure。
 - Plan resubmission、code-review change cycle、automatic Fix Waveの上限をmachine-enforceするため、runtimeはsmall counter/flagまたは同等のbounded stateを保持する。各counterはinitial `0`、上限はそれぞれ`1`とし、exact field name/placementはImplementation Detailである。
 - Root stateへ次を入れない。
@@ -856,7 +871,7 @@ CODE_REVIEW → IMPLEMENTING は、初回rejection後の一度だけ許可する
 | `CODE_REVIEW → IMPLEMENTING` | initial code review rejection with bounded feedback | same Implementation Coordinator alive、one change cycle unused、approved scope内、新しいarchitecture/product/security decision不要 | Implementation Coordinator | change-cycle counterをincrementし、implementation RUNNING、retain code review result, clear pending | Coordinator creates one bounded change cycle; no new coordinator | second rejection、scope escape、new decision、or unsafe fixは`FAILED` | duplicate feedback ignored; conflict fails |
 | `CODE_REVIEW → READY_FOR_MERGE` | code review approved | pure evaluator returns ready | Implementation Coordinator then Root records | implementation COMPLETED、finalStatus READY_FOR_MERGE、phase READY | persist final summary; no merge command | any missing check → remain/`FAILED` | first valid terminal result wins |
 | active → `FAILED` | RPC/Coordinator/child/bridge/gate/integrity failure | non-terminal state | Root / Coordinator according to failure source | phase FAILED、finalStatus FAILED、reason in artifact | best-effort stop if active; no Parent fallback | terminal fail closed | duplicate failure same code no-op; conflict retains first and records conflict |
-| active → `CANCELLED` | explicit user cancellation | workflow exists and non-terminal | Root | phase CANCELLED、finalStatus CANCELLED、stop requested metadata in final artifact | stop coordinator/descendants, cancel Human request | stop uncertainty remains in result; no phase advance | repeated cancel returns same final result |
+| active → `CANCELLED` | Root runtime `requestWorkflowCancellation(workflowId)` | matching workflow exists and is non-terminal | Root | phase/finalStatusを先にpersistし、pending interactionを除去 | Root-owned bridgesをterminal化し、active top-level Coordinatorへpublic `stop`を最大1回送る | stop failure/unknownでも`CANCELLED`を維持し、bounded `cancellationOutcome`をpersist | duplicate requestは同じterminal resultを返し、second stopを送らない |
 
 ### 9.3 Transition mutation rule
 
@@ -870,6 +885,8 @@ validate current state
 ```
 
 未確定のside effectを成功としてstateへ書かない。Root Parent LLMへrecover promptを送らない。
+
+Explicit cancellationのproduction invocation surfaceは、Pi 0.85.1 public `session_shutdown` eventの`reason === "quit"`からRoot runtimeの`requestWorkflowCancellation(workflowId)`を呼ぶ経路である。既存4つの`/wf-*` start command contractは変更しない。`reload/new/resume/fork`の`session_shutdown`はstale `FAILED` cleanupであり、このtransitionを呼ばない。
 
 **Traceability**: `[A:32,33,38]` `[E:phase-handoff-capability-results.md, implementation-composition-results.md, full-workflow-composition-results.md]` `[D]`
 
@@ -954,7 +971,7 @@ Root Control Planeでは、以下のuse-case responsibilityを分離する。巨
 | fresh Implementation launch | Plan/Handoff/Approval refs | `implementationRunId`、phase `IMPLEMENTING` | any validation failureはspawnしない |
 | Code Review request | workflow/run/cwd | correlated code-review response | direct Plannotator `code-review` |
 | Code Review result handling | local requestId + structured result | same Coordinator continuation/readiness input | rejectionはbounded change、failureはfail closed |
-| cancellation | `workflowId` | terminal `CANCELLED` result | stop/bridge cancel/artifact summary |
+| cancellation | `workflowId` via `session_shutdown` reason `quit` | terminal `CANCELLED` result | bridge terminalization, public stop, bounded Root outcome/diagnostic metadata |
 | Coordinator failure normalization | run ID、phase、bounded error | terminal `FAILED` result | no Parent fallback、late events ignored |
 
 ### 11.3 Root orchestration boundary
@@ -971,7 +988,22 @@ all rule validation → core
 
 Root Control Planeは`pi.sendMessage` / `pi.sendUserMessage`をworkflow transportとして使わない。成功経路でRoot Parent LLM internal turnsは0でなければならない。
 
-**Traceability**: `[A:11,22,37]` `[E:full-workflow-composition-results.md]` `[D]`
+### 11.4 Explicit cancellation use-case
+
+Root runtimeは`requestWorkflowCancellation(workflowId)`を提供する。Pi 0.85.1 public `session_shutdown` eventの`reason: "quit"`がこのuse-caseのproduction invocationである。`reload/new/resume/fork`は既存のstale `FAILED` cleanupを使う。use-caseはmatching active workflowだけを受理し、次の責務をRoot-ownedにする。
+
+```text
+matching active workflow validation
+→ persist CANCELLED terminal guard
+→ terminalize pending Human / Plan Review / Code Review waiters
+→ public RPC stop of the active top-level Coordinator at most once
+→ bounded cancellation outcome / diagnostic metadata persist
+→ same terminal result for duplicate request
+```
+
+このsurfaceは既存public lifecycle eventから呼ばれるRoot runtime APIであり、v1で`/wf-cancel`、keyboard shortcut、LLM-facing tool、private Pi API、generic workflow-cancel eventは追加しない。Pi 0.85.1 public `session_shutdown`の`reason`で`quit`とreload/session replacementを区別し、`quit`だけをexplicit cancellationへbindする。managed artifact APIでRoot-owned authoritative summary/diagnostic refを取得できない場合、bounded lifecycle metadataがcanonical representationになる。
+
+**Traceability**: `[A:11,22,37]` `[S:Pi 0.85.1 docs/extensions.md session_shutdown; pi-subagents public output/artifact contract]` `[E:full-workflow-composition-results.md]` `[D]`
 
 ---
 
@@ -2909,24 +2941,22 @@ Final readiness decisionはImplementation Coordinatorが行う。Rootはphase/li
 
 ### 34.1 Cancellation ordering
 
-Rootのcancellation responsibilityは次の順序で実行する。
+Rootの`requestWorkflowCancellation(workflowId)` responsibilityは次の順序で実行する。
 
 ```text
 1. Root process-local registry lockを取得し、current non-terminal stateとworkflowIdを確認
 2. phaseをCANCELLED、finalStatusをCANCELLEDへ固定し、snapshotをpersist
-3. pending Human requestをcancel eventへ送る
-4. pending Plannotator waiterをlocalでterminalにし、late resultを拒否
-5. active top-level Coordinatorへpublic RPC stopを送る
-6. statusで必要ならstoppable child identityを確認し、public child stopを送る
-7. Coordinatorが保持するnested descendantsはtop-level stopで停止させる
-8. artifactを削除せず、cancellation summaryとstop outcomesをmanaged artifactへ保存
-9. final CANCELLED resultを一度だけemit/record
-10. lockを解放
+3. pending Human requestを既存のpublic cancel eventでterminal化する
+4. pending Plan Review / Code Review waiterをlocalでterminal化し、late resultを拒否する
+5. active top-level Coordinatorへpublic RPC stopを最大1回送る
+6. stop outcomeとbounded cancellation/diagnostic metadataをRoot stateへpersistする
+7. same terminal resultを一度だけ返し、duplicate requestでは再送しない
+8. Root process-local lockを解放する
 ```
 
-`stop`はstopped proofではなくstop requestである。stop failure/unknownでもRootはCANCELLED phaseからadvanceしない。childが遅れてsourceを変更する可能性はResidual Riskとして記録し、automatic recovery/restartをしない。
+`stop`はstopped proofではなくstop requestである。stop failure/unknownでもRootはCANCELLED phaseからadvanceしない。childが遅れてsourceを変更する可能性はResidual Riskとしてrecordし、automatic recovery/restartをしない。Nested descendantsはtop-level public stopに委譲する。
 
-Plannotatorにはcurrent public cancel APIがないため、Rootはlate resultをcorrelation mapで拒否するだけでbrowserをprivate APIでcloseしない。
+Plannotatorにはcurrent public cancel APIがないため、Rootはpending waiterをlocalでterminal化し、late resultをcorrelation mapで拒否するだけでbrowserをprivate APIでcloseしない。`pi-subagents` public managed outputでRoot-owned authoritative summary/diagnostic refを取得できない場合、`cancellationOutcome`とbounded `diagnostics`をcanonical persisted representationとする。
 
 ### 34.2 Failure table
 
@@ -3002,6 +3032,7 @@ v1はtimeoutを含むすべてのfailureにautomatic retryを行わない。expl
 | Plannotator plan/code feedback | Root bridge | external/derived review evidence | Plan Reviewは既存のbounded approval feedback。Code Reviewはactive same-sessionのtransient feedback/annotationsと、利用可能な場合だけ実在するfeedback/annotation refs | Plan Reviewのfeedbackは既存Root state policy。Code Reviewのtransient payloadはcontinuation中だけ保持し、reload/restart recoveryなし |
 | final coordinator summary | Coordinator | derived compact summary | outputReference | `pi-subagents` result lifecycle |
 | Root lifecycle snapshot | Root Extension | canonical lifecycle/identity state | Pi custom entry | Pi session retention; no raw body |
+| cancellation outcome / diagnostic metadata | Root Extension | canonical small terminal metadata when no authoritative Root managed ref exists | Root lifecycle snapshot | bounded code/correlation only; no raw payload/log/report |
 
 Step 17のFinal Diff InspectionのStep-internal representationはbounded structured result/evidenceである。`final coordinator summary`とはlogical responsibilityを分離するが、Final Diff Inspection専用のphysical file split/pathを新しいinvariantにはしない。最終result boundaryでartifact referenceが必要な場合のexact binding、physical file split、pathは、Architecture invariantを満たす範囲のImplementation Detailとする。
 
@@ -3009,6 +3040,7 @@ Step 17のFinal Diff InspectionのStep-internal representationはbounded structu
 
 - active workflow中にartifactを削除しない。
 - Rootはmanaged artifactを自前のcleanup scanで削除しない。
+- Rootはarbitrary cancellation/conflict summaryをmanaged artifactとみなさない。authoritative managed refがpublic contractで実際に取得できない場合は、bounded lifecycle metadataを使う。
 - `pi-subagents`のtemporary result/replay retentionによりreferenceが後からstaleになり得る。phase transition前のmissing artifactはfail closed。
 - terminal後の保存期間、project artifact directoryのcleanup、manual archivalはpi-subagents/operator policyへ委譲する。正確なretention/cleanup mechanismはImplementation Detailである。
 - package publish対象から`.pi/subagents/`を除外する。
@@ -3029,6 +3061,7 @@ Artifact pathはreferenceであり、request text内のfilename instructionがru
 | --- | --- |
 | Root process restart with same persisted Pi session | latest small Root snapshotをrestore。active workflowはstaleとして`FAILED`、auto resumeなし |
 | Extension reload | `session_shutdown` cleanup、active Coordinatorへbest-effort public stop、new runtimeはlate resultを自動consumeしない |
+| `session_shutdown` reason `quit` | Root `requestWorkflowCancellation(workflowId)`を実行し、`CANCELLED` outcomeをpersistしてからruntimeをclear |
 | stale active state | phase advance禁止。`ROOT_RUNTIME_RELOADED`/`STALE_CHILD` reasonでterminal failure |
 | active child after reload | detached childはpi-subagents semantics上継続し得るが、new Rootがcompletion authorityを自動claimしない |
 | pending Human question | cancel/shutdownを返し、default answerなし |
@@ -3040,15 +3073,17 @@ Artifact pathはreferenceであり、request text内のfilename instructionがru
 
 ### 36.2 Shutdown hook
 
-`session_shutdown`で次を行う。
+`session_shutdown`で次を行う。`event.reason === "quit"`の場合だけexplicit cancellation use-caseへ委譲し、それ以外のreasonはreload/stale-failure pathとする。
 
 ```text
 stop accepting new workflow commands
-cancel bridge waiters
+cancel/terminalize bridge waiters without premature Root failure persistence
 best-effort public stop active top-level Coordinator
-persist terminal/stale Root snapshot
+persist terminal/stale Root snapshot through registry.shutdown()
 clear in-memory registry/listeners/channel
 ```
+
+Code Review bridgeのshutdown disposalはlocal waiter cleanupだけを行い、通常のbridge failureで使う`FAILED` transitionを先に実行しない。
 
 Pi docs上、`ctx.shutdown()`はgraceful requestであり、child processのunconditional kill proofではない。stop outcomeをsuccessと偽らない。
 
@@ -3086,7 +3121,8 @@ current public sourceはdetached childがsession shutdown後も継続し、notif
 - Plannotator code: local requestId。late response/duplicate responseはignore、conflictはfailure。
 - intercom: `requestId + originSessionId + workflowId`を検証。foreign senderをconsumeしない。
 - command: active registryでduplicate block。
-- cancellation: terminal state後はsame resultを返し、second stopを送らない。
+- cancellation: `requestWorkflowCancellation(workflowId)`はterminal guard後にsame resultを返し、second stopを送らない。
+- Root diagnostics: conflict/cancellation codeとcorrelation identityだけを最大8件persistし、raw payloadを保存しない。
 
 ### 37.3 Conflicting terminal result
 
@@ -3094,10 +3130,12 @@ current public sourceはdetached childがsession shutdown後も継続し、notif
 
 ```text
 first valid terminal resultを採用
-conflictをbounded diagnostic artifactへ記録
+conflict code/correlationだけをbounded Root diagnostic metadataへ記録
 phase advanceは止める
 approval/readinessをconflictから復元しない
 ```
+
+public managed artifact APIでRoot-owned authoritative diagnostic refを実際に取得できる場合だけartifact refを加える。取得できない場合にcustom artifact store、推測した`.pi/subagents` path、child writer、fabricated `ArtifactRef`を使わない。
 
 特に`approved:true`後の`approved:false` conflictはapprovalを自動でtoggleせず、workflowをfail closedにする。
 
@@ -3623,11 +3661,11 @@ Legacy `change-workflow-legacy`はreference-onlyであり、cutover、rollback�
 
 ### Step 20 — Cancellation / failure / idempotency
 
-- **Goal**: all terminal outcomes、fixed timeout fail-closed、stop ordering、duplicate/late behavior。
-- **Primary responsibilities / likely area**: runtimeのcancellation/failure handlingとidempotency responsibilityのtest。
+- **Goal**: Root-owned `requestWorkflowCancellation(workflowId)`、all terminal outcomes、fixed timeout fail-closed、bridge terminalization、stop ordering、duplicate/late behavior。
+- **Primary responsibilities / likely area**: runtimeのcancellation use-case、Root-owned bounded terminal/diagnostic metadata、bridge failure handling、idempotency responsibilityのtest。
 - **Dependencies**: all runtime bridges。
-- **Tests**: failure table、fixed timeout values、wall-clock Coordinator cap/no pause、reload、duplicate/conflict、late response。
-- **Exit criteria**: automatic retry/fallbackなし、terminal guardが全pathで機能。
+- **Tests**: explicit cancellation for Planning/Implementation、pending Human/Plan/Code waiter terminalization、stop failure/unknown、fixed timeout values、wall-clock Coordinator cap/no pause、reload、duplicate/conflict、late response。
+- **Exit criteria**: automatic retry/fallbackなし、terminal guardが全pathで機能し、duplicate cancellationがsame result/no second stopとなる。
 
 ### Step 21 — Integration verification
 
@@ -3722,10 +3760,13 @@ production implementation完了時、次を満たす。
 [ ] raw child reports/full logsがRoot Parent contextへ入らない
 [ ] fixed timeout defaults、wall-clock Coordinator cap、no pause、fail-closedが実装される
 [ ] timeoutを含めautomatic retryがない
-[ ] cancellationがstate→stop→bridge cancel→artifact/final resultのorderingを守る
+[ ] `session_shutdown` reason `"quit"`から`requestWorkflowCancellation(workflowId)`がRoot-owned production use-caseとしてmatching active workflowを受理する
+[ ] cancellationが§34.1のstate→bridge terminalization→stop→bounded outcome orderingを守る
+[ ] duplicate cancellationがsame terminal resultを返し、second stopを送らない
 [ ] RPC/child/coordinator/bridge/gate/review failureが扱われる
 [ ] reload/stale/late eventがauto recoveryやphase advanceを起こさない
 [ ] Correlation/idempotencyがworkflowId/runId/requestId/reviewId/FindingIdで追跡できる
+[ ] Root stateのcancellation/diagnostic metadataがboundedでraw payloadを含まない
 [ ] `pnpm check`がtypecheck + oxlint/tsgolint + Biome format check + Vitest runを含む
 [ ] ESLintを導入していない
 [ ] Prettierを導入していない

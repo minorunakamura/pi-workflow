@@ -90,6 +90,7 @@ export interface PlanReviewRegistry {
   preparePlanResubmission(): RegistryTransitionResult;
   setPlanningRunId(runId: unknown): RegistryTransitionResult;
   transition(to: "FAILED"): RegistryTransitionResult;
+  recordDiagnostic?: (diagnostic: unknown) => RegistryTransitionResult;
 }
 
 export interface PlanReviewRootBridgeOptions {
@@ -468,7 +469,7 @@ export class PlanReviewRootBridge {
     return { started: true, runId: launch.runId };
   }
 
-  public dispose(): void {
+  public dispose(_options: { preserveRootState?: boolean } = {}): void {
     if (this.disposed) return;
     this.disposed = true;
     this.removeReviewResult();
@@ -537,7 +538,14 @@ export class PlanReviewRootBridge {
     const completed = this.completed.get(createReviewId(candidate));
     if (this.pending === undefined) {
       if (completed !== undefined && parsed.valid) {
-        if (completed !== reviewFingerprint(parsed.value)) this.failWorkflow();
+        if (completed !== reviewFingerprint(parsed.value)) {
+          this.options.registry.recordDiagnostic?.({
+            kind: "conflict",
+            code: "PLAN_REVIEW_RESULT_CONFLICT",
+            reviewId: parsed.value.reviewId,
+          });
+          this.failWorkflow();
+        }
       }
       return;
     }
@@ -553,6 +561,11 @@ export class PlanReviewRootBridge {
     const fingerprint = reviewFingerprint(parsed.value);
     if (pending.settling) {
       if (pending.settlingFingerprint !== fingerprint) {
+        this.options.registry.recordDiagnostic?.({
+          kind: "conflict",
+          code: "PLAN_REVIEW_RESULT_CONFLICT",
+          reviewId: pending.reviewId,
+        });
         this.failPending(pending, "Conflicting Plan Review results");
       }
       return;
@@ -733,6 +746,11 @@ export class PlanReviewRootBridge {
     const fingerprint = reviewFingerprint(result.value);
     if (pending.settling) {
       if (pending.settlingFingerprint !== fingerprint) {
+        this.options.registry.recordDiagnostic?.({
+          kind: "conflict",
+          code: "PLAN_REVIEW_RESULT_CONFLICT",
+          reviewId: pending.reviewId,
+        });
         this.failPending(pending, "Conflicting Plan Review results");
       }
       return;
