@@ -46,9 +46,11 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   );
   expect(source).toContain("current builtin `reviewer`");
   expect(source).toContain("pi_workflow_inspect_diff");
+  expect(source).toContain("pi_workflow_evaluate_readiness");
   expect(source).toContain(
     "subagentOnlyExtensions: ../src/runtime/final-diff-inspection.ts",
   );
+  expect(source).toContain("../src/runtime/readiness-evaluator.ts");
   expect(source).toContain("agent: reviewer");
   expect(source).toContain("context: fresh");
   expect(source).toContain("output: reviewer-report.md");
@@ -108,6 +110,13 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   );
   expect(source).not.toContain("do not perform Final Diff Inspection");
   expect(source).not.toContain('skill: ["ponytail"]');
+  expect(source).toContain("pi_workflow_evaluate_readiness");
+  expect(source).toContain("evaluateReadyForMerge()");
+  expect(source).toContain('status: "approved"');
+  expect(source).toContain("approved: true");
+  expect(source).toContain('status: "COMPLETED"');
+  expect(source).toContain('status: "FAILED"');
+  expect(source).toContain("Use the tool's `ReadyForMergeResult` unchanged");
   expect(source).toContain("Do not merge, push, release, or deploy");
 
   const tools = source.match(/^tools: (.+)$/mu)?.[1] ?? "";
