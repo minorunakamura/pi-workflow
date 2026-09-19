@@ -418,18 +418,14 @@ export function evaluateFinalDiffInspection(
     "working-tree",
     value.workingTree.status !== "known"
       ? "UNKNOWN"
-      : value.workingTree.evidenceRef === undefined
-        ? "UNKNOWN"
-        : !treeEvidenceMatches
-          ? "FAIL"
-          : "PASS",
+      : !treeEvidenceMatches
+        ? "FAIL"
+        : "PASS",
     value.workingTree.status !== "known"
       ? "working tree state is unknown"
-      : value.workingTree.evidenceRef === undefined
-        ? "working tree evidence artifact is missing"
-        : !treeEvidenceMatches
-          ? "working tree evidence does not match the inspected paths"
-          : "working tree state is understood",
+      : !treeEvidenceMatches
+        ? "working tree evidence does not match the inspected paths"
+        : "working tree state is understood",
     value.workingTree.evidenceRef,
   );
 

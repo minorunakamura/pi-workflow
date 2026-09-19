@@ -6,9 +6,6 @@ import { Type, type Static } from "typebox";
 
 import {
   evaluateFinalDiffInspection,
-  isValidArtifactRef,
-  validateFinalDiffInspectionResult,
-  type ArtifactRef,
   type FinalDiffInspectionInput,
   type FinalDiffInspectionResult,
   type WorkingTreeEvidence,
@@ -30,12 +27,6 @@ export const FINAL_DIFF_INSPECTION_TOOL_PARAMETERS = Type.Object({});
 export type FinalDiffInspectionToolParameters = Static<
   typeof FINAL_DIFF_INSPECTION_TOOL_PARAMETERS
 >;
-
-export const FINAL_DIFF_INSPECTION_ARTIFACT_REF: ArtifactRef = {
-  kind: "managed",
-  path: "final-diff-inspection.md",
-  mediaType: "text/markdown",
-};
 
 export const FINAL_DIFF_INSPECTION_GIT_OPERATIONS = [
   { name: "git status --short", args: ["status", "--short"] },
@@ -66,13 +57,7 @@ export interface FinalDiffInspectionToolEvidence {
 }
 
 export interface FinalDiffInspectionToolDetails {
-  readonly artifactRef: ArtifactRef;
   readonly evidence: FinalDiffInspectionToolEvidence;
-}
-
-export interface FinalDiffInspectionRun {
-  readonly result: FinalDiffInspectionResult;
-  readonly artifactRef: ArtifactRef;
 }
 
 export type FinalDiffInspectionContext = Omit<
@@ -290,10 +275,7 @@ export async function inspectRepositoryDiff(
     stat,
     commands: commandEvidence(results),
   };
-  return {
-    artifactRef: { ...FINAL_DIFF_INSPECTION_ARTIFACT_REF },
-    evidence,
-  };
+  return { evidence };
 }
 
 function validateCommandEvidence(
@@ -338,9 +320,7 @@ export function validateFinalDiffInspectionToolDetails(
 ): ValidationResult<FinalDiffInspectionToolDetails> {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["artifactRef", "evidence"]) ||
-    !isValidArtifactRef(value.artifactRef) ||
-    value.artifactRef.mediaType !== "text/markdown" ||
+    !hasOnlyKeys(value, ["evidence"]) ||
     !isRecord(value.evidence) ||
     !hasOnlyKeys(value.evidence, [
       "status",
@@ -384,7 +364,6 @@ export function validateFinalDiffInspectionToolDetails(
     );
   }
   return validResult({
-    artifactRef: value.artifactRef,
     evidence: {
       status: value.evidence.status,
       changedPaths: changedPaths.value,
@@ -396,24 +375,37 @@ export function validateFinalDiffInspectionToolDetails(
   });
 }
 
+function unknownInspectionResult(
+  context: FinalDiffInspectionContext,
+): FinalDiffInspectionResult {
+  return evaluateFinalDiffInspection({
+    ...context,
+    changedPaths: [],
+    workingTree: {
+      status: "unknown",
+      trackedPaths: [],
+      untrackedPaths: [],
+    },
+  });
+}
+
 export function evaluateFinalDiffInspectionWithEvidence(
   context: FinalDiffInspectionContext,
   toolDetails: unknown,
-): ValidationResult<FinalDiffInspectionRun> {
+): ValidationResult<FinalDiffInspectionResult> {
   const details = validateFinalDiffInspectionToolDetails(toolDetails);
-  if (!details.valid) return details;
+  if (!details.valid) return validResult(unknownInspectionResult(context));
   const workingTree: WorkingTreeEvidence = {
     status: details.value.evidence.status,
     trackedPaths: details.value.evidence.trackedPaths,
     untrackedPaths: details.value.evidence.untrackedPaths,
-    evidenceRef: details.value.artifactRef,
   };
   const result = evaluateFinalDiffInspection({
     ...context,
     changedPaths: details.value.evidence.changedPaths,
     workingTree,
   });
-  return validResult({ result, artifactRef: details.value.artifactRef });
+  return validResult(result);
 }
 
 function createFinalDiffInspectionTool(
@@ -466,34 +458,3 @@ export default function finalDiffInspectionChildExtension(
 }
 
 export type FinalDiffInspectionToolInput = FinalDiffInspectionToolParameters;
-
-export function validateFinalDiffInspectionRun(
-  value: unknown,
-): ValidationResult<FinalDiffInspectionRun> {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["result", "artifactRef"])) {
-    return invalidResult(
-      "Final Diff Inspection run has unknown or missing fields",
-    );
-  }
-  if (
-    !isValidArtifactRef(value.artifactRef) ||
-    value.artifactRef.mediaType !== "text/markdown"
-  ) {
-    return invalidResult(
-      "Final Diff Inspection managed artifact reference is invalid",
-    );
-  }
-  const result = validateFinalDiffInspectionResult(value.result);
-  if (!result.valid) return result;
-  return validResult({
-    result: result.value,
-    artifactRef: value.artifactRef,
-  });
-}
-
-export function acceptFinalDiffInspection(
-  result: unknown,
-  artifactRef: unknown,
-): ValidationResult<FinalDiffInspectionRun> {
-  return validateFinalDiffInspectionRun({ result, artifactRef });
-}
