@@ -214,7 +214,7 @@ it("binds Pi quit shutdown to the Root cancellation use-case", async () => {
   ).toBe(true);
 });
 
-it("stops an active Implementation Coordinator once before stale failure persistence", async () => {
+it("cancels an active Implementation Coordinator once and keeps CANCELLED on stop failure", async () => {
   const events = new FakeEventBus();
   const calls: string[] = [];
   const workflowId = createWorkflowId(WORKFLOW_UUID);
@@ -238,12 +238,16 @@ it("stops an active Implementation Coordinator once before stale failure persist
   let releaseStop: (() => void) | undefined;
   const stop = () => {
     calls.push("stop");
-    return new Promise<void>((resolve) => {
-      releaseStop = resolve;
+    return new Promise<unknown>((resolve) => {
+      releaseStop = () =>
+        resolve({
+          success: false,
+          error: { code: "stop-failed", message: "stop failed" },
+        });
     });
   };
 
-  registerSessionLifecycle(
+  const cancellation = registerSessionLifecycle(
     {
       on(event, handler) {
         handlers.set(event, (eventValue, context) =>
@@ -334,15 +338,34 @@ it("stops an active Implementation Coordinator once before stale failure persist
   );
   calls.length = 0;
 
-  const shutdown = handlers.get("session_shutdown");
-  if (shutdown === undefined) throw new Error("Missing session_shutdown");
-  const first = Reflect.apply(shutdown, undefined, [undefined, context]);
-  const second = Reflect.apply(shutdown, undefined, [undefined, context]);
+  const first = cancellation.requestWorkflowCancellation(workflowId);
+  const second = cancellation.requestWorkflowCancellation(workflowId);
   await Promise.resolve();
-  expect(calls).toEqual(["stop"]);
+  expect(calls).toEqual(["persist", "stop"]);
 
   releaseStop?.();
-  await Promise.all([first, second]);
-  expect(calls).toEqual(["stop", "persist", "cleanup"]);
-  expect(registry.getState()).toBeUndefined();
+  const results = await Promise.all([first, second]);
+  expect(results[0]).toMatchObject({
+    accepted: true,
+    duplicate: false,
+    stopStatus: "failed",
+    state: {
+      phase: "CANCELLED",
+      implementationRunId: "implementation-run",
+    },
+  });
+  expect(results[1]).toMatchObject({
+    accepted: true,
+    duplicate: false,
+    stopStatus: "failed",
+  });
+  expect(calls).toEqual(["persist", "stop", "persist", "persist"]);
+  expect(registry.getState()).toMatchObject({
+    phase: "CANCELLED",
+    finalStatus: "CANCELLED",
+    cancellationOutcome: {
+      coordinatorRunId: "implementation-run",
+      stop: "failed",
+    },
+  });
 });

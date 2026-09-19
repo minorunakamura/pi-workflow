@@ -27,6 +27,7 @@ import {
   type IntercomExtensionEvent,
   type IntercomExtensionRegistration,
 } from "../../src/runtime/human-decision-bridge.ts";
+import { RootCancellationController } from "../../src/runtime/cancellation.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
 
 const WORKFLOW_UUID = "00000000-0000-4000-8000-000000000001";
@@ -584,6 +585,67 @@ it("resolves the child waiter on a conflicting pending request and ignores the l
     ),
   );
   expect(intercom.rootPublishes).toHaveLength(publishesAfterConflict);
+
+  child.dispose();
+  root.dispose();
+});
+
+it("terminalizes a pending Human Decision through Root cancellation", async () => {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  const intercom = connectIntercom(rootEvents, childEvents);
+  const { registry, workflowId } = startedRegistry();
+  const root = registerHumanDecisionRootBridge({
+    events: rootEvents,
+    registry,
+    sessionId: ROOT_SESSION_ID,
+    mode: "tui",
+    timeoutMs: 1_000,
+  });
+  const child = new HumanDecisionChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+  const cancelRequests: unknown[] = [];
+  rootEvents.on(ASK_USER_QUESTION_REQUEST_EVENT, () => {});
+  rootEvents.on(ASK_USER_QUESTION_CANCEL_EVENT, (value) => {
+    cancelRequests.push(value);
+  });
+
+  const pending = child.request({
+    workflowId,
+    coordinatorRunId: "planning-run",
+    questions: [question()],
+  });
+  await Promise.resolve();
+  const original = intercom.childPublishes[0];
+  if (!isRecord(original)) throw new Error("Missing Human Decision request");
+  const controller = new RootCancellationController({
+    registry,
+    getBridges: () => [root],
+    stopCoordinator: async () => ({ success: true }),
+  });
+  const result = await controller.requestWorkflowCancellation(workflowId);
+
+  expect(result).toMatchObject({
+    accepted: true,
+    state: { phase: "CANCELLED", finalStatus: "CANCELLED" },
+  });
+  await expect(pending).resolves.toMatchObject({ status: "shutdown" });
+  expect(cancelRequests).toHaveLength(1);
+  expect(registry.getState()).toMatchObject({
+    phase: "CANCELLED",
+    finalStatus: "CANCELLED",
+  });
+  rootEvents.emit(
+    getAskUserQuestionReplyEvent(requestIdFrom(original)),
+    askSuccess(
+      requestIdFrom(original),
+      askResult("answered", { answer: "LATE" }),
+    ),
+  );
+  expect(registry.getState()).toMatchObject({
+    phase: "CANCELLED",
+    finalStatus: "CANCELLED",
+  });
 
   child.dispose();
   root.dispose();

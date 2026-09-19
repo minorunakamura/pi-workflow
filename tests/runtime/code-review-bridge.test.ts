@@ -19,6 +19,7 @@ import {
   type IntercomExtensionChannel,
   type IntercomExtensionRegistration,
 } from "../../src/runtime/code-review-bridge.ts";
+import { RootCancellationController } from "../../src/runtime/cancellation.ts";
 import { registerHumanDecisionRootBridge } from "../../src/runtime/human-decision-bridge.ts";
 import { RootWorkflowRegistry } from "../../src/runtime/root-lifecycle.ts";
 
@@ -539,6 +540,64 @@ it("disposes a pending review without persisting Root failure during shutdown cl
   expect(registry.transition("FAILED").transitioned).toBe(true);
 
   child.dispose();
+});
+
+it("terminalizes a pending Code Review through Root cancellation", async () => {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  connectIntercom(rootEvents, childEvents);
+  const { registry, workflowId } = implementationRegistry();
+  let respondToPlannotator: ((value: unknown) => void) | undefined;
+  rootEvents.on(PLANNOTATOR_REQUEST_EVENT, (value) => {
+    if (isRecord(value) && typeof value.respond === "function") {
+      const respond = value.respond;
+      respondToPlannotator = (response) => {
+        Reflect.apply(respond, undefined, [response]);
+      };
+    }
+  });
+  const root = new CodeReviewRootBridge({
+    events: rootEvents,
+    registry,
+    sessionId: ROOT_SESSION_ID,
+    timeoutMs: 1_000,
+  });
+  const child = new CodeReviewChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+  const pending = child.request({
+    workflowId,
+    cwd: "/repo",
+    coordinatorRunId: "implementation-run",
+  });
+  await settle();
+
+  const controller = new RootCancellationController({
+    registry,
+    getBridges: () => [root],
+    stopCoordinator: async () => ({ success: true }),
+  });
+  const result = await controller.requestWorkflowCancellation(workflowId);
+  expect(result).toMatchObject({
+    accepted: true,
+    state: { phase: "CANCELLED", finalStatus: "CANCELLED" },
+  });
+  await expect(pending).resolves.toMatchObject({
+    status: "failed",
+    approved: false,
+    error: { code: "shutdown" },
+  });
+  respondToPlannotator?.({
+    status: "handled",
+    result: { approved: true, feedback: "LATE", annotations: [] },
+  });
+  await settle();
+  expect(registry.getState()).toMatchObject({
+    phase: "CANCELLED",
+    finalStatus: "CANCELLED",
+  });
+
+  child.dispose();
+  root.dispose();
 });
 
 it("allows one same-Coordinator rejection cycle and fails the second rejection", async () => {
