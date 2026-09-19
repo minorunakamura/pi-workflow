@@ -111,6 +111,41 @@ it("does not treat unknown working-tree evidence as PASS", () => {
   ]);
 });
 
+it("accepts more than 32 valid paths and required Gate keys", () => {
+  const paths = Array.from(
+    { length: 33 },
+    (_, index) => `src/feature-${index}.ts`,
+  );
+  const gates = paths.map((path, index) => ({
+    name: `gate-${index}`,
+    command: `pnpm check-${index}`,
+    requirement: "required" as const,
+    status: "PASS" as const,
+    source: "package-script" as const,
+    evidence: {
+      kind: "managed" as const,
+      path: `/managed/gates/gate-${index}.log`,
+      mediaType: "text/plain" as const,
+    },
+  }));
+  const result = evaluateFinalDiffInspection({
+    ...input(),
+    changedPaths: paths,
+    scope: { allowedPaths: [], allowedAreas: ["src"] },
+    gates,
+    requiredGateKeys: gates.map(({ name }) => name),
+    workingTree: {
+      status: "known",
+      trackedPaths: paths,
+      untrackedPaths: [],
+      evidenceRef,
+    },
+  });
+
+  expect(result.status).toBe("PASS");
+  expect(result.passed).toBe(true);
+});
+
 it("blocks required Gate failures while allowing an explicitly recorded optional skip", () => {
   const result = evaluateFinalDiffInspection({
     ...input(),

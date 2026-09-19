@@ -45,6 +45,10 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
     "Model prose, Worker claims, missing evidence, timeout, or unknown status is not PASS",
   );
   expect(source).toContain("current builtin `reviewer`");
+  expect(source).toContain("pi_workflow_inspect_diff");
+  expect(source).toContain(
+    "subagentOnlyExtensions: ../src/runtime/final-diff-inspection.ts",
+  );
   expect(source).toContain("agent: reviewer");
   expect(source).toContain("context: fresh");
   expect(source).toContain("output: reviewer-report.md");
@@ -73,6 +77,13 @@ it("declares a fresh, bounded Implementation Coordinator boundary", () => {
   expect(source).toContain("approved requirements are implemented");
   expect(source).toContain("unexpected path");
   expect(source).toContain("working-tree evidence");
+  expect(source).toContain("Call `pi_workflow_inspect_diff` exactly once");
+  expect(source).toContain("return to the existing Step 16 bounded Fix Wave");
+  expect(source).toContain(
+    "After that Fix Worker, require the existing affected re-gates",
+  );
+  expect(source).toContain("If the Fix Wave was already used, return `FAILED`");
+  expect(source).toContain("never start Fix Wave #2 or an automatic retry");
   expect(source).toContain("do not perform Plannotator Code Review");
   expect(source).not.toContain("do not perform Final Diff Inspection");
   expect(source).not.toContain('skill: ["ponytail"]');

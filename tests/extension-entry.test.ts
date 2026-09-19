@@ -32,6 +32,16 @@ it("exports a Pi Extension entry point", () => {
   expect(extension).toEqual(expect.any(Function));
 });
 
+it("keeps the Final Diff Inspection tool out of the Root entrypoint", () => {
+  const source = readFileSync(
+    new URL("../src/index.ts", import.meta.url),
+    "utf8",
+  );
+
+  expect(source).not.toContain("pi_workflow_inspect_diff");
+  expect(source).not.toContain("final-diff-inspection.ts");
+});
+
 it("wires production Implementation launch to repository Gate resolution", () => {
   const source = readFileSync(
     new URL("../src/index.ts", import.meta.url),
