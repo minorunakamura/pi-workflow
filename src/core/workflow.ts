@@ -105,6 +105,27 @@ export interface CodeReviewResultSummary {
   annotationsRef?: ArtifactRef;
 }
 
+export type CancellationStopStatus =
+  | "not-requested"
+  | "requested"
+  | "failed"
+  | "unknown";
+
+export interface CancellationOutcome {
+  coordinatorRunId?: RunId;
+  stop: CancellationStopStatus;
+}
+
+export type RootDiagnosticKind = "conflict" | "cancellation" | "late-event";
+
+export interface RootDiagnostic {
+  kind: RootDiagnosticKind;
+  code: string;
+  requestId?: RequestId;
+  runId?: RunId;
+  reviewId?: ReviewId;
+}
+
 export interface RootWorkflowState {
   schemaVersion: 1;
   workflowId: WorkflowId;
@@ -123,6 +144,8 @@ export interface RootWorkflowState {
   implementationStatus: ImplementationStatus;
   pendingInteraction?: PendingInteraction;
   codeReviewResult?: CodeReviewResultSummary;
+  cancellationOutcome?: CancellationOutcome;
+  diagnostics?: RootDiagnostic[];
   finalStatus: "NONE" | "READY_FOR_MERGE" | "FAILED" | "CANCELLED";
 }
 
@@ -170,6 +193,23 @@ function isCodeReviewStatus(
 
 function isApprovalValue(value: unknown): value is ApprovalValue {
   return value === null || typeof value === "boolean";
+}
+
+function isCancellationStopStatus(
+  value: unknown,
+): value is CancellationStopStatus {
+  return (
+    value === "not-requested" ||
+    value === "requested" ||
+    value === "failed" ||
+    value === "unknown"
+  );
+}
+
+function isRootDiagnosticKind(value: unknown): value is RootDiagnosticKind {
+  return (
+    value === "conflict" || value === "cancellation" || value === "late-event"
+  );
 }
 
 function isFinalStatus(
@@ -453,6 +493,8 @@ const ROOT_STATE_KEYS = [
   "implementationStatus",
   "pendingInteraction",
   "codeReviewResult",
+  "cancellationOutcome",
+  "diagnostics",
   "finalStatus",
 ] as const;
 
@@ -506,6 +548,81 @@ function hasValidPendingInteraction(value: unknown): boolean {
     return false;
   }
   return !("reviewId" in value) || isValidReviewId(value.reviewId);
+}
+
+function hasValidCancellationOutcome(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["coordinatorRunId", "stop"]) &&
+    isCancellationStopStatus(value.stop) &&
+    (!("coordinatorRunId" in value) || isValidRunId(value.coordinatorRunId))
+  );
+}
+
+export function validateCancellationOutcome(
+  value: unknown,
+): ValidationResult<CancellationOutcome> {
+  if (!hasValidCancellationOutcome(value)) {
+    return invalidResult("Cancellation outcome is invalid");
+  }
+  if (!isRecord(value) || !isCancellationStopStatus(value.stop)) {
+    return invalidResult("Cancellation outcome is invalid");
+  }
+  return validResult({
+    stop: value.stop,
+    ...(isValidRunId(value.coordinatorRunId)
+      ? { coordinatorRunId: value.coordinatorRunId }
+      : {}),
+  });
+}
+
+function hasValidDiagnostics(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > 8) return false;
+  return value.every((diagnostic) => {
+    if (
+      !isRecord(diagnostic) ||
+      !hasOnlyKeys(diagnostic, [
+        "kind",
+        "code",
+        "requestId",
+        "runId",
+        "reviewId",
+      ]) ||
+      !isRootDiagnosticKind(diagnostic.kind) ||
+      !isBoundedString(diagnostic.code, 128, true) ||
+      /[\0\r\n]/u.test(diagnostic.code)
+    ) {
+      return false;
+    }
+    return (
+      (!("requestId" in diagnostic) ||
+        isValidRequestId(diagnostic.requestId)) &&
+      (!("runId" in diagnostic) || isValidRunId(diagnostic.runId)) &&
+      (!("reviewId" in diagnostic) || isValidReviewId(diagnostic.reviewId))
+    );
+  });
+}
+
+export function validateRootDiagnostic(
+  value: unknown,
+): ValidationResult<RootDiagnostic> {
+  if (
+    !hasValidDiagnostics([value]) ||
+    !isRecord(value) ||
+    !isRootDiagnosticKind(value.kind) ||
+    !isBoundedString(value.code, 128, true)
+  ) {
+    return invalidResult("Root diagnostic is invalid");
+  }
+  return validResult({
+    kind: value.kind,
+    code: value.code,
+    ...(isValidRequestId(value.requestId)
+      ? { requestId: value.requestId }
+      : {}),
+    ...(isValidRunId(value.runId) ? { runId: value.runId } : {}),
+    ...(isValidReviewId(value.reviewId) ? { reviewId: value.reviewId } : {}),
+  });
 }
 
 export function validateCodeReviewResultSummary(
@@ -567,6 +684,13 @@ function hasValidRootWorkflowValues(
   const codeReviewResultValid =
     !("codeReviewResult" in state) ||
     hasValidCodeReviewResult(state.codeReviewResult);
+  const cancellationOutcomeValid =
+    !("cancellationOutcome" in state) ||
+    hasValidCancellationOutcome(state.cancellationOutcome);
+  const diagnosticsValid =
+    !("diagnostics" in state) || hasValidDiagnostics(state.diagnostics);
+  const cancellationPhaseValid =
+    !("cancellationOutcome" in state) || state.phase === "CANCELLED";
   return (
     state.schemaVersion === 1 &&
     isValidWorkflowId(state.workflowId) &&
@@ -580,7 +704,10 @@ function hasValidRootWorkflowValues(
     isFinalStatus(state.finalStatus) &&
     hasValidStateReferences(state) &&
     pendingInteractionValid &&
-    codeReviewResultValid
+    codeReviewResultValid &&
+    cancellationOutcomeValid &&
+    cancellationPhaseValid &&
+    diagnosticsValid
   );
 }
 
@@ -725,6 +852,10 @@ export function transitionPhase(
 export type RootStateTransitionResult =
   | { valid: true; state: RootWorkflowState }
   | { valid: false; reason: string };
+
+export type CancellationTransitionResult =
+  | { cancelled: true; duplicate: boolean; state: RootWorkflowState }
+  | { cancelled: false; reason: string };
 
 function isStep3Transition(
   from: WorkflowPhase,

@@ -126,6 +126,7 @@ export interface CodeReviewRegistry {
   ): RegistryTransitionResult;
   recordCodeReviewResult(result: unknown): RegistryTransitionResult;
   transition(to: "FAILED"): RegistryTransitionResult;
+  recordDiagnostic?: (diagnostic: unknown) => RegistryTransitionResult;
 }
 
 export interface CodeReviewIntercomHost {
@@ -694,6 +695,7 @@ export class CodeReviewRootBridge {
   private disposed = false;
   private readonly completed = new Map<string, CompletedRootReview>();
   private readonly conflicts: CodeReviewConflictRecord[] = [];
+  private preserveRootStateDuringDispose = false;
 
   public constructor(private readonly options: CodeReviewRootBridgeOptions) {
     const timeout = options.timeoutMs ?? TIMEOUTS.codeReviewTimeoutMs;
@@ -719,14 +721,26 @@ export class CodeReviewRootBridge {
     return this.conflicts.map((record) => ({ ...record }));
   }
 
-  public dispose(): void {
+  public dispose(options: { preserveRootState?: boolean } = {}): void {
     if (this.disposed) return;
     const pending = this.pending;
     if (pending !== undefined && !pending.settled) {
       if (pending.timer !== undefined) clearTimeout(pending.timer);
-      pending.settled = true;
       pending.settling = true;
-      this.failWorkflow();
+      if (options.preserveRootState === true) {
+        this.preserveRootStateDuringDispose = true;
+        this.settleFailure(
+          pending,
+          "failed",
+          "shutdown",
+          "Code Review bridge shut down",
+          false,
+        );
+        this.preserveRootStateDuringDispose = false;
+      } else {
+        pending.settled = true;
+        this.failWorkflow();
+      }
     }
     this.pending = undefined;
     this.disposed = true;
@@ -1054,16 +1068,19 @@ export class CodeReviewRootBridge {
     status: Exclude<CodeReviewStatus, "approved" | "rejected">,
     code: string,
     message: string,
+    recordRootResult = true,
   ): void {
     if (this.pending !== pending || pending.settled) return;
     pending.settling = true;
-    const summary: CodeReviewResultSummary = {
-      requestId: pending.request.requestId,
-      status,
-      approved: false,
-    };
-    const transition = this.options.registry.recordCodeReviewResult(summary);
-    if (!transition.transitioned) this.failWorkflow();
+    if (recordRootResult) {
+      const summary: CodeReviewResultSummary = {
+        requestId: pending.request.requestId,
+        status,
+        approved: false,
+      };
+      const transition = this.options.registry.recordCodeReviewResult(summary);
+      if (!transition.transitioned) this.failWorkflow();
+    }
     this.finish(
       pending,
       failureResponse(pending.request, status, code, message),
@@ -1098,14 +1115,14 @@ export class CodeReviewRootBridge {
 
   private publishIntercom(payload: unknown): boolean {
     if (this.channel === undefined || !channelIsUsable(this.channel)) {
-      this.failWorkflow();
+      if (!this.preserveRootStateDuringDispose) this.failWorkflow();
       return false;
     }
     try {
       this.channel.publish(payload, { audience: "capable" });
       return true;
     } catch {
-      this.failWorkflow();
+      if (!this.preserveRootStateDuringDispose) this.failWorkflow();
       return false;
     }
   }
@@ -1131,6 +1148,21 @@ export class CodeReviewRootBridge {
     });
     if (this.conflicts.length > MAX_CONFLICT_RECORDS) {
       this.conflicts.shift();
+    }
+    this.options.registry.recordDiagnostic?.({
+      kind: "conflict",
+      code: "CODE_REVIEW_REQUEST_CONFLICT",
+      requestId: request.requestId,
+    });
+
+    const pending = this.pending;
+    if (phase === "pending" && pending !== undefined && !pending.settled) {
+      this.settleFailure(
+        pending,
+        "failed",
+        "response-conflict",
+        "Conflicting Code Review request was rejected",
+      );
     }
     this.failWorkflow();
   }

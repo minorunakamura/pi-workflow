@@ -62,7 +62,11 @@ function isRegistration(
 function connectIntercom(
   rootEvents: FakeEventBus,
   childEvents: FakeEventBus,
-): { rootPublishes: unknown[]; childPublishes: unknown[] } {
+): {
+  rootPublishes: unknown[];
+  childPublishes: unknown[];
+  getRootRegistration: () => IntercomExtensionRegistration;
+} {
   let rootRegistration: IntercomExtensionRegistration | undefined;
   let childRegistration: IntercomExtensionRegistration | undefined;
   const rootPublishes: unknown[] = [];
@@ -112,7 +116,15 @@ function connectIntercom(
   rootEvents.on(INTERCOM_EXTENSION_REGISTER_EVENT, rootOnRegister);
   childEvents.on(INTERCOM_EXTENSION_REGISTER_EVENT, childOnRegister);
 
-  return { rootPublishes, childPublishes };
+  return {
+    rootPublishes,
+    childPublishes,
+    getRootRegistration: () => {
+      if (rootRegistration === undefined)
+        throw new Error("Root not registered");
+      return rootRegistration;
+    },
+  };
 }
 
 function planningResult(workflowId: WorkflowId) {
@@ -423,6 +435,110 @@ it("fails closed on malformed or unbounded review evidence", async () => {
     child.dispose();
     root.dispose();
   }
+});
+
+it("resolves the same Coordinator waiter on a conflicting request and ignores late Plannotator output", async () => {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  const intercom = connectIntercom(rootEvents, childEvents);
+  const { registry, workflowId } = implementationRegistry();
+  let respondToPlannotator: ((value: unknown) => void) | undefined;
+  rootEvents.on(PLANNOTATOR_REQUEST_EVENT, (value) => {
+    if (isRecord(value) && typeof value.respond === "function") {
+      const respond = value.respond;
+      respondToPlannotator = (response) => {
+        Reflect.apply(respond, undefined, [response]);
+      };
+    }
+  });
+  const root = new CodeReviewRootBridge({
+    events: rootEvents,
+    registry,
+    sessionId: ROOT_SESSION_ID,
+    timeoutMs: 1_000,
+  });
+  const child = new CodeReviewChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+
+  const pending = child.request({
+    workflowId,
+    cwd: "/repo",
+    coordinatorRunId: "implementation-run",
+  });
+  await settle();
+  const original = intercom.childPublishes[0];
+  if (!isRecord(original)) throw new Error("Missing Code Review request");
+  intercom.getRootRegistration().onEvent({
+    type: "message",
+    fromSessionId: CHILD_SESSION_ID,
+    owner: ROOT_OWNER,
+    payload: { ...original, cwd: "/different-repository" },
+  });
+
+  await expect(pending).resolves.toMatchObject({
+    status: "failed",
+    approved: false,
+    error: { code: "response-conflict" },
+  });
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+    diagnostics: [
+      expect.objectContaining({
+        kind: "conflict",
+        code: "CODE_REVIEW_REQUEST_CONFLICT",
+      }),
+    ],
+  });
+  respondToPlannotator?.({
+    status: "handled",
+    result: { approved: true, feedback: "LATE", annotations: [] },
+  });
+  await settle();
+  expect(registry.getState()).toMatchObject({
+    phase: "FAILED",
+    finalStatus: "FAILED",
+  });
+
+  child.dispose();
+  root.dispose();
+});
+
+it("disposes a pending review without persisting Root failure during shutdown cleanup", async () => {
+  const rootEvents = new FakeEventBus();
+  const childEvents = new FakeEventBus();
+  connectIntercom(rootEvents, childEvents);
+  const { registry, workflowId } = implementationRegistry();
+  rootEvents.on(PLANNOTATOR_REQUEST_EVENT, () => {});
+  const root = new CodeReviewRootBridge({
+    events: rootEvents,
+    registry,
+    sessionId: ROOT_SESSION_ID,
+    timeoutMs: 1_000,
+  });
+  const child = new CodeReviewChildBridge(childEvents, CHILD_SESSION_ID);
+  child.register();
+
+  const pending = child.request({
+    workflowId,
+    cwd: "/repo",
+    coordinatorRunId: "implementation-run",
+  });
+  await settle();
+  root.dispose({ preserveRootState: true });
+
+  await expect(pending).resolves.toMatchObject({
+    status: "failed",
+    approved: false,
+    error: { code: "shutdown" },
+  });
+  expect(registry.getState()).toMatchObject({
+    phase: "CODE_REVIEW",
+    finalStatus: "NONE",
+  });
+  expect(registry.transition("FAILED").transitioned).toBe(true);
+
+  child.dispose();
 });
 
 it("allows one same-Coordinator rejection cycle and fails the second rejection", async () => {

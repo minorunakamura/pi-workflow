@@ -1,5 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+export {
+  RootCancellationController,
+  type RootCancellationBridge,
+  type RootCancellationControllerOptions,
+  type RootCancellationResult,
+} from "./runtime/cancellation.ts";
+
 import { registerCommands } from "./commands/index.ts";
 import { registerSessionLifecycle } from "./events/index.ts";
 import {
