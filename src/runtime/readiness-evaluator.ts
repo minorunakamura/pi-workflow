@@ -11,6 +11,7 @@ import {
   evaluateReadyForMerge,
   hashPlan,
   isValidFindingId,
+  parseTrustedGateExpectations,
   isValidWorkflowId,
   validateApprovalIdentity,
   validateFindingDisposition,
@@ -54,10 +55,8 @@ export const READINESS_EVALUATOR_TOOL_PARAMETERS = Type.Object({
   planningHandoffRef: ARTIFACT_REF_SCHEMA,
   approval: APPROVAL_SCHEMA,
   implementationComplete: Type.Boolean(),
-  approvedGates: Type.Array(Type.Any()),
   gates: Type.Array(Type.Any()),
   repositoryGates: Type.Optional(Type.Array(Type.Any())),
-  requiredGateKeys: Type.Optional(Type.Array(Type.String())),
   findings: Type.Array(Type.Any()),
   fixWave: Type.Optional(Type.Any()),
   focusedReReview: Type.Optional(Type.Any()),
@@ -76,17 +75,14 @@ export type ReadinessArtifactReader = (
 
 const MAX_GATES = 64;
 const MAX_FINDINGS = 128;
-const MAX_REQUIRED_GATE_KEYS = 64;
 const INPUT_KEYS = [
   "workflowId",
   "planArtifactRef",
   "planningHandoffRef",
   "approval",
   "implementationComplete",
-  "approvedGates",
   "gates",
   "repositoryGates",
-  "requiredGateKeys",
   "findings",
   "fixWave",
   "focusedReReview",
@@ -127,6 +123,7 @@ async function readAuthoritativePlanIdentity(
   handoff: unknown;
   currentPlanHash: unknown;
   approval: unknown;
+  planContent: string;
 }> {
   const references = validatePlanningArtifactReferences(
     input.planArtifactRef,
@@ -139,6 +136,7 @@ async function readAuthoritativePlanIdentity(
     signal,
   );
   const template = validatePlanArtifactTemplate(planBytes);
+  const planContent = decodeUtf8(planBytes, "Plan Artifact");
 
   const handoffText = decodeUtf8(
     await readFile(
@@ -189,6 +187,7 @@ async function readAuthoritativePlanIdentity(
         : undefined,
     currentPlanHash: planHash?.value,
     approval: approval?.valid ? approval.value : input.approval,
+    planContent,
   };
 }
 
@@ -203,23 +202,6 @@ function parseGates(value: unknown, fieldName: string): TrustedGate[] {
     gates.push(gate.value);
   }
   return gates;
-}
-
-function parseRequiredGateKeys(value: unknown): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > MAX_REQUIRED_GATE_KEYS) {
-    throw toolError("requiredGateKeys is not a bounded array");
-  }
-  const keys: string[] = [];
-  const seen = new Set<string>();
-  for (const key of value) {
-    if (!isBoundedString(key, 4096, true) || seen.has(key)) {
-      throw toolError("requiredGateKeys contains an invalid or duplicate key");
-    }
-    seen.add(key);
-    keys.push(key);
-  }
-  return keys;
 }
 
 function parseFindings(value: unknown): FindingReadiness[] {
@@ -336,13 +318,15 @@ export async function evaluateReadinessFromAuthoritativeInput(
     readFile,
     signal,
   );
-  const approvedGates = parseGates(value.approvedGates, "approvedGates");
+  const approvedGates = parseTrustedGateExpectations(identity.planContent);
+  if (!approvedGates.valid) {
+    throw toolError(approvedGates.errors.join("; "));
+  }
   const gates = parseGates(value.gates, "gates");
   const repositoryGates =
     value.repositoryGates === undefined
       ? undefined
       : parseGates(value.repositoryGates, "repositoryGates");
-  const requiredGateKeys = parseRequiredGateKeys(value.requiredGateKeys);
   const findings = parseFindings(value.findings);
   const fixWave = parseFixWave(value.fixWave);
   const focusedReReview = parseFocusedReview(value.focusedReReview);
@@ -357,9 +341,8 @@ export async function evaluateReadinessFromAuthoritativeInput(
     approval: identity.approval,
     implementationComplete: value.implementationComplete,
     gates,
-    approvedGates,
+    approvedGates: approvedGates.value,
     ...(repositoryGates === undefined ? {} : { repositoryGates }),
-    ...(requiredGateKeys === undefined ? {} : { requiredGateKeys }),
     findings,
     fixWave,
     focusedReReview,

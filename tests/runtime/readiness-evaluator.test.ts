@@ -13,6 +13,7 @@ import {
 } from "../../src/core/index.ts";
 import {
   READINESS_EVALUATOR_TOOL_NAME,
+  READINESS_EVALUATOR_TOOL_PARAMETERS,
   default as readinessEvaluatorChildExtension,
   evaluateReadinessFromAuthoritativeInput,
   type ReadinessEvaluatorToolInput,
@@ -20,16 +21,29 @@ import {
 
 const WORKFLOW_ID = createWorkflowId("00000000-0000-4000-8000-000000000051");
 const REVIEW_ID = "plan-review-51";
-const PLAN = `${REQUIRED_PLAN_HEADINGS.join("\n")}\n\nBounded plan.\n`;
+const REQUIRED_GATE_MARKER =
+  '<!-- pi-workflow-trusted-gates: [{"name":"package-check","command":"pnpm check","requirement":"required","source":"package-script"}] -->';
+const OPTIONAL_GATE_MARKER =
+  '<!-- pi-workflow-trusted-gates: [{"name":"docs-check","command":"pnpm docs","requirement":"optional","source":"package-script"}] -->';
+function planWithGateMarker(marker: string): string {
+  return `${REQUIRED_PLAN_HEADINGS.join("\n").replace(
+    "## Trusted Gate expectations",
+    `## Trusted Gate expectations\n\n${marker}`,
+  )}\n`;
+}
+const PLAN = planWithGateMarker(REQUIRED_GATE_MARKER);
+const OPTIONAL_PLAN = planWithGateMarker(OPTIONAL_GATE_MARKER);
 const roots: string[] = [];
 
 function gate(
   status: TrustedGate["status"],
   requirement: TrustedGate["requirement"] = "required",
+  name = "package-check",
+  command = "pnpm check",
 ): TrustedGate {
   return {
-    name: "package-check",
-    command: "pnpm check",
+    name,
+    command,
     requirement,
     status,
     source: "package-script",
@@ -45,7 +59,7 @@ function gate(
   };
 }
 
-function setup(): {
+function setup(plan = PLAN): {
   cwd: string;
   input: ReadinessEvaluatorToolInput;
 } {
@@ -53,10 +67,10 @@ function setup(): {
   roots.push(cwd);
   const planPath = join(cwd, "implementation-plan.md");
   const handoffPath = join(cwd, "planning-handoff.json");
-  writeFileSync(planPath, PLAN);
+  writeFileSync(planPath, plan);
   const handoff = createPlanningHandoff({
     workflowId: WORKFLOW_ID,
-    planContent: PLAN,
+    planContent: plan,
     tddMode: "not-applicable",
     testStrategy: {
       kind: "unit",
@@ -70,7 +84,7 @@ function setup(): {
   if (!handoff.valid) throw new Error(handoff.errors.join("; "));
   writeFileSync(handoffPath, `${JSON.stringify(handoff.value)}\n`);
 
-  const planHash = hashPlan(PLAN).value;
+  const planHash = hashPlan(plan).value;
   const input: ReadinessEvaluatorToolInput = {
     workflowId: WORKFLOW_ID,
     planArtifactRef: {
@@ -89,10 +103,8 @@ function setup(): {
       approval: true,
     },
     implementationComplete: true,
-    approvedGates: [gate("UNKNOWN")],
     gates: [gate("PASS")],
     repositoryGates: [gate("UNKNOWN")],
-    requiredGateKeys: ["package-check"],
     findings: [],
     fixWave: null,
     focusedReReview: null,
@@ -124,6 +136,12 @@ it("registers the readiness evaluator only as a child-only tool", () => {
   readinessEvaluatorChildExtension(pi);
   vi.unstubAllEnvs();
   expect(registered).toEqual([READINESS_EVALUATOR_TOOL_NAME]);
+  expect(READINESS_EVALUATOR_TOOL_PARAMETERS.properties).not.toHaveProperty(
+    "approvedGates",
+  );
+  expect(READINESS_EVALUATOR_TOOL_PARAMETERS.properties).not.toHaveProperty(
+    "requiredGateKeys",
+  );
 });
 
 it("uses the core evaluator for authoritative Plan identity and returns seven checks", async () => {
@@ -134,6 +152,9 @@ it("uses the core evaluator for authoritative Plan identity and returns seven ch
   expect(result.status).toBe("READY_FOR_MERGE");
   expect(result.checks).toHaveLength(7);
   expect(result.blockers).toEqual([]);
+  expect(result.checks).toContainEqual(
+    expect.objectContaining({ id: "required-gates", status: "PASS" }),
+  );
 });
 
 it("does not trust a caller's desired ready value when a required Gate fails", async () => {
@@ -154,19 +175,52 @@ it("does not trust a caller's desired ready value when a required Gate fails", a
 });
 
 it("keeps optional SKIPPED Gates non-blocking", async () => {
-  const { cwd, input } = setup();
+  const { cwd, input } = setup(OPTIONAL_PLAN);
   const result = await evaluateReadinessFromAuthoritativeInput(
     {
       ...input,
-      approvedGates: [],
-      gates: [gate("SKIPPED", "optional")],
+      gates: [gate("SKIPPED", "optional", "docs-check", "pnpm docs")],
       repositoryGates: undefined,
-      requiredGateKeys: [],
     },
     cwd,
   );
 
   expect(result.ready).toBe(true);
+});
+
+it("cannot remove a Plan-derived required Gate by omitting the final Gate", async () => {
+  const { cwd, input } = setup();
+  const result = await evaluateReadinessFromAuthoritativeInput(
+    { ...input, gates: [], repositoryGates: [] },
+    cwd,
+  );
+
+  expect(result.ready).toBe(false);
+  expect(result.checks).toContainEqual(
+    expect.objectContaining({ id: "required-gates" }),
+  );
+});
+
+it("blocks Plan-derived required Gate FAIL, UNKNOWN, and SKIPPED outcomes", async () => {
+  for (const status of ["FAIL", "UNKNOWN", "SKIPPED"] as const) {
+    const { cwd, input } = setup();
+    const result = await evaluateReadinessFromAuthoritativeInput(
+      { ...input, gates: [gate(status)] },
+      cwd,
+    );
+    expect(result.ready).toBe(false);
+  }
+});
+
+it("fails closed when the Plan Gate declaration is not machine-readable", async () => {
+  const invalidPlan = planWithGateMarker(
+    "<!-- pi-workflow-trusted-gates: { -->",
+  );
+  const { cwd, input } = setup(invalidPlan);
+
+  await expect(
+    evaluateReadinessFromAuthoritativeInput(input, cwd),
+  ).rejects.toThrow(/Trusted Gate expectations|valid JSON|machine-readable/u);
 });
 
 it("fails closed for unresolved findings, missing focused review, bad diff, and rejected review", async () => {
